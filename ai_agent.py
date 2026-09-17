@@ -8,6 +8,7 @@ if not API_KEY:
     print("Error: GEMINI_API_KEY is missing from GitHub Secrets.")
     exit(1)
 
+# CORRECT API ENDPOINT
 url = "https://googleapis.com"
 
 # 2. Gather existing directory snapshot and define project goals
@@ -17,7 +18,6 @@ for file_name in ["index.html", "styles.css", "app.js", "CryptoEngine.cs", "Anal
         with open(file_name, "r", encoding="utf-8", errors="ignore") as f:
             repo_manifest[file_name] = f.read()
 
-# Prompt setup and Gemini API transmission (see referenced source for the full implementation details)
 manifest_json = json.dumps(repo_manifest, indent=2)
 
 # 3. Define the Grand Ultimate Master Project Prompt
@@ -61,7 +61,6 @@ payload = {
 headers = {"Content-Type": "application/json"}
 
 try:
-    # We pass the API key safely inside the params dictionary instead of mixing it into the string
     response = requests.post(
         url, 
         headers=headers, 
@@ -73,14 +72,20 @@ try:
     # 5. Process JSON payload and dynamically write the chosen language file
     response_data = response.json()
     
-    # Safely extract text whether it returns candidates or standard contents
     if 'candidates' in response_data and response_data['candidates']:
         ai_output_raw = response_data['candidates'][0]['content']['parts'][0]['text']
     else:
         ai_output_raw = response_data['contents']['parts'][0]['text']
     
+    # Clean up output formatting just in case
+    clean_json = ai_output_raw.strip()
+    if clean_json.startswith("```json"):
+        clean_json = clean_json.replace("```json", "", 1).rstrip("```").strip()
+    elif clean_json.startswith("```"):
+        clean_json = clean_json.replace("```", "", 1).rstrip("```").strip()
+
     # Parse the target action
-    action = json.loads(ai_output_raw.strip())
+    action = json.loads(clean_json)
     target_file = action["filename"]
     file_content = action["content"]
     
