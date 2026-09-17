@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import requests
 import json
 
@@ -27,14 +28,13 @@ def get_latest_flash_model(api_key):
 
     candidates = []
     for m in models:
-        short_name = m.get("name", "").split("/")[-1]  # "models/gemini-3.7-flash" -> "gemini-3.7-flash"
+        short_name = m.get("name", "").split("/")[-1]
         methods = m.get("supportedGenerationMethods", [])
 
         if "generateContent" not in methods:
             continue
         if "flash" not in short_name:
             continue
-        # Skip variants that aren't a general-purpose stable text Flash model
         if any(x in short_name for x in ["lite", "image", "tts", "preview"]):
             continue
 
@@ -48,10 +48,54 @@ def get_latest_flash_model(api_key):
     if not candidates:
         raise RuntimeError("No suitable stable Gemini Flash model found via ListModels.")
 
-    candidates.sort(reverse=True)  # highest version first
+    candidates.sort(reverse=True)
     best_version, best_name = candidates[0]
     print(f"Selected latest available Flash model: {best_name}")
     return best_name
+
+
+def call_gemini_with_retry(url, headers, payload, api_key, max_retries=4, base_delay=5):
+    """
+    Calls the Gemini API with retry + exponential backoff for transient
+    errors (503 UNAVAILABLE, 429 RATE_LIMIT, and generic connection errors).
+    Non-transient errors (404, 400, 403, etc.) fail immediately.
+    """
+    transient_statuses = {429, 500, 502, 503, 504}
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                data=json.dumps(payload),
+                params={"key": api_key},
+                timeout=120
+            )
+        except requests.exceptions.RequestException as e:
+            print(f"Attempt {attempt}/{max_retries}: network error ({e})")
+            if attempt == max_retries:
+                raise
+            delay = base_delay * (2 ** (attempt - 1))
+            print(f"Retrying in {delay} seconds...")
+            time.sleep(delay)
+            continue
+
+        if response.status_code == 200:
+            return response
+
+        if response.status_code in transient_statuses and attempt < max_retries:
+            print(f"Attempt {attempt}/{max_retries}: Gemini API returned status {response.status_code}")
+            print(response.text)
+            delay = base_delay * (2 ** (attempt - 1))
+            print(f"Transient error, retrying in {delay} seconds...")
+            time.sleep(delay)
+            continue
+
+        # Either not transient, or we're out of retries - return as-is
+        # so the caller's error handling/logging kicks in.
+        return response
+
+    return response
 
 
 try:
@@ -112,12 +156,7 @@ payload = {
 headers = {"Content-Type": "application/json"}
 
 try:
-    response = requests.post(
-        url,
-        headers=headers,
-        data=json.dumps(payload),
-        params={"key": API_KEY}
-    )
+    response = call_gemini_with_retry(url, headers, payload, API_KEY)
 
     if response.status_code != 200:
         print(f"Gemini API returned status {response.status_code}")
