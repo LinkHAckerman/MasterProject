@@ -8,7 +8,8 @@ if not API_KEY:
     print("Error: GEMINI_API_KEY is missing from GitHub Secrets.")
     exit(1)
 
-url = f"https://googleapis.com{API_KEY}"
+# Bug fixed?
+url = "https://googleapis.com"
 
 # 2. Gather existing directory snapshot so the AI sees EVERYTHING it has built so far
 repo_manifest = {}
@@ -62,12 +63,23 @@ payload = {
 headers = {"Content-Type": "application/json"}
 
 try:
-    response = requests.post(url, headers=headers, data=json.dumps(payload))
+    # We pass the API key safely inside the params dictionary instead of mixing it into the string
+    response = requests.post(
+        url, 
+        headers=headers, 
+        data=json.dumps(payload), 
+        params={"key": API_KEY}
+    )
     response.raise_for_status()
     
     # 5. Process JSON payload and dynamically write the chosen language file
     response_data = response.json()
-    ai_output_raw = response_data['contents'][0]['parts'][0]['text'] if 'contents' in response_data else response_data['candidates'][0]['content']['parts'][0]['text']
+    
+    # Safely extract text whether it returns candidates or standard contents
+    if 'candidates' in response_data and response_data['candidates']:
+        ai_output_raw = response_data['candidates'][0]['content']['parts'][0]['text']
+    else:
+        ai_output_raw = response_data['contents']['parts'][0]['text']
     
     # Parse the target action
     action = json.loads(ai_output_raw.strip())
