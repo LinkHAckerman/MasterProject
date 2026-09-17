@@ -9,7 +9,7 @@ if not API_KEY:
     exit(1)
 
 # CORRECT API ENDPOINT
-MODEL = "gemini-2.0-flash"
+MODEL = "gemini-3.7-flash"  # current stable Flash model as of Aug 2026
 url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
 
 # 2. Gather existing directory snapshot and define project goals
@@ -55,8 +55,9 @@ Example output format:
 payload = {
     "contents": [{"parts": [{"text": prompt}]}],
     "generationConfig": {
-        "temperature": 0.2,
         "responseMimeType": "application/json"
+        # Note: temperature/top_p/top_k are deprecated for 3.x Flash models,
+        # so they've been removed here to avoid future request failures.
     }
 }
 headers = {"Content-Type": "application/json"}
