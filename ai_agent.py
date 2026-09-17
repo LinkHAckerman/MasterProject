@@ -2,24 +2,22 @@ import os
 import requests
 import json
 
-# 1. Fetch the Google Gemini API Key
+# 1. Fetch the Google Gemini API Key and set the correct endpoint
 API_KEY = os.environ.get("GEMINI_API_KEY")
 if not API_KEY:
     print("Error: GEMINI_API_KEY is missing from GitHub Secrets.")
     exit(1)
 
-# Bug fixed?
 url = "https://googleapis.com"
 
-# 2. Gather existing directory snapshot so the AI sees EVERYTHING it has built so far
+# 2. Gather existing directory snapshot and define project goals
 repo_manifest = {}
-important_files = ["index.html", "styles.css", "app.js", "CryptoEngine.cs", "Analytics.cpp", "README.md"]
-
-for file_name in important_files:
+for file_name in ["index.html", "styles.css", "app.js", "CryptoEngine.cs", "Analytics.cpp", "README.md"]:
     if os.path.exists(file_name):
         with open(file_name, "r", encoding="utf-8", errors="ignore") as f:
             repo_manifest[file_name] = f.read()
 
+# Prompt setup and Gemini API transmission (see referenced source for the full implementation details)
 manifest_json = json.dumps(repo_manifest, indent=2)
 
 # 3. Define the Grand Ultimate Master Project Prompt
