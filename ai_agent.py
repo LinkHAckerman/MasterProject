@@ -1,16 +1,66 @@
 import os
+import re
 import requests
 import json
 
-# 1. Fetch the Google Gemini API Key and set the correct endpoint
+# 1. Fetch the Google Gemini API Key
 API_KEY = os.environ.get("GEMINI_API_KEY")
 if not API_KEY:
     print("Error: GEMINI_API_KEY is missing from GitHub Secrets.")
     exit(1)
 
-# CORRECT API ENDPOINT
-MODEL = "gemini-3.7-flash"  # current stable Flash model as of Aug 2026
-url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
+BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+
+# Fallback used only if the ListModels call itself fails outright
+FALLBACK_MODEL = "gemini-3.7-flash"
+
+
+def get_latest_flash_model(api_key):
+    """
+    Calls ListModels and picks the newest stable Gemini Flash model
+    that supports generateContent. Skips preview/lite/image/tts variants
+    so we land on a general-purpose, production-stable Flash model.
+    """
+    resp = requests.get(f"{BASE_URL}/models", params={"key": api_key})
+    resp.raise_for_status()
+    models = resp.json().get("models", [])
+
+    candidates = []
+    for m in models:
+        short_name = m.get("name", "").split("/")[-1]  # "models/gemini-3.7-flash" -> "gemini-3.7-flash"
+        methods = m.get("supportedGenerationMethods", [])
+
+        if "generateContent" not in methods:
+            continue
+        if "flash" not in short_name:
+            continue
+        # Skip variants that aren't a general-purpose stable text Flash model
+        if any(x in short_name for x in ["lite", "image", "tts", "preview"]):
+            continue
+
+        match = re.match(r"gemini-(\d+)\.(\d+)-flash$", short_name)
+        if not match:
+            continue
+
+        version = (int(match.group(1)), int(match.group(2)))
+        candidates.append((version, short_name))
+
+    if not candidates:
+        raise RuntimeError("No suitable stable Gemini Flash model found via ListModels.")
+
+    candidates.sort(reverse=True)  # highest version first
+    best_version, best_name = candidates[0]
+    print(f"Selected latest available Flash model: {best_name}")
+    return best_name
+
+
+try:
+    MODEL = get_latest_flash_model(API_KEY)
+except Exception as e:
+    print(f"Could not auto-detect latest Flash model, falling back to {FALLBACK_MODEL}. Reason: {e}")
+    MODEL = FALLBACK_MODEL
+
+url = f"{BASE_URL}/models/{MODEL}:generateContent"
 
 # 2. Gather existing directory snapshot and define project goals
 repo_manifest = {}
@@ -56,8 +106,7 @@ payload = {
     "contents": [{"parts": [{"text": prompt}]}],
     "generationConfig": {
         "responseMimeType": "application/json"
-        # Note: temperature/top_p/top_k are deprecated for 3.x Flash models,
-        # so they've been removed here to avoid future request failures.
+        # temperature/top_p/top_k intentionally omitted: deprecated on 3.x Flash models
     }
 }
 headers = {"Content-Type": "application/json"}
