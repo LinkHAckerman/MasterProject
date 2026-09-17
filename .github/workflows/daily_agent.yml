@@ -1,0 +1,34 @@
+name: Daily Autonomous AI Worker
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch: 
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python Cloud Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Necessary Web Libraries
+        run: pip install requests
+
+      - name: Execute AI Code Brainstorm
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python ai_agent.py
+
+      - name: Commit and Push Code to Repo
+        run: |
+          git config --global user.name "Cloud-AI-Agent"
+          git config --global user.email "agent@github-actions.local"
+          git add daily_update.py
+          git commit -m "Autonomous daily update from Cloud AI Worker" || echo "No changes to commit"
+          git push
