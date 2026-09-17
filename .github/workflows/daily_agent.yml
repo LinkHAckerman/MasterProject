@@ -29,6 +29,6 @@ jobs:
         run: |
           git config --global user.name "Cloud-AI-Agent"
           git config --global user.email "agent@github-actions.local"
-          git add daily_update.py
-          git commit -m "Autonomous daily update from Cloud AI Worker" || echo "No changes to commit"
+          git add -A
+          git commit -m "Autonomous multi-language architecture evolution" || echo "No changes to commit"
           git push
