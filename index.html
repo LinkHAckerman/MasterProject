@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MAGNUM OPUS // Web3 & DeFi Nexus Engine</title>
+    <style>
+        :root {
+            --bg-primary: #05070f;
+            --bg-secondary: #0b0f19;
+            --bg-card: rgba(15, 23, 42, 0.75);
+            --border-color: rgba(56, 189, 248, 0.15);
+            --accent-cyan: #38bdf8;
+            --accent-purple: #a855f7;
+            --accent-emerald: #10b981;
+            --accent-rose: #f43f5e;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --glow-cyan: 0 0 20px rgba(56, 189, 248, 0.35);
+            --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            min-height: 100vh;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 15% 15%, rgba(168, 85, 247, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 85% 85%, rgba(56, 189, 248, 0.08) 0%, transparent 40%);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.25rem 2rem;
+            background: rgba(11, 15, 25, 0.8);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            border-radius: 8px;
+            box-shadow: var(--glow-cyan);
+            display: grid;
+            place-items: center;
+            font-weight: bold;
+            color: #fff;
+        }
+
+        .logo-text {
+            font-size: 1.25rem;
+            font-weight: 800;
+            letter-spacing: 2px;
+            background: linear-gradient(to right, #fff, var(--accent-cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .gas-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: var(--accent-emerald);
+            padding: 0.4rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-family: var(--font-mono);
+        }
+
+        .btn-connect {
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            color: #fff;
+            border: none;
+            padding: 0.6rem 1.2rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: var(--glow-cyan);
+        }
+
+        .btn-connect:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .dashboard-container {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 1.5rem;
+            padding: 2rem;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            transition: border-color 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: rgba(56, 189, 248, 0.35);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .card-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text-main);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .metric-span-4 { grid-column: span 4; }
+        .metric-span-8 { grid-column: span 8; }
+        .metric-span-12 { grid-column: span 12; }
+
+        @media (max-width: 1024px) {
+            .metric-span-4, .metric-span-8 { grid-column: span 12; }
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 800;
+            font-family: var(--font-mono);
+            margin-top: 0.5rem;
+        }
+
+        .stat-change {
+            font-size: 0.85rem;
+            margin-top: 0.25rem;
+        }
+
+        .positive { color: var(--accent-emerald); }
+        .negative { color: var(--accent-rose); }
+
+        #blockCanvas {
+            width: 100%;
+            height: 220px;
+            border-radius: 8px;
+            background: rgba(5, 7, 15, 0.6);
+        }
+
+        .orderbook-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+        }
+
+        .orderbook-table th, .orderbook-table td {
+            padding: 0.5rem;
+            text-align: right;
+        }
+
+        .orderbook-table th:first-child, .orderbook-table td:first-child {
+            text-align: left;
+        }
+
+        .orderbook-table tr:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .terminal-feed {
+            background: #020408;
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            color: var(--accent-cyan);
+            height: 180px;
+            overflow-y: auto;
+            border: 1px solid rgba(56, 189, 248, 0.1);
+        }
+
+        .terminal-line {
+            margin-bottom: 0.4rem;
+            word-break: break-all;
+        }
+
+        .terminal-timestamp {
+            color: var(--text-muted);
+            margin-right: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo-container">
+            <div class="logo-icon">Ω</div>
+            <div class="logo-text">MAGNUM OPUS</div>
+        </div>
+        <div class="nav-actions">
+            <div class="gas-badge">
+                <span>⚡ GAS:</span>
+                <span id="gasValue">12 Gwei</span>
+            </div>
+            <button class="btn-connect" id="walletBtn" onclick="toggleWallet()">Connect Web3 Wallet</button>
+        </div>
+    </header>
+
+    <main class="dashboard-container">
+        <div class="card metric-span-4">
+            <div class="card-header">
+                <span class="card-title">Total Value Locked (TVL)</span>
+            </div>
+            <div class="stat-value" id="tvlVal">$14,892,104,320</div>
+            <div class="stat-change positive">↑ +4.82% (24h)</div>
+        </div>
+
+        <div class="card metric-span-4">
+            <div class="card-header">
+                <span class="card-title">Cross-Chain Yield Routing</span>
+            </div>
+            <div class="stat-value" id="apyVal">18.42% APY</div>
+            <div class="stat-change positive">Optimized via C++ Engine</div>
+        </div>
+
+        <div class="card metric-span-4">
+            <div class="card-header">
+                <span class="card-title">Consensus Block Latency</span>
+            </div>
+            <div class="stat-value" id="latencyVal">124 ms</div>
+            <div class="stat-change positive">Sub-second Finality</div>
+        </div>
+
+        <div class="card metric-span-8">
+            <div class="card-header">
+                <span class="card-title">Real-Time Block Execution Stream</span>
+                <span style="font-size:0.8rem; color:var(--accent-cyan);">Live Engine Pipeline</span>
+            </div>
+            <canvas id="blockCanvas"></canvas>
+        </div>
+
+        <div class="card metric-span-4">
+            <div class="card-header">
+                <span class="card-title">High-Freq Order Book</span>
+                <span style="font-size:0.8rem; color:var(--text-muted);">BTC/USD</span>
+            </div>
+            <table class="orderbook-table">
+                <thead>
+                    <tr>
+                        <th>Price</th>
+                        <th>Size</th>
+                        <th>Total</th>
+                    </tr>
+                </thead>
+                <tbody id="orderbookBody">
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card metric-span-12">
+            <div class="card-header">
+                <span class="card-title">Core Telemetry & Execution Logs</span>
+                <button style="background:none; border:1px solid var(--border-color); color:var(--text-muted); padding:0.2rem 0.5rem; border-radius:4px; cursor:pointer;" onclick="clearLogs()">Clear Log</button>
+            </div>
+            <div class="terminal-feed" id="terminalFeed">
+            </div>
+        </div>
+    </main>
+
+    <script>
+        let isConnected = false;
+        function toggleWallet() {
+            const btn = document.getElementById('walletBtn');
+            if(!isConnected) {
+                const mockAddr = '0x' + Array.from({length: 40}, () => Math.floor(Math.random()*16).toString(16)).join('');
+                btn.innerText = mockAddr.substring(0,6) + '...' + mockAddr.substring(36);
+                btn.style.background = 'rgba(16, 185, 129, 0.2)';
+                btn.style.border = '1px solid #10b981';
+                logTerminal(`[Web3 Wallet] Connected account: ${mockAddr}`);
+                isConnected = true;
+            } else {
+                btn.innerText = 'Connect Web3 Wallet';
+                btn.style.background = 'linear-gradient(135deg, var(--accent-cyan), var(--accent-purple))';
+                btn.style.border = 'none';
+                logTerminal('[Web3 Wallet] Disconnected');
+                isConnected = false;
+            }
+        }
+
+        function logTerminal(message) {
+            const feed = document.getElementById('terminalFeed');
+            const time = new Date().toISOString().split('T')[1].slice(0,12);
+            const line = document.createElement('div');
+            line.className = 'terminal-line';
+            line.innerHTML = `<span class="terminal-timestamp">[${time}]</span> ${message}`;
+            feed.appendChild(line);
+            feed.scrollTop = feed.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('terminalFeed').innerHTML = '';
+        }
+
+        function renderOrderbook() {
+            const tbody = document.getElementById('orderbookBody');
+            tbody.innerHTML = '';
+            const basePrice = 64250.0;
+            
+            for(let i=3; i>=1; i--) {
+                const price = (basePrice + i * 12.5).toFixed(2);
+                const size = (Math.random() * 1.5 + 0.1).toFixed(4);
+                const total = (price * size).toFixed(2);
+                tbody.innerHTML += `<tr class="negative"><td>${price}</td><td>${size}</td><td>${total}</td></tr>`;
+            }
+            for(let i=1; i<=3; i++) {
+                const price = (basePrice - i * 11.2).toFixed(2);
+                const size = (Math.random() * 2.1 + 0.2).toFixed(4);
+                const total = (price * size).toFixed(2);
+                tbody.innerHTML += `<tr class="positive"><td>${price}</td><td>${size}</td><td>${total}</td></tr>`;
+            }
+        }
+
+        const canvas = document.getElementById('blockCanvas');
+        const ctx = canvas.getContext('2d');
+        let blocks = [];
+
+        function resizeCanvas() {
+            canvas.width = canvas.parentElement.clientWidth - 48;
+            canvas.height = 220;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        class Block {
+            constructor(x, number) {
+                this.x = x;
+                this.y = canvas.height / 2 - 30;
+                this.width = 120;
+                this.height = 60;
+                this.number = number;
+                this.txCount = Math.floor(Math.random() * 2000) + 500;
+                this.hash = '0x' + Math.random().toString(16).substr(2, 8);
+            }
+
+            draw() {
+                ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+                ctx.strokeStyle = '#38bdf8';
+                ctx.lineWidth = 1.5;
+                ctx.shadowColor = 'rgba(56, 189, 248, 0.5)';
+                ctx.shadowBlur = 10;
+
+                ctx.beginPath();
+                ctx.roundRect(this.x, this.y, this.width, this.height, 8);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = '#f8fafc';
+                ctx.font = '12px JetBrains Mono';
+                ctx.fillText(`Block #${this.number}`, this.x + 10, this.y + 22);
+                ctx.fillStyle = '#94a3b8';
+                ctx.font = '10px JetBrains Mono';
+                ctx.fillText(`Txs: ${this.txCount}`, this.x + 10, this.y + 38);
+                ctx.fillText(`Hash: ${this.hash}`, this.x + 10, this.y + 50);
+            }
+        }
+
+        let blockHeight = 18492000;
+        function initBlocks() {
+            blocks = [];
+            for(let i=0; i<5; i++) {
+                blocks.push(new Block(50 + i * 160, blockHeight++));
+            }
+        }
+
+        function animateCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.strokeStyle = 'rgba(168, 85, 247, 0.4)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, canvas.height/2);
+            ctx.lineTo(canvas.width, canvas.height/2);
+            ctx.stroke();
+
+            blocks.forEach((block) => {
+                block.x -= 0.5;
+                block.draw();
+            });
+
+            if(blocks.length > 0 && blocks[0].x + blocks[0].width < 0) {
+                blocks.shift();
+                const lastX = blocks[blocks.length - 1].x;
+                blocks.push(new Block(lastX + 160, blockHeight++));
+                logTerminal(`[Block Engine] Mined Block #${blockHeight - 1} with C++ Hashing Engine.`);
+            }
+
+            requestAnimationFrame(animateCanvas);
+        }
+
+        initBlocks();
+        animateCanvas();
+        renderOrderbook();
+        setInterval(renderOrderbook, 3000);
+
+        setInterval(() => {
+            const gas = Math.floor(Math.random() * 15) + 10;
+            document.getElementById('gasValue').innerText = `${gas} Gwei`;
+        }, 5000);
+
+        logTerminal('[System Init] Magnum Opus Web3 Dashboard Core online.');
+        logTerminal('[C++ Crypto Engine] Sub-millisecond block pipeline active.');
+        logTerminal('[.NET Backend Router] API Gateways synchronized.');
+    </script>
+</body>
+</html>
