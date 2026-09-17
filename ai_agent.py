@@ -9,7 +9,7 @@ if not API_KEY:
     exit(1)
 
 # CORRECT API ENDPOINT
-url = "https://googleapis.com"
+url = f"https://googleapis.com{API_KEY}"
 
 # 2. Gather existing directory snapshot and define project goals
 repo_manifest = {}
