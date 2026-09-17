@@ -12,15 +12,14 @@ if not API_KEY:
 
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
-# Fallback used only if the ListModels call itself fails outright
-FALLBACK_MODEL = "gemini-3.7-flash"
+# Used only if the ListModels call itself fails outright
+FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.6-flash"]
 
 
-def get_latest_flash_model(api_key):
+def get_ranked_flash_models(api_key):
     """
-    Calls ListModels and picks the newest stable Gemini Flash model
-    that supports generateContent. Skips preview/lite/image/tts variants
-    so we land on a general-purpose, production-stable Flash model.
+    Calls ListModels and returns stable Gemini Flash models that support
+    generateContent, newest first. Skips preview/lite/image/tts variants.
     """
     resp = requests.get(f"{BASE_URL}/models", params={"key": api_key})
     resp.raise_for_status()
@@ -49,62 +48,81 @@ def get_latest_flash_model(api_key):
         raise RuntimeError("No suitable stable Gemini Flash model found via ListModels.")
 
     candidates.sort(reverse=True)
-    best_version, best_name = candidates[0]
-    print(f"Selected latest available Flash model: {best_name}")
-    return best_name
+    ranked_names = [name for _, name in candidates]
+    print(f"Model preference order: {ranked_names}")
+    return ranked_names
 
 
-def call_gemini_with_retry(url, headers, payload, api_key, max_retries=4, base_delay=5):
+def call_gemini_with_retry(base_url, headers, payload, api_key, max_retries=3, base_delay=5):
     """
-    Calls the Gemini API with retry + exponential backoff for transient
-    errors (503 UNAVAILABLE, 429 RATE_LIMIT, and generic connection errors).
-    Non-transient errors (404, 400, 403, etc.) fail immediately.
+    Calls Gemini's generateContent for base_url. Retries transient errors
+    (429/500/502/503/504, network exceptions) with exponential backoff.
+    Returns the final response object regardless of success/failure -
+    caller decides what to do with a non-200 result.
     """
     transient_statuses = {429, 500, 502, 503, 504}
+    response = None
 
     for attempt in range(1, max_retries + 1):
         try:
             response = requests.post(
-                url,
+                base_url,
                 headers=headers,
                 data=json.dumps(payload),
                 params={"key": api_key},
                 timeout=120
             )
         except requests.exceptions.RequestException as e:
-            print(f"Attempt {attempt}/{max_retries}: network error ({e})")
+            print(f"  Attempt {attempt}/{max_retries}: network error ({e})")
             if attempt == max_retries:
-                raise
-            delay = base_delay * (2 ** (attempt - 1))
-            print(f"Retrying in {delay} seconds...")
-            time.sleep(delay)
+                return None
+            time.sleep(base_delay * (2 ** (attempt - 1)))
             continue
 
         if response.status_code == 200:
             return response
 
+        print(f"  Attempt {attempt}/{max_retries}: status {response.status_code}")
+        print(f"  {response.text}")
+
         if response.status_code in transient_statuses and attempt < max_retries:
-            print(f"Attempt {attempt}/{max_retries}: Gemini API returned status {response.status_code}")
-            print(response.text)
             delay = base_delay * (2 ** (attempt - 1))
-            print(f"Transient error, retrying in {delay} seconds...")
+            print(f"  Transient error, retrying in {delay} seconds...")
             time.sleep(delay)
             continue
 
-        # Either not transient, or we're out of retries - return as-is
-        # so the caller's error handling/logging kicks in.
-        return response
+        return response  # either non-transient, or out of retries for this model
 
     return response
 
 
-try:
-    MODEL = get_latest_flash_model(API_KEY)
-except Exception as e:
-    print(f"Could not auto-detect latest Flash model, falling back to {FALLBACK_MODEL}. Reason: {e}")
-    MODEL = FALLBACK_MODEL
+def generate_with_model_fallback(model_names, headers, payload, api_key):
+    """
+    Tries each model in order. If a model fails after its retries are
+    exhausted (still transient, e.g. persistent 503), moves on to the
+    next model in the list rather than giving up entirely.
+    """
+    last_response = None
+    for i, model in enumerate(model_names, start=1):
+        url = f"{BASE_URL}/models/{model}:generateContent"
+        print(f"Trying model {i}/{len(model_names)}: {model}")
+        response = call_gemini_with_retry(url, headers, payload, api_key)
 
-url = f"{BASE_URL}/models/{MODEL}:generateContent"
+        if response is not None and response.status_code == 200:
+            print(f"Success with model: {model}")
+            return response
+
+        last_response = response
+        print(f"Model {model} did not succeed, moving to next candidate if available.\n")
+
+    return last_response  # every model failed; return the last response for error reporting
+
+
+try:
+    MODEL_CANDIDATES = get_ranked_flash_models(API_KEY)
+except Exception as e:
+    print(f"Could not auto-detect Flash models, falling back to hardcoded list. Reason: {e}")
+    MODEL_CANDIDATES = FALLBACK_MODELS
 
 # 2. Gather existing directory snapshot and define project goals
 repo_manifest = {}
@@ -145,7 +163,7 @@ Example output format:
 {{"filename": "CryptoEngine.cs", "content": "...complete updated C# code here..."}}
 """
 
-# 4. Transmit to Gemini
+# 4. Transmit to Gemini, trying each candidate model in order
 payload = {
     "contents": [{"parts": [{"text": prompt}]}],
     "generationConfig": {
@@ -156,12 +174,14 @@ payload = {
 headers = {"Content-Type": "application/json"}
 
 try:
-    response = call_gemini_with_retry(url, headers, payload, API_KEY)
+    response = generate_with_model_fallback(MODEL_CANDIDATES, headers, payload, API_KEY)
 
-    if response.status_code != 200:
-        print(f"Gemini API returned status {response.status_code}")
-        print(response.text)
-        response.raise_for_status()
+    if response is None or response.status_code != 200:
+        print("All candidate models failed.")
+        if response is not None:
+            print(f"Final status: {response.status_code}")
+            print(response.text)
+        exit(1)
 
     # 5. Process JSON payload and dynamically write the chosen language file
     response_data = response.json()
