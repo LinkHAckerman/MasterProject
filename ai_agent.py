@@ -9,7 +9,8 @@ if not API_KEY:
     exit(1)
 
 # CORRECT API ENDPOINT
-url = f"https://googleapis.com{API_KEY}"
+MODEL = "gemini-2.0-flash"
+url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
 
 # 2. Gather existing directory snapshot and define project goals
 repo_manifest = {}
@@ -62,21 +63,27 @@ headers = {"Content-Type": "application/json"}
 
 try:
     response = requests.post(
-        url, 
-        headers=headers, 
-        data=json.dumps(payload), 
+        url,
+        headers=headers,
+        data=json.dumps(payload),
         params={"key": API_KEY}
     )
-    response.raise_for_status()
-    
+
+    if response.status_code != 200:
+        print(f"Gemini API returned status {response.status_code}")
+        print(response.text)
+        response.raise_for_status()
+
     # 5. Process JSON payload and dynamically write the chosen language file
     response_data = response.json()
-    
+
     if 'candidates' in response_data and response_data['candidates']:
         ai_output_raw = response_data['candidates'][0]['content']['parts'][0]['text']
     else:
-        ai_output_raw = response_data['contents']['parts'][0]['text']
-    
+        print("No candidates returned by Gemini. Full response:")
+        print(json.dumps(response_data, indent=2))
+        exit(1)
+
     # Clean up output formatting just in case
     clean_json = ai_output_raw.strip()
     if clean_json.startswith("```json"):
@@ -88,10 +95,10 @@ try:
     action = json.loads(clean_json)
     target_file = action["filename"]
     file_content = action["content"]
-    
+
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(file_content)
-        
+
     print(f"Success! The AI Agent has modified or created the '{target_file}' file.")
 
 except Exception as e:
