@@ -14,7 +14,7 @@ STATE_FILE = ".agent_state.json"
 
 ALL_PROJECT_FILES = [
     "index.html", "styles.css", "app.js",
-    "CryptoEngine.cs", "Analytics.cpp",
+    "CryptoEngine.cpp", "TransactionProcessor.cs",
     "SmartContract.sol", "server.go", "schema.sql",
     "README.md"
 ]
