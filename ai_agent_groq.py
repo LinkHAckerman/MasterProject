@@ -102,8 +102,7 @@ if not available_files:
     available_files = ALL_PROJECT_FILES  # fallback, shouldn't normally happen
 
 # 2. Gather current repo snapshot
-repo_manifest = {}
-fMAX_CHARS_PER_FILE = 3000
+MAX_CHARS_PER_FILE = 3000
 MAX_TOTAL_MANIFEST_CHARS = 12000
 
 repo_manifest = {}
