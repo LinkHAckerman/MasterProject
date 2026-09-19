@@ -225,8 +225,9 @@ try:
     elif clean_json.startswith("```"):
         clean_json = clean_json.replace("```", "", 1).rstrip("```").strip()
 
-    # Parse the target action
-    action = json.loads(clean_json)
+     # Parse the target action — tolerate trailing data after the JSON object
+    decoder = json.JSONDecoder()
+    action, _ = decoder.raw_decode(clean_json)
     target_file = action["filename"]
     file_content = action["content"]
 
