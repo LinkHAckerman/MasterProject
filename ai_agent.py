@@ -208,6 +208,10 @@ try:
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(file_content)
 
+    # Record which file we modified so the second agent can avoid it
+    with open(".agent_state.json", "w") as f:
+        json.dump({"last_modified_file": target_file}, f)
+
     print(f"Success! The AI Agent has modified or created the '{target_file}' file.")
 
 except Exception as e:
