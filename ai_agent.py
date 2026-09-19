@@ -215,9 +215,18 @@ try:
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(file_content)
 
-    # Record which file we modified so the second agent can avoid it
+    # Record which file we modified so other agents can avoid it
+    state = {"modified_files": []}
+    if os.path.exists(".agent_state.json"):
+        try:
+            with open(".agent_state.json", "r") as f:
+                state = json.load(f)
+        except Exception:
+            pass
+    state.setdefault("modified_files", [])
+    state["modified_files"].append(target_file)
     with open(".agent_state.json", "w") as f:
-        json.dump({"last_modified_file": target_file}, f)
+        json.dump(state, f)
 
     print(f"Success! The AI Agent has modified or created the '{target_file}' file.")
 
