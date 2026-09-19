@@ -169,7 +169,7 @@ try:
     file_content = None
 
     for pick_attempt in range(1, MAX_PICK_ATTEMPTS + 1):
-        response = generate_with_model_fallback(MODEL_CANDIDATES, headers_base, payload_base)
+        response = generate_with_model_fallback(MODEL_CANDIDATES, headers_base, payload_base, API_KEY)
 
         if response is None or response.status_code != 200:
             print("All candidate models failed.")
