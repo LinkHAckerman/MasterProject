@@ -13,8 +13,12 @@ BASE_URL = "https://api.groq.com/openai/v1"
 FALLBACK_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 STATE_FILE = ".agent_state.json"
 
-ALL_PROJECT_FILES = ["index.html", "styles.css", "app.js", "CryptoEngine.cs", "Analytics.cpp", "README.md"]
-
+ALL_PROJECT_FILES = [
+    "index.html", "styles.css", "app.js",
+    "CryptoEngine.cpp", "TransactionProcessor.cs",
+    "SmartContract.sol", "server.go", "schema.sql",
+    "README.md"
+]
 
 def get_ranked_models(api_key):
     """Lists available Groq models, newest/most-capable-looking first."""
@@ -72,16 +76,16 @@ def generate_with_model_fallback(model_names, headers_base, payload_base, api_ke
     return last_response
 
 
-# 1. Figure out which file Gemini already claimed today, so we don't collide
-already_modified = None
+# 1. Figure out which files other agents already claimed today, so we don't collide
+claimed_files = []
 if os.path.exists(STATE_FILE):
     try:
         with open(STATE_FILE, "r") as f:
-            already_modified = json.load(f).get("last_modified_file")
+            claimed_files = json.load(f).get("modified_files", [])
     except Exception:
         pass
 
-available_files = [f for f in ALL_PROJECT_FILES if f != already_modified]
+available_files = [f for f in ALL_PROJECT_FILES if f not in claimed_files]
 if not available_files:
     available_files = ALL_PROJECT_FILES  # fallback, shouldn't normally happen
 
@@ -111,7 +115,7 @@ Here is a full snapshot of the current codebase across different languages:
 {manifest_json if repo_manifest else "# The architecture is blank. Initialize the structural foundations today."}
 ---
 
-A colleague has already claimed and is updating "{already_modified if already_modified else "no file yet"}" today.
+Colleagues have already claimed today: {claimed_files if claimed_files else "nothing yet"}.
 You MUST choose a DIFFERENT file from this list: {available_files}
 
 Instructions:
@@ -159,14 +163,19 @@ try:
     target_file = action["filename"]
     file_content = action["content"]
 
-    # Safety net: if the model ignores instructions and picks the same file anyway,
-    # skip writing rather than clobber the other agent's work.
-    if target_file == already_modified:
+    # Safety net: if the model ignores instructions and picks an already-claimed file,
+    # skip writing rather than clobber someone else's work.
+    if target_file in claimed_files:
         print(f"Groq picked '{target_file}', which was already claimed today. Skipping write to avoid collision.")
         exit(0)
 
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(file_content)
+
+    # Update shared state so later agents in the chain see this claim
+    state = {"modified_files": claimed_files + [target_file]}
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
 
     print(f"Success! Groq agent has modified or created the '{target_file}' file.")
 
