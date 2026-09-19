@@ -20,20 +20,32 @@ ALL_PROJECT_FILES = [
     "README.md"
 ]
 
+NON_CHAT_KEYWORDS = ["whisper", "tts", "guard", "orpheus", "allam", "moderation", "compound"]
+
+
 def get_ranked_models(api_key):
-    """Lists available Groq models, newest/most-capable-looking first."""
+    """Lists available Groq chat models, largest context window first."""
     resp = requests.get(f"{BASE_URL}/models", headers={"Authorization": f"Bearer {api_key}"})
     resp.raise_for_status()
     models = resp.json().get("data", [])
 
-    names = [m["id"] for m in models if "whisper" not in m["id"] and "guard" not in m["id"]]
-    # Prefer larger/versatile-sounding models first, then everything else
-    names.sort(key=lambda n: (0 if "70b" in n or "versatile" in n else 1, n), reverse=False)
-    if not names:
-        raise RuntimeError("No usable models returned by Groq.")
+    candidates = []
+    for m in models:
+        model_id = m.get("id", "")
+        if any(kw in model_id.lower() for kw in NON_CHAT_KEYWORDS):
+            continue
+        if not m.get("active", True):
+            continue
+        context_window = m.get("context_window", 0)
+        candidates.append((context_window, model_id))
+
+    if not candidates:
+        raise RuntimeError("No usable chat models returned by Groq.")
+
+    candidates.sort(reverse=True)  # largest context window first
+    names = [model_id for _, model_id in candidates]
     print(f"Groq model preference order: {names}")
     return names
-
 
 def call_with_retry(url, headers, payload, max_retries=3, base_delay=5):
     transient_statuses = {429, 500, 502, 503, 504}
@@ -91,10 +103,22 @@ if not available_files:
 
 # 2. Gather current repo snapshot
 repo_manifest = {}
+fMAX_CHARS_PER_FILE = 3000
+MAX_TOTAL_MANIFEST_CHARS = 12000
+
+repo_manifest = {}
 for file_name in ALL_PROJECT_FILES:
     if os.path.exists(file_name):
         with open(file_name, "r", encoding="utf-8", errors="ignore") as f:
-            repo_manifest[file_name] = f.read()
+            content = f.read()
+            if len(content) > MAX_CHARS_PER_FILE:
+                content = content[:MAX_CHARS_PER_FILE] + "\n# ...[truncated for prompt size]..."
+            repo_manifest[file_name] = content
+
+# Hard cap on total manifest size regardless of per-file limits
+manifest_json = json.dumps(repo_manifest, indent=2)
+if len(manifest_json) > MAX_TOTAL_MANIFEST_CHARS:
+    manifest_json = manifest_json[:MAX_TOTAL_MANIFEST_CHARS] + "\n... [manifest truncated for length] ..."
 
 manifest_json = json.dumps(repo_manifest, indent=2)
 
