@@ -126,7 +126,14 @@ except Exception as e:
 
 # 2. Gather existing directory snapshot and define project goals
 repo_manifest = {}
-for file_name in ["index.html", "styles.css", "app.js", "CryptoEngine.cs", "Analytics.cpp", "README.md"]:
+ALL_PROJECT_FILES = [
+    "index.html", "styles.css", "app.js",
+    "CryptoEngine.cpp", "TransactionProcessor.cs",
+    "SmartContract.sol", "server.go", "schema.sql",
+    "README.md"
+]
+
+for file_name in ALL_PROJECT_FILES:
     if os.path.exists(file_name):
         with open(file_name, "r", encoding="utf-8", errors="ignore") as f:
             repo_manifest[file_name] = f.read()
