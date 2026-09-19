@@ -184,7 +184,15 @@ Example output format:
 payload = {
     "contents": [{"parts": [{"text": prompt}]}],
     "generationConfig": {
-        "responseMimeType": "application/json"
+        "responseMimeType": "application/json",
+        "responseSchema": {
+            "type": "OBJECT",
+            "properties": {
+                "filename": {"type": "STRING"},
+                "content": {"type": "STRING"}
+            },
+            "required": ["filename", "content"]
+        }
         # temperature/top_p/top_k intentionally omitted: deprecated on 3.x Flash models
     }
 }
