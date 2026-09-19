@@ -148,11 +148,6 @@ manifest_json = json.dumps(repo_manifest, indent=2)
 if len(manifest_json) > MAX_TOTAL_MANIFEST_CHARS:
     manifest_json = manifest_json[:MAX_TOTAL_MANIFEST_CHARS] + "\n... [manifest truncated for length] ..."
 
-for file_name in ALL_PROJECT_FILES:
-    if os.path.exists(file_name):
-        with open(file_name, "r", encoding="utf-8", errors="ignore") as f:
-            repo_manifest[file_name] = f.read()
-
 manifest_json = json.dumps(repo_manifest, indent=2)
 
 # 3. Define the Grand Ultimate Master Project Prompt
