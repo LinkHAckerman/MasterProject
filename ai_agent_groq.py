@@ -164,32 +164,45 @@ try:
         print(f"Could not list Groq models, falling back to hardcoded list. Reason: {e}")
         MODEL_CANDIDATES = FALLBACK_MODELS
 
-    response = generate_with_model_fallback(MODEL_CANDIDATES, headers_base, payload_base, API_KEY)
+    MAX_PICK_ATTEMPTS = 3
+    target_file = None
+    file_content = None
 
-    if response is None or response.status_code != 200:
-        print("All candidate models failed.")
-        if response is not None:
-            print(f"Final status: {response.status_code}")
-            print(response.text)
-        exit(1)
+    for pick_attempt in range(1, MAX_PICK_ATTEMPTS + 1):
+        response = generate_with_model_fallback(MODEL_CANDIDATES, headers_base, payload_base)
 
-    response_data = response.json()
-    ai_output_raw = response_data["choices"][0]["message"]["content"]
+        if response is None or response.status_code != 200:
+            print("All candidate models failed.")
+            if response is not None:
+                print(f"Final status: {response.status_code}")
+                print(response.text)
+            exit(1)
 
-    clean_json = ai_output_raw.strip()
-    if clean_json.startswith("```json"):
-        clean_json = clean_json.replace("```json", "", 1).rstrip("```").strip()
-    elif clean_json.startswith("```"):
-        clean_json = clean_json.replace("```", "", 1).rstrip("```").strip()
+        response_data = response.json()
+        ai_output_raw = response_data["choices"][0]["message"]["content"]
 
-    action = json.loads(clean_json)
-    target_file = action["filename"]
-    file_content = action["content"]
+        clean_json = ai_output_raw.strip()
+        if clean_json.startswith("```json"):
+            clean_json = clean_json.replace("```json", "", 1).rstrip("```").strip()
+        elif clean_json.startswith("```"):
+            clean_json = clean_json.replace("```", "", 1).rstrip("```").strip()
 
-    # Safety net: if the model ignores instructions and picks an already-claimed file,
-    # skip writing rather than clobber someone else's work.
-    if target_file in claimed_files:
-        print(f"Groq picked '{target_file}', which was already claimed today. Skipping write to avoid collision.")
+        decoder = json.JSONDecoder()
+        action, _ = decoder.raw_decode(clean_json)
+        candidate_file = action["filename"]
+        candidate_content = action["content"]
+
+        if candidate_file not in claimed_files:
+            target_file = candidate_file
+            file_content = candidate_content
+            break
+
+        print(f"Attempt {pick_attempt}/{MAX_PICK_ATTEMPTS}: picked '{candidate_file}', "
+              f"already claimed today. Asking again for a different file.")
+
+    if target_file is None:
+        print(f"Could not get an unclaimed file pick after {MAX_PICK_ATTEMPTS} attempts. "
+              f"Skipping write to avoid collision.")
         exit(0)
 
     with open(target_file, "w", encoding="utf-8") as f:
