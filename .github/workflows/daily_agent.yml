@@ -12,6 +12,9 @@ jobs:
       - name: Checkout Repository Code
         uses: actions/checkout@v4
 
+      - name: Reset Daily Agent State
+        run: rm -f .agent_state.json
+
       - name: Set up Python Cloud Environment
         uses: actions/setup-python@v5
         with:
