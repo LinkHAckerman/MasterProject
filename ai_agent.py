@@ -125,6 +125,13 @@ except Exception as e:
     MODEL_CANDIDATES = FALLBACK_MODELS
 
 # 2. Gather existing directory snapshot and define project goals
+ALL_PROJECT_FILES = [
+    "index.html", "styles.css", "app.js",
+    "CryptoEngine.cpp", "TransactionProcessor.cs",
+    "SmartContract.sol", "server.go", "schema.sql",
+    "README.md"
+]
+
 MAX_CHARS_PER_FILE = 3000
 MAX_TOTAL_MANIFEST_CHARS = 12000
 
@@ -137,7 +144,6 @@ for file_name in ALL_PROJECT_FILES:
                 content = content[:MAX_CHARS_PER_FILE] + "\n# ...[truncated for prompt size]..."
             repo_manifest[file_name] = content
 
-# Hard cap on total manifest size regardless of per-file limits
 manifest_json = json.dumps(repo_manifest, indent=2)
 if len(manifest_json) > MAX_TOTAL_MANIFEST_CHARS:
     manifest_json = manifest_json[:MAX_TOTAL_MANIFEST_CHARS] + "\n... [manifest truncated for length] ..."
