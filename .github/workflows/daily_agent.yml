@@ -3,7 +3,7 @@ name: Daily Autonomous AI Worker
 on:
   schedule:
     - cron: '0 0 * * *'
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
   run-agent:
@@ -20,15 +20,20 @@ jobs:
       - name: Install Necessary Web Libraries
         run: pip install requests
 
-      - name: Execute AI Code Brainstorm
+      - name: Execute Gemini Agent
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python ai_agent.py
+
+      - name: Execute Groq Agent (second pass)
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python ai_agent_groq.py
 
       - name: Commit and Push Code to Repo
         run: |
           git config --global user.name "Cloud-AI-Agent"
           git config --global user.email "agent@github-actions.local"
           git add -A
-          git commit -m "Autonomous multi-language architecture evolution" || echo "No changes to commit"
+          git commit -m "Autonomous multi-language architecture evolution (2 agents)" || echo "No changes to commit"
           git push
