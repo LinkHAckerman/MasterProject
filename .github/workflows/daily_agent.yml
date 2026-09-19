@@ -25,16 +25,25 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python ai_agent.py
 
-      - name: Execute Groq Agent (second pass)
+      - name: Execute Groq Agent
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: python ai_agent_groq.py
+
+      - name: Execute Mistral Agent
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+        run: python ai_agent_mistral.py
 
       - name: Commit and Push Code to Repo
         run: |
           git config --global user.name "Cloud-AI-Agent"
           git config --global user.email "agent@github-actions.local"
           git add -A
-          git commit -m "Autonomous multi-language architecture evolution (2 agents)" || echo "No changes to commit"
-          git pull --rebase origin main
-          git push
+          git commit -m "Autonomous multi-language architecture evolution (3 agents)" || echo "No changes to commit"
+
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main && git push && break
+            echo "Push attempt $i failed, retrying..."
+            sleep $((RANDOM % 10 + 5))
+          done
