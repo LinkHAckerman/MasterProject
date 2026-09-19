@@ -36,4 +36,5 @@ jobs:
           git config --global user.email "agent@github-actions.local"
           git add -A
           git commit -m "Autonomous multi-language architecture evolution (2 agents)" || echo "No changes to commit"
+          git pull --rebase origin main
           git push
