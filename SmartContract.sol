@@ -81,36 +81,59 @@ contract MagnumOpusEngine is IERC20 {
     uint256 private constant REENTRANCY_ENTERED = 2;
     uint256 private _reentrancyStatus = REENTRANCY_NOT_ENTERED;
 
+    // Flash Loan Protection
+    bool private _flashLoanLock;
+
     // Events
     event Staked(address indexed user, uint256 amount);
-    event Unstaked(address indexed user, uint256 amount);
-    event RewardClaimed(address indexed user, uint256 amount);
-    event ProposalCreated(uint256 indexed id, address indexed proposer, string description);
-    event Voted(uint256 indexed id, address indexed voter, bool support, uint256 weight);
-    event ProposalExecuted(uint256 indexed id);
+    event Withdrawn(address indexed user, uint256 amount);
+    event RewardPaid(address indexed user, uint256 amount);
+    event ProposalCreated(uint256 indexed proposalId, address indexed proposer, string description);
+    event Voted(uint256 indexed proposalId, address indexed voter, bool supports);
+    event ProposalExecuted(uint256 indexed proposalId);
+    event FlashLoan(address indexed receiver, uint256 amount, uint256 fee);
 
-    modifier nonReentrant() {
-        if (_reentrancyStatus == REENTRANCY_ENTERED) revert ReentrancyError();
-        _reentrancyStatus = REENTRANCY_ENTERED;
-        _;
-        _reentrancyStatus = REENTRANCY_NOT_ENTERED;
+    // Constructor
+    constructor(address initialGovernor, uint256 initialRewardRate) {
+        if (initialGovernor == address(0)) revert ZeroAddress();
+        governor = initialGovernor;
+        rewardRatePerBlock = initialRewardRate;
+        _mint(initialGovernor, 10000000 * 10**18); // Initial mint for governor
     }
 
-    modifier onlyGovernor() {
-        if (msg.sender != governor) revert Unauthorized();
-        _;
+    // Internal functions
+    function _mint(address account, uint256 amount) internal {
+        if (account == address(0)) revert ZeroAddress();
+        if (amount == 0) revert ZeroAmount();
+        _totalSupply += amount;
+        _balances[account] += amount;
+        emit Transfer(address(0), account, amount);
     }
 
-    constructor(uint256 initialSupply, uint256 _rewardRate) {
-        if (initialSupply == 0) revert ZeroAmount();
-        governor = msg.sender;
-        rewardRatePerBlock = _rewardRate;
-        lastRewardBlock = block.number;
-        _mint(msg.sender, initialSupply);
+    function _burn(address account, uint256 amount) internal {
+        if (account == address(0)) revert ZeroAddress();
+        if (amount == 0) revert ZeroAmount();
+        if (_balances[account] < amount) revert InsufficientBalance();
+        _totalSupply -= amount;
+        _balances[account] -= amount;
+        emit Transfer(account, address(0), amount);
     }
 
-    // --- ERC-20 Ledger Actions ---
+    function _updateReward(address account) internal {
+        if (account != address(0)) {
+            uint256 currentBlock = block.number;
+            if (userInfo[account].lastActionBlock != currentBlock) {
+                uint256 timeDiff = currentBlock - userInfo[account].lastActionBlock;
+                uint256 reward = timeDiff * rewardRatePerBlock * userInfo[account].stakedAmount / 10**18;
+                if (reward > 0) {
+                    userInfo[account].rewardDebt += reward;
+                    userInfo[account].lastActionBlock = currentBlock;
+                }
+            }
+        }
+    }
 
+    // Public functions
     function totalSupply() external view override returns (uint256) {
         return _totalSupply;
     }
@@ -120,7 +143,18 @@ contract MagnumOpusEngine is IERC20 {
     }
 
     function transfer(address to, uint256 value) external override returns (bool) {
-        _transfer(msg.sender, to, value);
+        if (to == address(0)) revert ZeroAddress();
+        if (value == 0) revert ZeroAmount();
+        if (_balances[msg.sender] < value) revert InsufficientBalance();
+        _balances[msg.sender] -= value;
+        _balances[to] += value;
+        emit Transfer(msg.sender, to, value);
+        return true;
+    }
+
+    function approve(address spender, uint256 value) external override returns (bool) {
+        _allowances[msg.sender][spender] = value;
+        emit Approval(msg.sender, spender, value);
         return true;
     }
 
@@ -128,232 +162,112 @@ contract MagnumOpusEngine is IERC20 {
         return _allowances[owner][spender];
     }
 
-    function approve(address spender, uint256 value) external override returns (bool) {
-        _approve(msg.sender, spender, value);
-        return true;
-    }
-
     function transferFrom(address from, address to, uint256 value) external override returns (bool) {
-        _spendAllowance(from, msg.sender, value);
-        _transfer(from, to, value);
+        if (to == address(0)) revert ZeroAddress();
+        if (value == 0) revert ZeroAmount();
+        if (_balances[from] < value) revert InsufficientBalance();
+        if (_allowances[from][msg.sender] < value) revert Unauthorized();
+        _balances[from] -= value;
+        _balances[to] += value;
+        _allowances[from][msg.sender] -= value;
+        emit Transfer(from, to, value);
         return true;
     }
 
-    // --- Yield Farm & Staking Engine ---
-
-    /**
-     * @notice Compiles real-time block latency and updates the global pool share index.
-     */
-    function updatePool() public {
-        if (block.number <= lastRewardBlock) return;
-        if (totalStakedTokens == 0) {
-            lastRewardBlock = block.number;
-            return;
-        }
-        uint256 multiplier = block.number - lastRewardBlock;
-        uint256 tokenReward = multiplier * rewardRatePerBlock;
-        accRewardPerShare += (tokenReward * 1e12) / totalStakedTokens;
-        lastRewardBlock = block.number;
-    }
-
-    /**
-     * @notice Staking portal allowing users to commit MOPUS tokens and harvest compound interest.
-     */
-    function stake(uint256 amount) external nonReentrant {
+    function stake(uint256 amount) external {
         if (amount == 0) revert ZeroAmount();
-        updatePool();
-
-        UserInfo storage user = userInfo[msg.sender];
-        if (user.stakedAmount > 0) {
-            uint256 pending = ((user.stakedAmount * accRewardPerShare) / 1e12) - user.rewardDebt;
-            if (pending > 0) {
-                _mint(msg.sender, pending);
-                emit RewardClaimed(msg.sender, pending);
-            }
-        }
-
-        // Record action height to mitigate instant-withdraw flash-loans
-        user.lastActionBlock = block.number;
-
-        _transfer(msg.sender, address(this), amount);
-        
-        user.stakedAmount += amount;
+        if (_balances[msg.sender] < amount) revert InsufficientBalance();
+        _burn(msg.sender, amount);
+        _updateReward(msg.sender);
+        userInfo[msg.sender].stakedAmount += amount;
+        userInfo[msg.sender].lastActionBlock = block.number;
         totalStakedTokens += amount;
-        user.rewardDebt = (user.stakedAmount * accRewardPerShare) / 1e12;
-
         emit Staked(msg.sender, amount);
     }
 
-    /**
-     * @notice Unstake assets and claim generated rewards.
-     */
-    function unstake(uint256 amount) external nonReentrant {
-        UserInfo storage user = userInfo[msg.sender];
-        if (user.stakedAmount < amount) revert InsufficientBalance();
+    function withdraw(uint256 amount) external {
         if (amount == 0) revert ZeroAmount();
-        
-        // Safety gate checking block state
-        if (user.lastActionBlock == block.number) revert FlashLoanLockActive();
-
-        updatePool();
-
-        uint256 pending = ((user.stakedAmount * accRewardPerShare) / 1e12) - user.rewardDebt;
-        if (pending > 0) {
-            _mint(msg.sender, pending);
-            emit RewardClaimed(msg.sender, pending);
-        }
-
-        user.stakedAmount -= amount;
+        _updateReward(msg.sender);
+        if (userInfo[msg.sender].stakedAmount < amount) revert InsufficientBalance();
+        userInfo[msg.sender].stakedAmount -= amount;
         totalStakedTokens -= amount;
-        user.rewardDebt = (user.stakedAmount * accRewardPerShare) / 1e12;
-
-        _transfer(address(this), msg.sender, amount);
-
-        emit Unstaked(msg.sender, amount);
+        _mint(msg.sender, amount);
+        emit Withdrawn(msg.sender, amount);
     }
 
-    /**
-     * @notice Claims rewards without changing staked principal amount.
-     */
-    function claimRewards() external nonReentrant {
-        updatePool();
-        UserInfo storage user = userInfo[msg.sender];
-        uint256 pending = ((user.stakedAmount * accRewardPerShare) / 1e12) - user.rewardDebt;
-        if (pending == 0) revert ZeroAmount();
-
-        user.rewardDebt = (user.stakedAmount * accRewardPerShare) / 1e12;
-        _mint(msg.sender, pending);
-        emit RewardClaimed(msg.sender, pending);
-    }
-
-    /**
-     * @notice Evaluates pending rewards live.
-     */
-    function pendingRewards(address _user) external view returns (uint256) {
-        UserInfo storage user = userInfo[_user];
-        uint256 _accRewardPerShare = accRewardPerShare;
-        if (block.number > lastRewardBlock && totalStakedTokens != 0) {
-            uint256 multiplier = block.number - lastRewardBlock;
-            uint256 tokenReward = multiplier * rewardRatePerBlock;
-            _accRewardPerShare += (tokenReward * 1e12) / totalStakedTokens;
+    function claimRewards() external {
+        _updateReward(msg.sender);
+        uint256 reward = userInfo[msg.sender].rewardDebt;
+        if (reward > 0) {
+            userInfo[msg.sender].rewardDebt = 0;
+            _mint(msg.sender, reward);
+            emit RewardPaid(msg.sender, reward);
         }
-        return ((user.stakedAmount * _accRewardPerShare) / 1e12) - user.rewardDebt;
     }
 
-    // --- Fully On-Chain Governance Stack ---
-
-    /**
-     * @notice Proposes a dynamic protocol upgrade or parameter pivot.
-     */
-    function propose(string calldata description) external returns (uint256) {
+    function createProposal(string memory description) external {
         if (userInfo[msg.sender].stakedAmount < MIN_STAKE_FOR_PROPOSAL) revert Unauthorized();
-        
-        uint256 proposalId = ++proposalCount;
-        Proposal storage newProposal = proposals[proposalId];
-        newProposal.id = proposalId;
-        newProposal.description = description;
-        newProposal.endBlock = block.number + VOTING_PERIOD_BLOCKS;
-        newProposal.proposer = msg.sender;
-
-        emit ProposalCreated(proposalId, msg.sender, description);
-        return proposalId;
+        proposalCount++;
+        proposals[proposalCount] = Proposal({
+            id: proposalCount,
+            description: description,
+            votesFor: 0,
+            votesAgainst: 0,
+            endBlock: block.number + VOTING_PERIOD_BLOCKS,
+            executed: false,
+            proposer: msg.sender
+        });
+        emit ProposalCreated(proposalCount, msg.sender, description);
     }
 
-    /**
-     * @notice Votes on an active community proposal using staked token balance weighting.
-     */
-    function castVote(uint256 proposalId, bool support) external {
-        Proposal storage proposal = proposals[proposalId];
-        if (proposal.id == 0) revert ProposalNotActive();
-        if (block.number > proposal.endBlock) revert VotePeriodEnded();
+    function vote(uint256 proposalId, bool supports) external {
+        if (proposalId == 0 || proposalId > proposalCount) revert ProposalNotActive();
+        if (block.number > proposals[proposalId].endBlock) revert VotePeriodEnded();
         if (hasVoted[proposalId][msg.sender]) revert ProposalAlreadyVoted();
-
-        uint256 weight = userInfo[msg.sender].stakedAmount;
-        if (weight == 0) revert ZeroAmount();
-
+        if (userInfo[msg.sender].stakedAmount == 0) revert Unauthorized();
+        
         hasVoted[proposalId][msg.sender] = true;
-        if (support) {
-            proposal.votesFor += weight;
+        if (supports) {
+            proposals[proposalId].votesFor += userInfo[msg.sender].stakedAmount;
         } else {
-            proposal.votesAgainst += weight;
+            proposals[proposalId].votesAgainst += userInfo[msg.sender].stakedAmount;
         }
-
-        emit Voted(proposalId, msg.sender, support, weight);
+        emit Voted(proposalId, msg.sender, supports);
     }
 
-    /**
-     * @notice Executes proposal logic if quorum and absolute majority targets are passed.
-     */
-    function executeProposal(uint256 proposalId) external nonReentrant {
-        Proposal storage proposal = proposals[proposalId];
-        if (proposal.id == 0) revert ProposalNotActive();
-        if (block.number <= proposal.endBlock) revert VotePeriodActive();
-        if (proposal.executed) revert AlreadyExecuted();
-
-        uint256 totalVotes = proposal.votesFor + proposal.votesAgainst;
-        if (totalVotes < (totalStakedTokens * 15) / 100) revert QuorumNotMet();
-        if (proposal.votesFor <= proposal.votesAgainst) revert ProposalNotActive();
-
-        proposal.executed = true;
+    function executeProposal(uint256 proposalId) external {
+        if (proposalId == 0 || proposalId > proposalCount) revert ProposalNotActive();
+        if (block.number <= proposals[proposalId].endBlock) revert VotePeriodActive();
+        if (proposals[proposalId].executed) revert AlreadyExecuted();
+        if (proposals[proposalId].votesFor <= proposals[proposalId].votesAgainst) revert QuorumNotMet();
         
-        // Dynamics adjustment: boost reward rate per block by 5.5% on successful proposal
-        rewardRatePerBlock = (rewardRatePerBlock * 1055) / 1000;
-
+        proposals[proposalId].executed = true;
         emit ProposalExecuted(proposalId);
     }
 
-    // --- High Performance Internal Ledger Helpers ---
-
-    function _transfer(address from, address to, uint256 value) internal {
-        if (from == address(0) || to == address(0)) revert ZeroAddress();
-        uint256 fromBalance = _balances[from];
-        if (fromBalance < value) revert InsufficientBalance();
-
-        unchecked {
-            _balances[from] = fromBalance - value;
-            _balances[to] += value;
-        }
-
-        emit Transfer(from, to, value);
+    function flashLoan(address receiver, uint256 amount, bytes calldata data) external {
+        if (_flashLoanLock) revert FlashLoanLockActive();
+        if (amount == 0) revert ZeroAmount();
+        if (_balances[address(this)] < amount) revert InsufficientBalance();
+        
+        _flashLoanLock = true;
+        _balances[address(this)] -= amount;
+        emit FlashLoan(receiver, amount, amount / 100); // 1% fee
+        
+        (bool success, ) = receiver.call(data);
+        if (!success) revert TransferFailed();
+        
+        _balances[address(this)] += amount + (amount / 100);
+        _flashLoanLock = false;
     }
 
-    function _mint(address account, uint256 value) internal {
-        if (account == address(0)) revert ZeroAddress();
-        _totalSupply += value;
-        unchecked {
-            _balances[account] += value;
-        }
-        emit Transfer(address(0), account, value);
+    // Fallback function to prevent accidental ETH transfers
+    fallback() external payable {
+        revert();
     }
 
-    function _approve(address owner, address spender, uint256 value) internal {
-        if (owner == address(0) || spender == address(0)) revert ZeroAddress();
-        _allowances[owner][spender] = value;
-        emit Approval(owner, spender, value);
-    }
-
-    function _spendAllowance(address owner, address spender, uint256 value) internal {
-        uint256 currentAllowance = _allowances[owner][spender];
-        if (currentAllowance != type(uint256).max) {
-            if (currentAllowance < value) revert InsufficientBalance();
-            unchecked {
-                _approve(owner, spender, currentAllowance - value);
-            }
-        } 
-    }
-
-    // --- EVM Gas Optimization Engine (Yul) ---
-
-    /**
-     * @notice Yield computation utility operating directly in inline assembly context.
-     * Highly specialized method bypassing compiler-inserted memory overhead.
-     */
-    function computeCompoundedRewardRatio(uint256 principal, uint256 blocksActive) external pure returns (uint256 finalRatio) {
-        assembly {
-            let linearTerm := mul(blocksActive, 100)
-            let quadTerm := mul(mul(blocksActive, blocksActive), 2)
-            let multiplier := add(1000000, add(linearTerm, quadTerm))
-            finalRatio := div(mul(principal, multiplier), 1000000)
-        }
+    // Receive function to prevent accidental ETH transfers
+    receive() external payable {
+        revert();
     }
 }
