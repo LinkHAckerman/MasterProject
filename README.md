@@ -1,4 +1,4 @@
-# Magnum Opus – All‑Encompassing Web3 Platform
+# Magnum Opus – The All‑Encompassing Web3 Platform
 
 ## Overview
 The **Magnum Opus** is envisioned as the ultimate, end‑to‑end platform for everything crypto, NFTs, Web3, DeFi, and blockchain. It showcases full‑stack mastery across three core technology stacks:
