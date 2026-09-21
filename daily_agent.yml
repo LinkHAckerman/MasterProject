@@ -1,0 +1,65 @@
+name: Daily Autonomous AI Worker
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
+      - name: Reset Daily Agent State
+        run: rm -f .agent_state.json
+
+      - name: Set up Python Cloud Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Set up Go (for gofmt syntax checks)
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Install Necessary Web Libraries
+        run: pip install requests
+
+      - name: Execute Gemini Agent
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python ai_agent.py
+
+      - name: Execute Groq Agent
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python ai_agent_groq.py
+
+      - name: Execute Mistral Agent
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+        run: python ai_agent_mistral.py
+
+      - name: Execute Cerebras Agent
+        env:
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+        run: python ai_agent_cerebras.py
+
+      - name: Validate Today's Generated Files
+        run: python validate_files.py
+
+      - name: Commit and Push Code to Repo
+        run: |
+          git config --global user.name "Cloud-AI-Agent"
+          git config --global user.email "agent@github-actions.local"
+          git add -A
+          git commit -m "Autonomous multi-language architecture evolution (4 agents)" || echo "No changes to commit"
+
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main && git push && break
+            echo "Push attempt $i failed, retrying..."
+            sleep $((RANDOM % 10 + 5))
+          done

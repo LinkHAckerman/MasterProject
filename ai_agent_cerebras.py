@@ -2,21 +2,19 @@ import os
 import requests
 import agent_common as common
 
-API_KEY = os.environ.get("MISTRAL_API_KEY")
+API_KEY = os.environ.get("CEREBRAS_API_KEY")
 if not API_KEY:
-    print("Error: MISTRAL_API_KEY is missing from GitHub Secrets.")
+    print("Error: CEREBRAS_API_KEY is missing from GitHub Secrets.")
     exit(1)
 
-BASE_URL = "https://api.mistral.ai/v1"
-FALLBACK_MODELS = ["mistral-medium-latest", "mistral-small-latest"]
+BASE_URL = "https://api.cerebras.ai/v1"
+FALLBACK_MODELS = ["llama-3.3-70b", "qwen-3-32b"]
 
-# OCR, voice, embedding, moderation, and CLI-tool models aren't useful for
-# this task - skip them when ranking candidates.
-NON_CHAT_KEYWORDS = ["ocr", "voxtral", "vibe-cli", "embed", "moderation", "fim"]
+NON_CHAT_KEYWORDS = ["whisper", "tts", "embed", "moderation"]
 
 
 def get_ranked_models(api_key):
-    """Lists available Mistral chat models, preferring medium/large general models."""
+    """Lists available Cerebras chat models, largest context window first."""
     resp = requests.get(f"{BASE_URL}/models", headers={"Authorization": f"Bearer {api_key}"})
     resp.raise_for_status()
     models = resp.json().get("data", [])
@@ -26,20 +24,22 @@ def get_ranked_models(api_key):
         model_id = m.get("id", "")
         if any(kw in model_id.lower() for kw in NON_CHAT_KEYWORDS):
             continue
-        candidates.append(model_id)
+        context_window = m.get("context_window", 0)
+        candidates.append((context_window, model_id))
 
     if not candidates:
-        raise RuntimeError("No usable chat models returned by Mistral.")
+        raise RuntimeError("No usable chat models returned by Cerebras.")
 
-    candidates.sort(key=lambda n: (0 if ("medium" in n or "large" in n) else 1, n))
-    print(f"Mistral model preference order: {candidates}")
-    return candidates
+    candidates.sort(reverse=True)
+    names = [model_id for _, model_id in candidates]
+    print(f"Cerebras model preference order: {names}")
+    return names
 
 
 try:
     MODEL_CANDIDATES = get_ranked_models(API_KEY)
 except Exception as e:
-    print(f"Could not list Mistral models, falling back to hardcoded list. Reason: {e}")
+    print(f"Could not list Cerebras models, falling back to hardcoded list. Reason: {e}")
     MODEL_CANDIDATES = FALLBACK_MODELS
 
 claimed_files = common.load_claimed_files()
@@ -71,7 +71,7 @@ def extract_text_fn(response):
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError):
-        print("Unexpected Mistral response shape:")
+        print("Unexpected Cerebras response shape:")
         print(response.text)
         return None
 
@@ -84,7 +84,7 @@ try:
         exit(0)  # collision-exhausted, not an error
 
     common.write_file_and_claim(target_file, file_content, claimed_files)
-    print(f"Success! Mistral agent has modified or created the '{target_file}' file.")
+    print(f"Success! Cerebras agent has modified or created the '{target_file}' file.")
 
 except common.GenerationFailed as e:
     print(f"Generation failed: {e}")
