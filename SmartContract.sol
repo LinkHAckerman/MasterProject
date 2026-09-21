@@ -88,52 +88,35 @@ contract MagnumOpusEngine is IERC20 {
     event Staked(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount);
     event RewardPaid(address indexed user, uint256 amount);
-    event ProposalCreated(uint256 indexed proposalId, address indexed proposer, string description);
-    event Voted(uint256 indexed proposalId, address indexed voter, bool supports);
-    event ProposalExecuted(uint256 indexed proposalId);
+    event ProposalCreated(uint256 indexed id, address indexed proposer, string description);
+    event Voted(uint256 indexed id, address indexed voter, bool supports);
+    event ProposalExecuted(uint256 indexed id);
     event FlashLoan(address indexed receiver, uint256 amount, uint256 fee);
+
+    // Modifiers
+    modifier nonReentrant() {
+        if (_reentrancyStatus != REENTRANCY_NOT_ENTERED) revert ReentrancyError();
+        _reentrancyStatus = REENTRANCY_ENTERED;
+        _;
+        _reentrancyStatus = REENTRANCY_NOT_ENTERED;
+    }
+
+    modifier flashLoanLock() {
+        if (_flashLoanLock) revert FlashLoanLockActive();
+        _flashLoanLock = true;
+        _;
+        _flashLoanLock = false;
+    }
 
     // Constructor
     constructor(address initialGovernor, uint256 initialRewardRate) {
         if (initialGovernor == address(0)) revert ZeroAddress();
         governor = initialGovernor;
         rewardRatePerBlock = initialRewardRate;
-        _mint(initialGovernor, 10000000 * 10**18); // Initial mint for governor
+        _mint(initialGovernor, 1000000 * 10**18); // Initial mint for governor
     }
 
-    // Internal functions
-    function _mint(address account, uint256 amount) internal {
-        if (account == address(0)) revert ZeroAddress();
-        if (amount == 0) revert ZeroAmount();
-        _totalSupply += amount;
-        _balances[account] += amount;
-        emit Transfer(address(0), account, amount);
-    }
-
-    function _burn(address account, uint256 amount) internal {
-        if (account == address(0)) revert ZeroAddress();
-        if (amount == 0) revert ZeroAmount();
-        if (_balances[account] < amount) revert InsufficientBalance();
-        _totalSupply -= amount;
-        _balances[account] -= amount;
-        emit Transfer(account, address(0), amount);
-    }
-
-    function _updateReward(address account) internal {
-        if (account != address(0)) {
-            uint256 currentBlock = block.number;
-            if (userInfo[account].lastActionBlock != currentBlock) {
-                uint256 timeDiff = currentBlock - userInfo[account].lastActionBlock;
-                uint256 reward = timeDiff * rewardRatePerBlock * userInfo[account].stakedAmount / 10**18;
-                if (reward > 0) {
-                    userInfo[account].rewardDebt += reward;
-                    userInfo[account].lastActionBlock = currentBlock;
-                }
-            }
-        }
-    }
-
-    // Public functions
+    // IERC20 Implementation
     function totalSupply() external view override returns (uint256) {
         return _totalSupply;
     }
@@ -146,10 +129,15 @@ contract MagnumOpusEngine is IERC20 {
         if (to == address(0)) revert ZeroAddress();
         if (value == 0) revert ZeroAmount();
         if (_balances[msg.sender] < value) revert InsufficientBalance();
+
         _balances[msg.sender] -= value;
         _balances[to] += value;
         emit Transfer(msg.sender, to, value);
         return true;
+    }
+
+    function allowance(address owner, address spender) external view override returns (uint256) {
+        return _allowances[owner][spender];
     }
 
     function approve(address spender, uint256 value) external override returns (bool) {
@@ -158,15 +146,12 @@ contract MagnumOpusEngine is IERC20 {
         return true;
     }
 
-    function allowance(address owner, address spender) external view override returns (uint256) {
-        return _allowances[owner][spender];
-    }
-
     function transferFrom(address from, address to, uint256 value) external override returns (bool) {
         if (to == address(0)) revert ZeroAddress();
         if (value == 0) revert ZeroAmount();
         if (_balances[from] < value) revert InsufficientBalance();
         if (_allowances[from][msg.sender] < value) revert Unauthorized();
+
         _balances[from] -= value;
         _balances[to] += value;
         _allowances[from][msg.sender] -= value;
@@ -174,39 +159,55 @@ contract MagnumOpusEngine is IERC20 {
         return true;
     }
 
-    function stake(uint256 amount) external {
+    // Internal Minting
+    function _mint(address account, uint256 amount) internal {
+        if (account == address(0)) revert ZeroAddress();
+        if (amount == 0) revert ZeroAmount();
+
+        _totalSupply += amount;
+        _balances[account] += amount;
+        emit Transfer(address(0), account, amount);
+    }
+
+    // Staking Functions
+    function stake(uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
         if (_balances[msg.sender] < amount) revert InsufficientBalance();
-        _burn(msg.sender, amount);
-        _updateReward(msg.sender);
+
+        _balances[msg.sender] -= amount;
         userInfo[msg.sender].stakedAmount += amount;
         userInfo[msg.sender].lastActionBlock = block.number;
         totalStakedTokens += amount;
         emit Staked(msg.sender, amount);
     }
 
-    function withdraw(uint256 amount) external {
+    function withdraw(uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
-        _updateReward(msg.sender);
         if (userInfo[msg.sender].stakedAmount < amount) revert InsufficientBalance();
+
+        _updateReward(msg.sender);
         userInfo[msg.sender].stakedAmount -= amount;
+        userInfo[msg.sender].lastActionBlock = block.number;
         totalStakedTokens -= amount;
-        _mint(msg.sender, amount);
+        _balances[msg.sender] += amount;
         emit Withdrawn(msg.sender, amount);
     }
 
-    function claimRewards() external {
+    function claimRewards() external nonReentrant {
         _updateReward(msg.sender);
         uint256 reward = userInfo[msg.sender].rewardDebt;
         if (reward > 0) {
             userInfo[msg.sender].rewardDebt = 0;
-            _mint(msg.sender, reward);
+            _balances[msg.sender] += reward;
             emit RewardPaid(msg.sender, reward);
         }
     }
 
+    // Governance Functions
     function createProposal(string memory description) external {
         if (userInfo[msg.sender].stakedAmount < MIN_STAKE_FOR_PROPOSAL) revert Unauthorized();
+        if (bytes(description).length == 0) revert ZeroAmount();
+
         proposalCount++;
         proposals[proposalCount] = Proposal({
             id: proposalCount,
@@ -221,11 +222,11 @@ contract MagnumOpusEngine is IERC20 {
     }
 
     function vote(uint256 proposalId, bool supports) external {
-        if (proposalId == 0 || proposalId > proposalCount) revert ProposalNotActive();
-        if (block.number > proposals[proposalId].endBlock) revert VotePeriodEnded();
-        if (hasVoted[proposalId][msg.sender]) revert ProposalAlreadyVoted();
         if (userInfo[msg.sender].stakedAmount == 0) revert Unauthorized();
-        
+        if (proposalId == 0 || proposalId > proposalCount) revert ProposalNotActive();
+        if (hasVoted[proposalId][msg.sender]) revert ProposalAlreadyVoted();
+        if (block.number > proposals[proposalId].endBlock) revert VotePeriodEnded();
+
         hasVoted[proposalId][msg.sender] = true;
         if (supports) {
             proposals[proposalId].votesFor += userInfo[msg.sender].stakedAmount;
@@ -240,34 +241,53 @@ contract MagnumOpusEngine is IERC20 {
         if (block.number <= proposals[proposalId].endBlock) revert VotePeriodActive();
         if (proposals[proposalId].executed) revert AlreadyExecuted();
         if (proposals[proposalId].votesFor <= proposals[proposalId].votesAgainst) revert QuorumNotMet();
-        
+
         proposals[proposalId].executed = true;
         emit ProposalExecuted(proposalId);
     }
 
-    function flashLoan(address receiver, uint256 amount, bytes calldata data) external {
-        if (_flashLoanLock) revert FlashLoanLockActive();
+    // Flash Loan Functions
+    function flashLoan(address receiver, uint256 amount, bytes calldata data) external flashLoanLock {
+        if (receiver == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
         if (_balances[address(this)] < amount) revert InsufficientBalance();
-        
-        _flashLoanLock = true;
+
         _balances[address(this)] -= amount;
-        emit FlashLoan(receiver, amount, amount / 100); // 1% fee
-        
+        _balances[receiver] += amount;
+
+        // Call the receiver's contract
         (bool success, ) = receiver.call(data);
         if (!success) revert TransferFailed();
-        
-        _balances[address(this)] += amount + (amount / 100);
-        _flashLoanLock = false;
+
+        // Calculate fee (1% of amount)
+        uint256 fee = amount / 100;
+        _balances[receiver] -= amount;
+        _balances[address(this)] += amount - fee;
+        emit FlashLoan(receiver, amount, fee);
     }
 
-    // Fallback function to prevent accidental ETH transfers
-    fallback() external payable {
-        revert();
+    // Internal Functions
+    function _updateReward(address user) internal {
+        if (userInfo[user].stakedAmount == 0) return;
+
+        uint256 currentBlock = block.number;
+        uint256 blocksSinceLastAction = currentBlock - userInfo[user].lastActionBlock;
+        if (blocksSinceLastAction == 0) return;
+
+        uint256 reward = (userInfo[user].stakedAmount * rewardRatePerBlock * blocksSinceLastAction) / 1e18;
+        userInfo[user].rewardDebt += reward;
+        userInfo[user].lastActionBlock = currentBlock;
     }
 
-    // Receive function to prevent accidental ETH transfers
-    receive() external payable {
-        revert();
+    function _updateRewardPerShare() internal {
+        if (totalStakedTokens == 0) return;
+
+        uint256 currentBlock = block.number;
+        uint256 blocksSinceLastReward = currentBlock - lastRewardBlock;
+        if (blocksSinceLastReward == 0) return;
+
+        uint256 reward = rewardRatePerBlock * blocksSinceLastReward;
+        accRewardPerShare += (reward * 1e18) / totalStakedTokens;
+        lastRewardBlock = currentBlock;
     }
 }

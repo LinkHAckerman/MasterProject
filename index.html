@@ -6,17 +6,20 @@
     <title>MAGNUM OPUS // Web3 & DeFi Nexus Engine</title>
     <style>
         :root {
-            --bg-primary: #05070f;
-            --bg-secondary: #0b0f19;
-            --bg-card: rgba(15, 23, 42, 0.75);
+            --bg-primary: #030611;
+            --bg-secondary: #080c1e;
+            --bg-card: rgba(10, 15, 36, 0.75);
             --border-color: rgba(56, 189, 248, 0.15);
+            --border-glow: rgba(168, 85, 247, 0.25);
             --accent-cyan: #38bdf8;
             --accent-purple: #a855f7;
             --accent-emerald: #10b981;
             --accent-rose: #f43f5e;
+            --accent-amber: #f59e0b;
             --text-main: #f8fafc;
             --text-muted: #94a3b8;
-            --glow-cyan: 0 0 20px rgba(56, 189, 248, 0.35);
+            --glow-cyan: 0 0 20px rgba(56, 189, 248, 0.4);
+            --glow-purple: 0 0 20px rgba(168, 85, 247, 0.4);
             --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
         }
 
@@ -33,17 +36,18 @@
             min-height: 100vh;
             overflow-x: hidden;
             background-image: 
-                radial-gradient(circle at 15% 15%, rgba(168, 85, 247, 0.08) 0%, transparent 40%),
-                radial-gradient(circle at 85% 85%, rgba(56, 189, 248, 0.08) 0%, transparent 40%);
+                radial-gradient(circle at 10% 15%, rgba(168, 85, 247, 0.12) 0%, transparent 45%),
+                radial-gradient(circle at 90% 85%, rgba(56, 189, 248, 0.12) 0%, transparent 45%);
+            background-attachment: fixed;
         }
 
         header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 1.25rem 2rem;
-            background: rgba(11, 15, 25, 0.8);
-            backdrop-filter: blur(12px);
+            padding: 1rem 2rem;
+            background: rgba(5, 8, 22, 0.85);
+            backdrop-filter: blur(16px);
             border-bottom: 1px solid var(--border-color);
             position: sticky;
             top: 0;
@@ -57,22 +61,24 @@
         }
 
         .logo-icon {
-            width: 32px;
-            height: 32px;
+            width: 36px;
+            height: 36px;
             background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
             border-radius: 8px;
             box-shadow: var(--glow-cyan);
             display: grid;
             place-items: center;
-            font-weight: bold;
+            font-weight: 900;
             color: #fff;
+            font-family: var(--font-mono);
+            font-size: 1.1rem;
         }
 
         .logo-text {
-            font-size: 1.25rem;
-            font-weight: 800;
-            letter-spacing: 2px;
-            background: linear-gradient(to right, #fff, var(--accent-cyan));
+            font-size: 1.35rem;
+            font-weight: 900;
+            letter-spacing: 2.5px;
+            background: linear-gradient(to right, #fff, var(--accent-cyan), var(--accent-purple));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
@@ -80,151 +86,560 @@
         .nav-actions {
             display: flex;
             align-items: center;
-            gap: 1.5rem;
+            gap: 1.25rem;
         }
 
         .gas-badge {
             display: flex;
             align-items: center;
             gap: 0.5rem;
-            background: rgba(16, 185, 129, 0.1);
-            border: 1px solid rgba(16, 185, 129, 0.3);
+            background: rgba(16, 185, 129, 0.08);
+            border: 1px solid rgba(16, 185, 129, 0.25);
             color: var(--accent-emerald);
-            padding: 0.4rem 0.8rem;
+            padding: 0.45rem 0.9rem;
             border-radius: 20px;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             font-family: var(--font-mono);
+            font-weight: bold;
         }
 
         .btn-connect {
-            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
-            color: #fff;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
             border: none;
-            padding: 0.6rem 1.2rem;
+            color: white;
+            padding: 0.6rem 1.4rem;
             border-radius: 8px;
-            font-weight: 600;
+            font-weight: 700;
             cursor: pointer;
-            transition: all 0.2s ease;
-            box-shadow: var(--glow-cyan);
+            font-size: 0.85rem;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(168, 85, 247, 0.2);
         }
 
         .btn-connect:hover {
-            opacity: 0.9;
             transform: translateY(-1px);
+            box-shadow: var(--glow-purple);
         }
 
         .dashboard-container {
             display: grid;
-            grid-template-columns: repeat(12, 1fr);
+            grid-template-columns: 1fr 320px;
             gap: 1.5rem;
             padding: 2rem;
             max-width: 1600px;
             margin: 0 auto;
         }
 
-        .card {
+        .main-workspace {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.25rem;
+        }
+
+        .metric-card {
             background: var(--bg-card);
             border: 1px solid var(--border-color);
             border-radius: 12px;
-            padding: 1.5rem;
-            backdrop-filter: blur(10px);
-            transition: border-color 0.3s ease;
+            padding: 1.25rem;
+            position: relative;
+            overflow: hidden;
+            backdrop-filter: blur(8px);
+            transition: border-color 0.3s, box-shadow 0.3s;
         }
 
-        .card:hover {
-            border-color: rgba(56, 189, 248, 0.35);
+        .metric-card:hover {
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.1);
         }
 
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1rem;
+        .metric-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 3px;
+            height: 100%;
+            background: linear-gradient(to bottom, var(--accent-cyan), var(--accent-purple));
         }
 
-        .card-title {
-            font-size: 1rem;
-            font-weight: 700;
-            color: var(--text-main);
+        .metric-title {
+            font-size: 0.75rem;
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 1.5px;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+            font-weight: 700;
         }
 
-        .metric-span-4 { grid-column: span 4; }
-        .metric-span-8 { grid-column: span 8; }
-        .metric-span-12 { grid-column: span 12; }
-
-        @media (max-width: 1024px) {
-            .metric-span-4, .metric-span-8 { grid-column: span 12; }
-        }
-
-        .stat-value {
-            font-size: 2rem;
+        .metric-value {
+            font-size: 1.75rem;
             font-weight: 800;
+            color: #fff;
             font-family: var(--font-mono);
-            margin-top: 0.5rem;
+            letter-spacing: -0.5px;
         }
 
-        .stat-change {
+        .metric-subtext {
+            font-size: 0.75rem;
+            color: var(--accent-emerald);
+            margin-top: 0.35rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .tab-nav {
+            display: flex;
+            gap: 0.5rem;
+            background: rgba(10, 15, 36, 0.5);
+            padding: 0.4rem;
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+            width: fit-content;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 0.5rem 1.25rem;
+            border-radius: 6px;
             font-size: 0.85rem;
-            margin-top: 0.25rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
         }
 
-        .positive { color: var(--accent-emerald); }
-        .negative { color: var(--accent-rose); }
-
-        #blockCanvas {
-            width: 100%;
-            height: 220px;
-            border-radius: 8px;
-            background: rgba(5, 7, 15, 0.6);
+        .tab-btn.active {
+            background: rgba(56, 189, 248, 0.12);
+            color: var(--accent-cyan);
+            border: 1px solid rgba(56, 189, 248, 0.25);
         }
 
-        .orderbook-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-family: var(--font-mono);
-            font-size: 0.85rem;
-        }
-
-        .orderbook-table th, .orderbook-table td {
-            padding: 0.5rem;
-            text-align: right;
-        }
-
-        .orderbook-table th:first-child, .orderbook-table td:first-child {
-            text-align: left;
-        }
-
-        .orderbook-table tr:hover {
+        .tab-btn:hover:not(.active) {
+            color: #fff;
             background: rgba(255, 255, 255, 0.03);
         }
 
-        .terminal-feed {
-            background: #020408;
+        .tab-content {
+            display: none;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 2rem;
+            min-height: 480px;
+            backdrop-filter: blur(12px);
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.4s ease-out;
+        }
+
+        .section-title {
+            font-size: 1.25rem;
+            font-weight: 800;
+            margin-bottom: 1.5rem;
+            background: linear-gradient(to right, #fff, var(--text-muted));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .grid-two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+        }
+
+        @media (max-width: 900px) {
+            .grid-two-col {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            margin-bottom: 1.25rem;
+        }
+
+        .form-label {
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+        }
+
+        .form-input {
+            background: rgba(5, 8, 22, 0.6);
+            border: 1px solid var(--border-color);
             border-radius: 8px;
-            padding: 1rem;
+            padding: 0.75rem 1rem;
+            color: white;
             font-family: var(--font-mono);
+            font-size: 0.9rem;
+            transition: border-color 0.2s;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+        }
+
+        .action-card {
+            background: rgba(5, 8, 22, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            padding: 1.5rem;
+        }
+
+        .btn-primary {
+            background: var(--accent-cyan);
+            border: none;
+            color: #030611;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 0.9rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        .btn-primary:hover {
+            background: #fff;
+            box-shadow: var(--glow-cyan);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            border: 1px solid var(--accent-purple);
+            color: var(--accent-purple);
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 0.9rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(168, 85, 247, 0.1);
+            box-shadow: var(--glow-purple);
+        }
+
+        .side-bar {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .sidebar-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.25rem;
+            backdrop-filter: blur(8px);
+        }
+
+        .sidebar-title {
+            font-size: 0.85rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            margin-bottom: 1rem;
+            color: #fff;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 0.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .orderbook-row {
+            display: flex;
+            justify-content: space-between;
             font-size: 0.8rem;
+            font-family: var(--font-mono);
+            padding: 0.25rem 0;
+            position: relative;
+        }
+
+        .orderbook-row .price {
+            font-weight: 700;
+        }
+
+        .bid {
+            color: var(--accent-emerald);
+        }
+
+        .ask {
+            color: var(--accent-rose);
+        }
+
+        .depth-bar-bid {
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            background: rgba(16, 185, 129, 0.08);
+            z-index: 1;
+        }
+
+        .depth-bar-ask {
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            background: rgba(244, 63, 94, 0.08);
+            z-index: 1;
+        }
+
+        .row-text {
+            position: relative;
+            z-index: 2;
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+        }
+
+        .terminal {
+            background: #020409;
+            border: 1px solid #111827;
+            border-radius: 8px;
+            padding: 0.75rem;
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
             color: var(--accent-cyan);
-            height: 180px;
+            height: 250px;
             overflow-y: auto;
-            border: 1px solid rgba(56, 189, 248, 0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
         }
 
         .terminal-line {
-            margin-bottom: 0.4rem;
+            line-height: 1.4;
             word-break: break-all;
         }
 
-        .terminal-timestamp {
-            color: var(--text-muted);
+        .terminal-time {
+            color: var(--accent-purple);
             margin-right: 0.5rem;
+        }
+
+        .merkle-node {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            padding: 0.5rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-family: var(--font-mono);
+            text-align: center;
+            margin: 0.25rem 0;
+            word-break: break-all;
+            transition: all 0.3s;
+        }
+
+        .merkle-node.highlight {
+            border-color: var(--accent-cyan);
+            background: rgba(56, 189, 248, 0.08);
+            box-shadow: 0 0 8px rgba(56, 189, 248, 0.2);
+        }
+
+        .merkle-level {
+            display: flex;
+            justify-content: space-around;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            position: relative;
+        }
+
+        .blockchain-scroller {
+            display: flex;
+            gap: 1rem;
+            overflow-x: auto;
+            padding-bottom: 0.75rem;
+        }
+
+        .block-card {
+            background: rgba(10, 15, 36, 0.4);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 1rem;
+            min-width: 220px;
+            font-size: 0.8rem;
+            position: relative;
+        }
+
+        .block-card.mining {
+            border-color: var(--accent-amber);
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.25);
+            animation: pulse-border 1.5s infinite alternate;
+        }
+
+        .block-header-title {
+            font-weight: 800;
+            color: var(--accent-cyan);
+            margin-bottom: 0.5rem;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .block-field {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.25rem;
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+        }
+
+        .block-field span:first-child {
+            color: var(--text-muted);
+        }
+
+        .block-hash {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 120px;
+        }
+
+        .proposal-item {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 1rem 0;
+        }
+
+        .proposal-item:last-child {
+            border-bottom: none;
+        }
+
+        .proposal-header {
+            display: flex;
+            justify-content: space-between;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .proposal-desc {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            margin-bottom: 0.75rem;
+        }
+
+        .proposal-bar-bg {
+            background: rgba(255, 255, 255, 0.05);
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 0.5rem;
+            display: flex;
+        }
+
+        .proposal-bar-for {
+            background: var(--accent-emerald);
+            height: 100%;
+        }
+
+        .proposal-bar-against {
+            background: var(--accent-rose);
+            height: 100%;
+        }
+
+        .proposal-stats {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .proposal-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+        }
+
+        .btn-vote {
+            padding: 0.35rem 0.75rem;
+            border-radius: 4px;
+            border: none;
+            font-weight: 700;
+            font-size: 0.75rem;
+            cursor: pointer;
+        }
+
+        .btn-vote-for {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-emerald);
+        }
+
+        .btn-vote-for:hover {
+            background: rgba(16, 185, 129, 0.25);
+        }
+
+        .btn-vote-against {
+            background: rgba(244, 63, 94, 0.15);
+            color: var(--accent-rose);
+        }
+
+        .btn-vote-against:hover {
+            background: rgba(244, 63, 94, 0.25);
+        }
+
+        .tx-badge {
+            background: rgba(168, 85, 247, 0.12);
+            border: 1px solid rgba(168, 85, 247, 0.2);
+            color: var(--accent-purple);
+            border-radius: 4px;
+            padding: 0.15rem 0.4rem;
+            font-size: 0.75rem;
+            font-family: var(--font-mono);
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes pulse-border {
+            from { border-color: rgba(245, 158, 11, 0.25); }
+            to { border-color: rgba(245, 158, 11, 0.75); }
+        }
+
+        canvas#visualizer {
+            width: 100%;
+            height: 100px;
+            background: rgba(5, 8, 22, 0.4);
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            margin-bottom: 1.5rem;
         }
     </style>
 </head>
 <body>
-
     <header>
         <div class="logo-container">
             <div class="logo-icon">Ω</div>
@@ -233,217 +648,682 @@
         <div class="nav-actions">
             <div class="gas-badge">
                 <span>⚡ GAS:</span>
-                <span id="gasValue">12 Gwei</span>
+                <span id="gasValue">24 Gwei</span>
             </div>
-            <button class="btn-connect" id="walletBtn" onclick="toggleWallet()">Connect Web3 Wallet</button>
+            <button class="btn-connect" id="connectBtn" onclick="connectWallet()">CONNECT WALLET</button>
         </div>
     </header>
 
-    <main class="dashboard-container">
-        <div class="card metric-span-4">
-            <div class="card-header">
-                <span class="card-title">Total Value Locked (TVL)</span>
+    <div class="dashboard-container">
+        <div class="main-workspace">
+            <div class="metric-grid">
+                <div class="metric-card">
+                    <div class="metric-title">Total Value Locked (TVL)</div>
+                    <div class="metric-value" id="tvlMetric">$24,891,402</div>
+                    <div class="metric-subtext">+4.12% (24h)</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Staking APR</div>
+                    <div class="metric-value" id="aprMetric">14.25%</div>
+                    <div class="metric-subtext">Compound Yield Enabled</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Pending TX Pool</div>
+                    <div class="metric-value" id="pendingTxCount">0</div>
+                    <div class="metric-subtext" style="color: var(--accent-purple)">Processing Active</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Last Merkle Root</div>
+                    <div class="metric-value" style="font-size: 1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" id="rootMetric">0x00000000...</div>
+                    <div class="metric-subtext">Secured by C++ Engine</div>
+                </div>
             </div>
-            <div class="stat-value" id="tvlVal">$14,892,104,320</div>
-            <div class="stat-change positive">↑ +4.82% (24h)</div>
+
+            <div class="tab-nav">
+                <button class="tab-btn active" onclick="switchTab('staking')">Staking & DeFi</button>
+                <button class="tab-btn" onclick="switchTab('mining')">PoW Consensus Engine</button>
+                <button class="tab-btn" onclick="switchTab('merkle')">Merkle Tree Sandbox</button>
+                <button class="tab-btn" onclick="switchTab('tx')">Ledger & TX Sandbox</button>
+                <button class="tab-btn" onclick="switchTab('governance')">On-Chain Governance</button>
+            </div>
+
+            <!-- TAB 1: STAKING -->
+            <div id="stakingTab" class="tab-content active">
+                <div class="section-title">🚀 High-Yield Staking Pool</div>
+                <canvas id="visualizer"></canvas>
+                <div class="grid-two-col">
+                    <div class="action-card">
+                        <div style="font-weight: 800; font-size: 1.1rem; margin-bottom: 1rem;">MOPUS Stake Gateway</div>
+                        <div class="form-group">
+                            <label class="form-label">Amount to Stake (MOPUS)</label>
+                            <input type="number" class="form-input" id="stakeAmount" value="100" placeholder="0.00">
+                        </div>
+                        <div style="display: flex; gap: 1rem; margin-top: 1rem;">
+                            <button class="btn-primary" onclick="stakeTokens()">STAKE MOPUS</button>
+                            <button class="btn-secondary" onclick="unstakeTokens()">UNSTAKE</button>
+                        </div>
+                    </div>
+                    <div class="action-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="font-weight: 800; font-size: 1.1rem; margin-bottom: 0.5rem;">Your Staking Metrics</div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 0.75rem; font-size: 0.9rem;">
+                                <span style="color: var(--text-muted)">Your Stake:</span>
+                                <span style="font-weight: bold; font-family: var(--font-mono);" id="userStaked">0.00 MOPUS</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 0.75rem; font-size: 0.9rem;">
+                                <span style="color: var(--text-muted)">Unclaimed Yield:</span>
+                                <span style="font-weight: bold; font-family: var(--font-mono); color: var(--accent-emerald)" id="userRewards">0.000000 MOPUS</span>
+                            </div>
+                        </div>
+                        <button class="btn-primary" style="background: linear-gradient(90deg, var(--accent-emerald), var(--accent-cyan)); color: #fff;" onclick="claimYield()">CLAIM YIELD</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 2: MINING -->
+            <div id="miningTab" class="tab-content">
+                <div class="section-title">⛏️ Proof-of-Work Blocks Simulator</div>
+                <div class="action-card" style="margin-bottom: 1.5rem;">
+                    <div style="display: flex; gap: 2rem; align-items: center; justify-content: space-between; flex-wrap: wrap;">
+                        <div class="form-group" style="margin-bottom: 0; min-width: 200px;">
+                            <label class="form-label">Mining Difficulty (Leading Zeros)</label>
+                            <input type="number" class="form-input" id="miningDiff" min="1" max="6" value="4">
+                        </div>
+                        <div class="form-group" style="margin-bottom: 0; min-width: 250px;">
+                            <label class="form-label">Block Transaction Count</label>
+                            <input type="number" class="form-input" id="miningTxCount" value="12">
+                        </div>
+                        <button class="btn-primary" style="width: auto; padding: 0.75rem 2rem;" onclick="triggerMining()">MINE NEXT BLOCK</button>
+                    </div>
+                </div>
+                <div style="font-weight: bold; font-size: 0.9rem; margin-bottom: 0.5rem;">Active Blockchain States</div>
+                <div class="blockchain-scroller" id="blockchainList">
+                    <!-- Blocks dynamically generated -->
+                </div>
+            </div>
+
+            <!-- TAB 3: MERKLE TREE -->
+            <div id="merkleTab" class="tab-content">
+                <div class="section-title">🌿 Cryptographic Merkle Root Resolver</div>
+                <div class="grid-two-col">
+                    <div class="action-card">
+                        <div class="form-group">
+                            <label class="form-label">Input Transaction Leaves (Comma Separated)</label>
+                            <textarea class="form-input" id="merkleInputs" rows="4" style="resize: none; font-size: 0.8rem;">Tx_Genesis, Tx_Staking_Stake_01, Tx_Liquidity_Claim_02, Tx_Governance_Vote_12</textarea>
+                        </div>
+                        <button class="btn-primary" onclick="generateMerkleTree()">GENERATE MERKLE TREE</button>
+                    </div>
+                    <div class="action-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="font-weight: 800; font-size: 1rem; margin-bottom: 1rem;">Merkle Tree Resolution</div>
+                            <div id="merkleVisualTree" style="max-height: 300px; overflow-y: auto;">
+                                <!-- Merkle levels rendered here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 4: LEDGER -->
+            <div id="txTab" class="tab-content">
+                <div class="section-title">📊 Concurrent Transaction Ledger (C# Engine Mimic)</div>
+                <div class="grid-two-col">
+                    <div class="action-card">
+                        <div style="font-weight: 800; font-size: 1.1rem; margin-bottom: 1rem;">Deploy Transaction</div>
+                        <div class="form-group">
+                            <label class="form-label">Recipient Address</label>
+                            <input type="text" class="form-input" id="txRecipient" value="0x3Eca2F...633B">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Amount (MOPUS)</label>
+                            <input type="number" class="form-input" id="txAmount" value="15.5">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Priority Fee (Gwei)</label>
+                            <input type="number" class="form-input" id="txFee" value="2">
+                        </div>
+                        <button class="btn-primary" onclick="submitTransaction()">SIGN & SUBMIT TX</button>
+                    </div>
+                    <div class="action-card">
+                        <div style="font-weight: 800; font-size: 1.1rem; margin-bottom: 1rem;">Transaction Ledger History</div>
+                        <div style="max-height: 350px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem;" id="txHistoryContainer">
+                            <!-- Transaction blocks dynamic -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 5: GOVERNANCE -->
+            <div id="governanceTab" class="tab-content">
+                <div class="section-title">🏛️ On-Chain Autonomous Governance</div>
+                <div class="grid-two-col">
+                    <div class="action-card">
+                        <div style="font-weight: 800; font-size: 1.1rem; margin-bottom: 1rem;">Submit New Proposal</div>
+                        <div class="form-group">
+                            <label class="form-label">Description</label>
+                            <textarea class="form-input" id="proposalDesc" rows="3" placeholder="MIP-XX: Enable gas reimbursement..."></textarea>
+                        </div>
+                        <button class="btn-primary" onclick="submitProposal()">SUBMIT PROPOSAL</button>
+                    </div>
+                    <div class="action-card">
+                        <div style="font-weight: 800; font-size: 1.1rem; margin-bottom: 1rem;">Active Proposals</div>
+                        <div id="proposalListContainer">
+                            <!-- Proposals render -->
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <div class="card metric-span-4">
-            <div class="card-header">
-                <span class="card-title">Cross-Chain Yield Routing</span>
+        <div class="side-bar">
+            <div class="sidebar-card">
+                <div class="sidebar-title">
+                    <span>LIVE ORDER BOOK</span>
+                    <span class="tx-badge" id="orderSpread">0.05 spread</span>
+                </div>
+                <div id="orderbookAsks" style="margin-bottom: 0.5rem;">
+                    <!-- Asks -->
+                </div>
+                <div style="border-top: 1px dashed rgba(255, 255, 255, 0.1); padding: 0.35rem 0; display: flex; justify-content: space-between; font-weight: bold; font-family: var(--font-mono); font-size: 0.9rem; color: #fff;">
+                    <span>INDEX PRICE</span>
+                    <span id="indexPrice">$3.42</span>
+                </div>
+                <div id="orderbookBids">
+                    <!-- Bids -->
+                </div>
             </div>
-            <div class="stat-value" id="apyVal">18.42% APY</div>
-            <div class="stat-change positive">Optimized via C++ Engine</div>
-        </div>
 
-        <div class="card metric-span-4">
-            <div class="card-header">
-                <span class="card-title">Consensus Block Latency</span>
-            </div>
-            <div class="stat-value" id="latencyVal">124 ms</div>
-            <div class="stat-change positive">Sub-second Finality</div>
-        </div>
-
-        <div class="card metric-span-8">
-            <div class="card-header">
-                <span class="card-title">Real-Time Block Execution Stream</span>
-                <span style="font-size:0.8rem; color:var(--accent-cyan);">Live Engine Pipeline</span>
-            </div>
-            <canvas id="blockCanvas"></canvas>
-        </div>
-
-        <div class="card metric-span-4">
-            <div class="card-header">
-                <span class="card-title">High-Freq Order Book</span>
-                <span style="font-size:0.8rem; color:var(--text-muted);">BTC/USD</span>
-            </div>
-            <table class="orderbook-table">
-                <thead>
-                    <tr>
-                        <th>Price</th>
-                        <th>Size</th>
-                        <th>Total</th>
-                    </tr>
-                </thead>
-                <tbody id="orderbookBody">
-                </tbody>
-            </table>
-        </div>
-
-        <div class="card metric-span-12">
-            <div class="card-header">
-                <span class="card-title">Core Telemetry & Execution Logs</span>
-                <button style="background:none; border:1px solid var(--border-color); color:var(--text-muted); padding:0.2rem 0.5rem; border-radius:4px; cursor:pointer;" onclick="clearLogs()">Clear Log</button>
-            </div>
-            <div class="terminal-feed" id="terminalFeed">
+            <div class="sidebar-card">
+                <div class="sidebar-title">
+                    <span>SYSTEM TELEMETRY</span>
+                    <span class="tx-badge" style="background: rgba(56, 189, 248, 0.1); color: var(--accent-cyan); border-color: rgba(56, 189, 248, 0.2)">API ACTIVE</span>
+                </div>
+                <div class="terminal" id="telemetryTerminal">
+                    <!-- Log entries -->
+                </div>
             </div>
         </div>
-    </main>
+    </div>
 
     <script>
-        let isConnected = false;
-        function toggleWallet() {
-            const btn = document.getElementById('walletBtn');
-            if(!isConnected) {
-                const mockAddr = '0x' + Array.from({length: 40}, () => Math.floor(Math.random()*16).toString(16)).join('');
-                btn.innerText = mockAddr.substring(0,6) + '...' + mockAddr.substring(36);
-                btn.style.background = 'rgba(16, 185, 129, 0.2)';
-                btn.style.border = '1px solid #10b981';
-                logTerminal(`[Web3 Wallet] Connected account: ${mockAddr}`);
-                isConnected = true;
+        // Web3 Engine State
+        const state = {
+            connected: false,
+            walletAddress: null,
+            mopusBalance: 12000.000000,
+            stakedBalance: 0.000000,
+            unclaimedRewards: 0.000000,
+            currentBlock: 18420912,
+            difficulty: 4,
+            pendingTransactions: [],
+            processedTransactions: [],
+            proposals: [
+                { id: 1, desc: "MIP-21: Increase Staking Reward Rate to 18.5% APY", votesFor: 145000, votesAgainst: 34200, endBlock: 18421912, executed: false, proposer: "0x71C...8a9" },
+                { id: 2, desc: "MIP-22: Deploy Cross-Chain Bridge on Optimism Stack", votesFor: 92000, votesAgainst: 4500, endBlock: 18422500, executed: false, proposer: "0xE1b...910" }
+            ],
+            blockchain: [
+                { height: 18420910, hash: "0x0000fa2bc8df96a2039ab91e1d2834b9cfbc873fb2a91e1a42091c1070de8d", txCount: 14, nonce: 84922, miner: "0x72a...a13" },
+                { height: 18420911, hash: "0x00006734fb2ca22eef2ad221876412181182187116bca821a3df1e39a3f29b", txCount: 8, nonce: 104729, miner: "0x9bc...eef" },
+                { height: 18420912, hash: "0x0000a3fb2d7642a8b9821811eef2a87116bca821873fb2a91e1022187642ab", txCount: 22, nonce: 492041, miner: "0x9bc...eef" }
+            ],
+            indexPrice: 3.42
+        };
+
+        // SHA-256 Mock Hashing Utility (Pure JS non-linear custom hex implementation)
+        function hashString(str) {
+            let h1 = 0x811c9dc5;
+            for (let i = 0; i < str.length; i++) {
+                h1 ^= str.charCodeAt(i);
+                h1 += (h1 << 1) + (h1 << 4) + (h1 << 7) + (h1 << 8) + (h1 << 24);
+            }
+            return '0x' + Math.abs(h1).toString(16).padStart(16, '0') + Math.abs(h1 ^ 0x5a3f21).toString(16).padStart(16, '0');
+        }
+
+        // Web3 Connection Simulator
+        function connectWallet() {
+            if (!state.connected) {
+                state.connected = true;
+                state.walletAddress = "0x71C...8a9Fd";
+                document.getElementById("connectBtn").innerText = "0x71C...8a9Fd (CONNECTED)";
+                document.getElementById("connectBtn").style.background = "rgba(16, 185, 129, 0.2)";
+                document.getElementById("connectBtn").style.border = "1px solid var(--accent-emerald)";
+                document.getElementById("connectBtn").style.color = "var(--accent-emerald)";
+                document.getElementById("userStaked").innerText = "0.00 MOPUS";
+                logTelemetry("Wallet Connected successfully via mock RPC: " + state.walletAddress);
             } else {
-                btn.innerText = 'Connect Web3 Wallet';
-                btn.style.background = 'linear-gradient(135deg, var(--accent-cyan), var(--accent-purple))';
-                btn.style.border = 'none';
-                logTerminal('[Web3 Wallet] Disconnected');
-                isConnected = false;
+                state.connected = false;
+                state.walletAddress = null;
+                document.getElementById("connectBtn").innerText = "CONNECT WALLET";
+                document.getElementById("connectBtn").style.background = "linear-gradient(90deg, var(--accent-cyan), var(--accent-purple))";
+                document.getElementById("connectBtn").style.border = "none";
+                document.getElementById("connectBtn").style.color = "white";
+                logTelemetry("Wallet disconnected.");
             }
         }
 
-        function logTerminal(message) {
-            const feed = document.getElementById('terminalFeed');
-            const time = new Date().toISOString().split('T')[1].slice(0,12);
-            const line = document.createElement('div');
-            line.className = 'terminal-line';
-            line.innerHTML = `<span class="terminal-timestamp">[${time}]</span> ${message}`;
-            feed.appendChild(line);
-            feed.scrollTop = feed.scrollHeight;
+        // Log Telemetry Helper
+        function logTelemetry(msg) {
+            const terminal = document.getElementById("telemetryTerminal");
+            const line = document.createElement("div");
+            line.className = "terminal-line";
+            const time = new Date().toLocaleTimeString();
+            line.innerHTML = `<span class="terminal-time">[${time}]</span> <span style="color: #fff;">&gt;&gt;</span> ${msg}`;
+            terminal.appendChild(line);
+            terminal.scrollTop = terminal.scrollHeight;
         }
 
-        function clearLogs() {
-            document.getElementById('terminalFeed').innerHTML = '';
-        }
-
-        function renderOrderbook() {
-            const tbody = document.getElementById('orderbookBody');
-            tbody.innerHTML = '';
-            const basePrice = 64250.0;
+        // UI Tab switcher
+        function switchTab(tabName) {
+            document.querySelectorAll(".tab-btn").forEach(btn => btn.classList.remove("active"));
+            document.querySelectorAll(".tab-content").forEach(content => content.classList.remove("active"));
             
-            for(let i=3; i>=1; i--) {
-                const price = (basePrice + i * 12.5).toFixed(2);
-                const size = (Math.random() * 1.5 + 0.1).toFixed(4);
-                const total = (price * size).toFixed(2);
-                tbody.innerHTML += `<tr class="negative"><td>${price}</td><td>${size}</td><td>${total}</td></tr>`;
+            if (tabName === 'staking') {
+                document.getElementById("stakingTab").classList.add("active");
+            } else if (tabName === 'mining') {
+                document.getElementById("miningTab").classList.add("active");
+                renderBlockchain();
+            } else if (tabName === 'merkle') {
+                document.getElementById("merkleTab").classList.add("active");
+                generateMerkleTree();
+            } else if (tabName === 'tx') {
+                document.getElementById("txTab").classList.add("active");
+                renderLedger();
+            } else if (tabName === 'governance') {
+                document.getElementById("governanceTab").classList.add("active");
+                renderGovernance();
             }
-            for(let i=1; i<=3; i++) {
-                const price = (basePrice - i * 11.2).toFixed(2);
-                const size = (Math.random() * 2.1 + 0.2).toFixed(4);
-                const total = (price * size).toFixed(2);
-                tbody.innerHTML += `<tr class="positive"><td>${price}</td><td>${size}</td><td>${total}</td></tr>`;
-            }
-        }
-
-        const canvas = document.getElementById('blockCanvas');
-        const ctx = canvas.getContext('2d');
-        let blocks = [];
-
-        function resizeCanvas() {
-            canvas.width = canvas.parentElement.clientWidth - 48;
-            canvas.height = 220;
-        }
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
-
-        class Block {
-            constructor(x, number) {
-                this.x = x;
-                this.y = canvas.height / 2 - 30;
-                this.width = 120;
-                this.height = 60;
-                this.number = number;
-                this.txCount = Math.floor(Math.random() * 2000) + 500;
-                this.hash = '0x' + Math.random().toString(16).substr(2, 8);
-            }
-
-            draw() {
-                ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
-                ctx.strokeStyle = '#38bdf8';
-                ctx.lineWidth = 1.5;
-                ctx.shadowColor = 'rgba(56, 189, 248, 0.5)';
-                ctx.shadowBlur = 10;
-
-                ctx.beginPath();
-                ctx.roundRect(this.x, this.y, this.width, this.height, 8);
-                ctx.fill();
-                ctx.stroke();
-
-                ctx.shadowBlur = 0;
-                ctx.fillStyle = '#f8fafc';
-                ctx.font = '12px JetBrains Mono';
-                ctx.fillText(`Block #${this.number}`, this.x + 10, this.y + 22);
-                ctx.fillStyle = '#94a3b8';
-                ctx.font = '10px JetBrains Mono';
-                ctx.fillText(`Txs: ${this.txCount}`, this.x + 10, this.y + 38);
-                ctx.fillText(`Hash: ${this.hash}`, this.x + 10, this.y + 50);
-            }
-        }
-
-        let blockHeight = 18492000;
-        function initBlocks() {
-            blocks = [];
-            for(let i=0; i<5; i++) {
-                blocks.push(new Block(50 + i * 160, blockHeight++));
-            }
-        }
-
-        function animateCanvas() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            ctx.strokeStyle = 'rgba(168, 85, 247, 0.4)';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(0, canvas.height/2);
-            ctx.lineTo(canvas.width, canvas.height/2);
-            ctx.stroke();
-
-            blocks.forEach((block) => {
-                block.x -= 0.5;
-                block.draw();
-            });
-
-            if(blocks.length > 0 && blocks[0].x + blocks[0].width < 0) {
-                blocks.shift();
-                const lastX = blocks[blocks.length - 1].x;
-                blocks.push(new Block(lastX + 160, blockHeight++));
-                logTerminal(`[Block Engine] Mined Block #${blockHeight - 1} with C++ Hashing Engine.`);
-            }
-
-            requestAnimationFrame(animateCanvas);
+            event.currentTarget.classList.add("active");
+            logTelemetry("Switched workspace perspective to: " + tabName.toUpperCase());
         }
 
-        initBlocks();
-        animateCanvas();
-        renderOrderbook();
-        setInterval(renderOrderbook, 3000);
+        // Staking Simulation Engine
+        function stakeTokens() {
+            const amount = parseFloat(document.getElementById("stakeAmount").value);
+            if (isNaN(amount) || amount <= 0) {
+                alert("Please specify valid non-zero MOPUS to stake.");
+                return;
+            }
+            if (amount > state.mopusBalance) {
+                alert("Insufficient balance to execute staking transaction.");
+                return;
+            }
 
+            state.mopusBalance -= amount;
+            state.stakedBalance += amount;
+            document.getElementById("userStaked").innerText = state.stakedBalance.toFixed(4) + " MOPUS";
+            logTelemetry(`Staked ${amount.toFixed(2)} MOPUS into High-Yield Pool. Transaction processed by C# backend handler.`);
+            updateMetrics();
+        }
+
+        function unstakeTokens() {
+            const amount = parseFloat(document.getElementById("stakeAmount").value);
+            if (isNaN(amount) || amount <= 0) return;
+            if (amount > state.stakedBalance) {
+                alert("Withdrawal exceeds current active staked balance.");
+                return;
+            }
+
+            state.stakedBalance -= amount;
+            state.mopusBalance += amount;
+            document.getElementById("userStaked").innerText = state.stakedBalance.toFixed(4) + " MOPUS";
+            logTelemetry(`Withdrew ${amount.toFixed(2)} MOPUS from pool. Smart contract processing execution.`);
+            updateMetrics();
+        }
+
+        function claimYield() {
+            if (state.unclaimedRewards <= 0) {
+                alert("No rewards accumulated to harvest yet.");
+                return;
+            }
+            const harvested = state.unclaimedRewards;
+            state.mopusBalance += harvested;
+            state.unclaimedRewards = 0;
+            document.getElementById("userRewards").innerText = "0.000000 MOPUS";
+            logTelemetry(`Harvested ${harvested.toFixed(6)} MOPUS rewards back into connected wallet.`);
+        }
+
+        // Staking Yield ticker
         setInterval(() => {
-            const gas = Math.floor(Math.random() * 15) + 10;
-            document.getElementById('gasValue').innerText = `${gas} Gwei`;
-        }, 5000);
+            if (state.stakedBalance > 0) {
+                const accrued = state.stakedBalance * 0.00000035;
+                state.unclaimedRewards += accrued;
+                document.getElementById("userRewards").innerText = state.unclaimedRewards.toFixed(6) + " MOPUS";
+            }
+        }, 1000);
 
-        logTerminal('[System Init] Magnum Opus Web3 Dashboard Core online.');
-        logTerminal('[C++ Crypto Engine] Sub-millisecond block pipeline active.');
-        logTerminal('[.NET Backend Router] API Gateways synchronized.');
+        // Merkle Tree Simulator
+        function generateMerkleTree() {
+            const rawInputs = document.getElementById("merkleInputs").value;
+            let leaves = rawInputs.split(',').map(s => s.trim()).filter(s => s.length > 0);
+            if (leaves.length === 0) return;
+
+            const container = document.getElementById("merkleVisualTree");
+            container.innerHTML = "";
+
+            let currentLevel = leaves.map(val => hashString(val));
+            let treeHtml = "";
+
+            // Root display
+            treeHtml += `<div style="font-weight: bold; font-size: 0.85rem; margin-bottom: 0.5rem;">Calculated Levels (Bottom to Top):</div>`;
+            
+            let levelNum = 0;
+            while (currentLevel.length > 0) {
+                let levelHtml = `<div class="merkle-level">`;
+                for (let hash of currentLevel) {
+                    levelHtml += `<div class="merkle-node" title="${hash}">${hash.substring(0, 10)}...${hash.substring(hash.length-8)}</div>`;
+                }
+                levelHtml += `</div>`;
+                treeHtml = levelHtml + treeHtml;
+                
+                if (currentLevel.length === 1) {
+                    document.getElementById("rootMetric").innerText = currentLevel[0].substring(0, 14) + "...";
+                    break;
+                }
+
+                let nextLevel = [];
+                for (let i = 0; i < currentLevel.length; i += 2) {
+                    if (i + 1 < currentLevel.length) {
+                        nextLevel.push(hashString(currentLevel[i] + currentLevel[i+1]));
+                    } else {
+                        nextLevel.push(currentLevel[i]);
+                    }
+                }
+                currentLevel = nextLevel;
+                levelNum++;
+            }
+
+            container.innerHTML = treeHtml;
+            logTelemetry("Merkle Root generated on sandbox for transaction sequence.");
+        }
+
+        // PoW Mining simulator
+        function triggerMining() {
+            const difficulty = parseInt(document.getElementById("miningDiff").value);
+            const txCount = parseInt(document.getElementById("miningTxCount").value);
+            
+            logTelemetry(`Starting mining cycle. Finding Nonce matching difficulty requirement of ${difficulty} zeros...`);
+
+            let prefix = '0x' + '0'.repeat(difficulty);
+            let nonce = 0;
+            let blockHash = "";
+            
+            const start = performance.now();
+            while (true) {
+                let data = `BlockData:${state.currentBlock + 1}:${nonce}:${txCount}`;
+                blockHash = hashString(data);
+                if (blockHash.startsWith(prefix)) {
+                    break;
+                }
+                nonce++;
+                if (nonce > 10000000) break; // prevention
+            }
+            const duration = (performance.now() - start).toFixed(2);
+
+            state.currentBlock++;
+            const newBlock = {
+                height: state.currentBlock,
+                hash: blockHash,
+                txCount: txCount,
+                nonce: nonce,
+                miner: state.walletAddress || "0x9bc...eef"
+            };
+            
+            state.blockchain.push(newBlock);
+            renderBlockchain();
+            logTelemetry(`Block #${newBlock.height} successfully solved in ${duration}ms. Nonce found: ${nonce}. Hash: ${blockHash}`);
+        }
+
+        function renderBlockchain() {
+            const list = document.getElementById("blockchainList");
+            list.innerHTML = "";
+            
+            state.blockchain.slice().reverse().forEach(block => {
+                const card = document.createElement("div");
+                card.className = "block-card";
+                card.innerHTML = `
+                    <div class="block-header-title">
+                        <span>BLOCK #${block.height}</span>
+                        <span style="color: var(--accent-emerald)">⚡ CONFIRMED</span>
+                    </div>
+                    <div class="block-field"><span>Hash:</span><span class="block-hash">${block.hash}</span></div>
+                    <div class="block-field"><span>Nonce:</span><span>${block.nonce}</span></div>
+                    <div class="block-field"><span>Transactions:</span><span>${block.txCount} txs</span></div>
+                    <div class="block-field"><span>Validator:</span><span>${block.miner}</span></div>
+                `;
+                list.appendChild(card);
+            });
+        }
+
+        // Ledger history simulator
+        function submitTransaction() {
+            const recipient = document.getElementById("txRecipient").value;
+            const amount = parseFloat(document.getElementById("txAmount").value);
+            const fee = parseFloat(document.getElementById("txFee").value);
+
+            if (isNaN(amount) || amount <= 0) return;
+
+            const tx = {
+                id: hashString(recipient + amount + Date.now()),
+                recipient: recipient,
+                amount: amount,
+                fee: fee,
+                timestamp: new Date().toLocaleTimeString()
+            };
+
+            state.processedTransactions.unshift(tx);
+            state.pendingTransactions.push(tx);
+            document.getElementById("pendingTxCount").innerText = state.pendingTransactions.length;
+            
+            logTelemetry(`User initiated ledger transaction of ${amount} MOPUS to ${recipient.substring(0,6)}...`);
+            renderLedger();
+            
+            // Simulated confirmation after 3 seconds
+            setTimeout(() => {
+                state.pendingTransactions.shift();
+                document.getElementById("pendingTxCount").innerText = state.pendingTransactions.length;
+                logTelemetry(`Ledger transaction ${tx.id.substring(0,10)}... confirmed in block #${state.currentBlock}`);
+            }, 3000);
+        }
+
+        function renderLedger() {
+            const container = document.getElementById("txHistoryContainer");
+            container.innerHTML = "";
+
+            if (state.processedTransactions.length === 0) {
+                container.innerHTML = `<div style="text-align: center; color: var(--text-muted); font-size: 0.85rem; padding: 2rem;">No transactions recorded on this engine.</div>`;
+                return;
+            }
+
+            state.processedTransactions.forEach(tx => {
+                const div = document.createElement("div");
+                div.style.background = "rgba(255,255,255,0.02)";
+                div.style.border = "1px solid rgba(255,255,255,0.05)";
+                div.style.padding = "0.75rem";
+                div.style.borderRadius = "6px";
+                div.style.fontSize = "0.8rem";
+                div.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; font-weight: bold; margin-bottom: 0.25rem;">
+                        <span style="color: var(--accent-purple)">${tx.id.substring(0, 12)}...</span>
+                        <span style="color: var(--accent-emerald)">+${tx.amount} MOPUS</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted);">
+                        <span>Recipient: ${tx.recipient}</span>
+                        <span>Fee: ${tx.fee} Gwei</span>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        // Governance Simulator
+        function submitProposal() {
+            const desc = document.getElementById("proposalDesc").value;
+            if (!desc.trim()) return;
+
+            const newProp = {
+                id: state.proposals.length + 1,
+                desc: desc,
+                votesFor: 0,
+                votesAgainst: 0,
+                endBlock: state.currentBlock + 1000,
+                executed: false,
+                proposer: state.walletAddress || "0x71C...8a9"
+            };
+
+            state.proposals.push(newProp);
+            renderGovernance();
+            logTelemetry(`Successfully proposed new consensus upgrade: "${desc.substring(0, 30)}..."`);
+        }
+
+        function voteProposal(id, support) {
+            const prop = state.proposals.find(p => p.id === id);
+            if (!prop) return;
+
+            const voteWeight = Math.floor(Math.random() * 12000) + 1500;
+            if (support) {
+                prop.votesFor += voteWeight;
+                logTelemetry(`Voted YES on Proposal #${id} with ${voteWeight} MOPUS power.`);
+            } else {
+                prop.votesAgainst += voteWeight;
+                logTelemetry(`Voted NO on Proposal #${id} with ${voteWeight} MOPUS power.`);
+            }
+            renderGovernance();
+        }
+
+        function renderGovernance() {
+            const container = document.getElementById("proposalListContainer");
+            container.innerHTML = "";
+
+            state.proposals.forEach(prop => {
+                const totalVotes = prop.votesFor + prop.votesAgainst;
+                const forPct = totalVotes > 0 ? (prop.votesFor / totalVotes) * 100 : 0;
+                const againstPct = totalVotes > 0 ? (prop.votesAgainst / totalVotes) * 100 : 0;
+
+                const item = document.createElement("div");
+                item.className = "proposal-item";
+                item.innerHTML = `
+                    <div class="proposal-header">
+                        <span>PROPOSAL #${prop.id}</span>
+                        <span class="tx-badge">PROPOSER: ${prop.proposer}</span>
+                    </div>
+                    <div class="proposal-desc">${prop.desc}</div>
+                    <div class="proposal-bar-bg">
+                        <div class="proposal-bar-for" style="width: ${forPct}%"></div>
+                        <div class="proposal-bar-against" style="width: ${againstPct}%"></div>
+                    </div>
+                    <div class="proposal-stats">
+                        <span>For: ${prop.votesFor.toLocaleString()} (${forPct.toFixed(1)}%)</span>
+                        <span>Against: ${prop.votesAgainst.toLocaleString()} (${againstPct.toFixed(1)}%)</span>
+                    </div>
+                    <div class="proposal-actions">
+                        <button class="btn-vote btn-vote-for" onclick="voteProposal(${prop.id}, true)">VOTE FOR (YES)</button>
+                        <button class="btn-vote btn-vote-against" onclick="voteProposal(${prop.id}, false)">VOTE AGAINST (NO)</button>
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        // High Frequency Order Book simulator
+        function generateOrderBook() {
+            const bidContainer = document.getElementById("orderbookBids");
+            const askContainer = document.getElementById("orderbookAsks");
+            
+            let bidsHtml = "";
+            let asksHtml = "";
+            
+            let price = state.indexPrice;
+            for (let i = 1; i <= 5; i++) {
+                let bidPrice = (price - (i * 0.01)).toFixed(2);
+                let bidSize = (Math.random() * 2500 + 100).toFixed(0);
+                let depthPct = Math.min((bidSize / 2600) * 100, 100);
+                bidsHtml += `
+                    <div class="orderbook-row">
+                        <div class="depth-bar-bid" style="width: ${depthPct}%"></div>
+                        <div class="row-text">
+                            <span class="price bid">$${bidPrice}</span>
+                            <span>${bidSize}</span>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            for (let i = 1; i <= 5; i++) {
+                let askPrice = (price + (i * 0.01)).toFixed(2);
+                let askSize = (Math.random() * 2500 + 100).toFixed(0);
+                let depthPct = Math.min((askSize / 2600) * 100, 100);
+                asksHtml = `
+                    <div class="orderbook-row">
+                        <div class="depth-bar-ask" style="width: ${depthPct}%"></div>
+                        <div class="row-text">
+                            <span class="price ask">$${askPrice}</span>
+                            <span>${askSize}</span>
+                        </div>
+                    </div>
+                ` + asksHtml;
+            }
+
+            bidContainer.innerHTML = bidsHtml;
+            askContainer.innerHTML = asksHtml;
+        }
+
+        // Live Network Fluctuations
+        setInterval(() => {
+            // fluctuate price
+            state.indexPrice += (Math.random() - 0.5) * 0.04;
+            document.getElementById("indexPrice").innerText = "$" + state.indexPrice.toFixed(2);
+            generateOrderBook();
+
+            // fluctuate gas
+            let newGas = Math.floor(Math.random() * 15) + 18;
+            document.getElementById("gasValue").innerText = newGas + " Gwei";
+        }, 2500);
+
+        // Metrics Update
+        function updateMetrics() {
+            let tvlVal = 24891402 + (state.stakedBalance * state.indexPrice);
+            document.getElementById("tvlMetric").innerText = "$" + tvlVal.toLocaleString(undefined, { maximumFractionDigits: 0 });
+        }
+
+        // Live Canvas Network Lattice Visualizer
+        const canvas = document.getElementById("visualizer");
+        const ctx = canvas.getContext("2d");
+        let offset = 0;
+
+        function drawLattice() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = "rgba(56, 189, 248, 0.15)";
+            ctx.lineWidth = 1;
+
+            for (let i = 0; i < canvas.width; i += 20) {
+                ctx.beginPath();
+                ctx.moveTo(i + offset, 0);
+                ctx.lineTo(i - offset, canvas.height);
+                ctx.stroke();
+            }
+            offset = (offset + 0.25) % 20;
+            
+            // draw high-yield signal pulse wave
+            ctx.beginPath();
+            ctx.strokeStyle = "rgba(168, 85, 247, 0.5)";
+            ctx.lineWidth = 2;
+            for (let x = 0; x < canvas.width; x++) {
+                let y = (canvas.height / 2) + Math.sin(x * 0.02 + (offset * 0.3)) * 15;
+                if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            requestAnimationFrame(drawLattice);
+        }
+
+        // Init Setup
+        window.onload = function() {
+            logTelemetry("Magnum Opus engine node boot complete.");
+            logTelemetry("Initialized Merkle validation & state databases in-memory.");
+            generateOrderBook();
+            renderBlockchain();
+            drawLattice();
+        };
     </script>
 </body>
 </html>
