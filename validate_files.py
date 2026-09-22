@@ -11,6 +11,7 @@ BLOCKING checks (fail the workflow, commit is skipped):
   .go   -> gofmt -l        (parses syntax; doesn't need a go.mod)
   .cpp  -> g++ -fsyntax-only
   .rs   -> rustc --emit=metadata (full type-check as a library, no Cargo.toml needed)
+  .rb   -> ruby -c          (syntax check only, no gem dependencies needed)
 
 ADVISORY checks (printed as a warning only, never blocks the commit):
   .sql  -> sqlite3 parse (schema.sql may use dialect features sqlite
@@ -73,6 +74,10 @@ def validate_rust(path):
                 "--emit=metadata", "-o", "/dev/null", path])
 
 
+def validate_ruby(path):
+    return run(["ruby", "-c", path])
+
+
 def validate_sql_advisory(path):
     return run(["sqlite3", ":memory:", f".read {path}"])
 
@@ -83,6 +88,7 @@ BLOCKING_VALIDATORS = {
     ".go": validate_go,
     ".cpp": validate_cpp,
     ".rs": validate_rust,
+    ".rb": validate_ruby,
 }
 
 ADVISORY_VALIDATORS = {
