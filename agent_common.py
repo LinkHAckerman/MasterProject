@@ -47,7 +47,7 @@ It must be the best thing ever made, showcasing full-stack mastery across multip
 
 
 class GenerationFailed(Exception):
-    """Raised when every candidate model failed to produce a usable response."""
+    """Raised when every candidate model failed to produce usable content."""
     pass
 
 
@@ -163,45 +163,61 @@ def call_with_retry(url, headers, payload, params=None, max_retries=3, base_dela
     return response
 
 
-def generate_with_model_fallback(model_names, call_fn):
-    """Tries each model in order; moves to the next if one is persistently
-    unavailable (e.g. overloaded, deprecated, or terms-gated)."""
-    last_response = None
+def try_generate(model_names, call_fn, extract_text_fn):
+    """
+    Tries each model in order. A model only counts as successful if it
+    returns HTTP 200 AND yields non-empty extractable text - a 200 with
+    empty/null content (e.g. a reasoning model that spends its whole token
+    budget "thinking" and never writes a visible answer) is treated as a
+    failure for that model, and the next candidate is tried.
+
+    Returns (raw_text, model_name) on success, or (None, None) if every
+    candidate failed one way or another.
+    """
     for i, model in enumerate(model_names, start=1):
         print(f"Trying model {i}/{len(model_names)}: {model}")
         response = call_fn(model)
-        if response is not None and response.status_code == 200:
-            print(f"Success with model: {model}")
-            return response
-        last_response = response
-        print(f"Model {model} did not succeed, trying next candidate if available.\n")
-    return last_response
+
+        if response is None:
+            print(f"Model {model}: no response (network failure). Trying next candidate if available.\n")
+            continue
+
+        if response.status_code != 200:
+            print(f"Model {model}: status {response.status_code}. Trying next candidate if available.\n")
+            continue
+
+        raw_text = extract_text_fn(response)
+        if not raw_text:
+            print(f"Model {model}: returned 200 but no usable text (empty/null content - "
+                  f"often a reasoning model that ran out of token budget before answering). "
+                  f"Trying next candidate if available.\n")
+            continue
+
+        print(f"Success with model: {model}")
+        return raw_text, model
+
+    return None, None
 
 
 def pick_unclaimed_file(model_names, call_fn, extract_text_fn, claimed_files, max_pick_attempts=3):
     """
-    Full generation flow: ask the model for a file+content pick, and if it
-    picks something already claimed today (or the JSON doesn't parse),
+    Full generation flow: ask for a file+content pick (trying every model in
+    the list, per try_generate's rules, until one produces usable text), and
+    if it picks something already claimed today (or the JSON doesn't parse),
     re-ask up to max_pick_attempts times before giving up gracefully.
 
     Returns (target_file, file_content) on success, or (None, None) if it
     never got a clean, unclaimed pick after all attempts (not an error -
     the caller should exit(0) in this case).
 
-    Raises GenerationFailed if the provider itself never returns a usable
-    200 response (real outage/misconfiguration - caller should exit(1)).
+    Raises GenerationFailed if every model failed to produce usable content
+    on every attempt (real outage/misconfiguration - caller should exit(1)).
     """
     for pick_attempt in range(1, max_pick_attempts + 1):
-        response = generate_with_model_fallback(model_names, call_fn)
+        raw_text, model = try_generate(model_names, call_fn, extract_text_fn)
 
-        if response is None or response.status_code != 200:
-            detail = response.text if response is not None else "no response (network failure)"
-            status = getattr(response, "status_code", "n/a")
-            raise GenerationFailed(f"All candidate models failed. Last status: {status}. {detail}")
-
-        raw_text = extract_text_fn(response)
         if raw_text is None:
-            raise GenerationFailed("Could not extract text from provider response.")
+            raise GenerationFailed("All candidate models failed to return usable content.")
 
         try:
             action = extract_json(raw_text)
