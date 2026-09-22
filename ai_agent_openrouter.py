@@ -69,6 +69,7 @@ def call_fn(model):
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2,
+        "max_tokens": 8000,
         "response_format": {"type": "json_object"}
     }
     return common.call_with_retry(f"{BASE_URL}/chat/completions", headers_base, payload)
