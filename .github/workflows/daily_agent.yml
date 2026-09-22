@@ -43,10 +43,10 @@ jobs:
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
         run: python ai_agent_mistral.py
 
-      - name: Execute Cerebras Agent
+      - name: Execute OpenRouter Agent
         env:
-          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
-        run: python ai_agent_cerebras.py
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: python ai_agent_openrouter.py
 
       - name: Validate Today's Generated Files
         run: python validate_files.py
