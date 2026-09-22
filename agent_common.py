@@ -1,5 +1,5 @@
 """
-Shared logic for all AI agent scripts (Gemini, Groq, Mistral, Cerebras, ...).
+Shared logic for all AI agent scripts (Gemini, Groq, Mistral, OpenRouter, GitHub Models, ...).
 
 Each provider script only needs to define:
   - how to list/rank its own models
@@ -25,7 +25,7 @@ ALL_PROJECT_FILES = [
     "index.html", "styles.css", "app.js",
     "CryptoEngine.cpp", "TransactionProcessor.cs",
     "SmartContract.sol", "server.go", "schema.sql",
-    "OnChainProgram.rs",
+    "OnChainProgram.rs", "WalletService.rb",
     "README.md"
 ]
 
@@ -42,6 +42,7 @@ It must be the best thing ever made, showcasing full-stack mastery across multip
 - MICROSERVICES (Go): A lightweight Go service for wallet/transaction relay (server.go).
 - DATA LAYER (SQL): Schema for users, wallets, and transaction history (schema.sql).
 - ON-CHAIN PROGRAMS (Rust): High-performance, memory-safe on-chain program logic (OnChainProgram.rs).
+- SCRIPTING/GLUE LAYER (Ruby): Lightweight wallet balance and exchange-rate service (WalletService.rb).
 """
 
 
