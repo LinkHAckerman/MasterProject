@@ -8,100 +8,87 @@ import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 contract MagnumOpusToken is ERC20, Ownable {
     using SafeMath for uint256;
 
-    // Token parameters
-    string public constant name = "Magnum Opus Token";
-    string public constant symbol = "MOPUS";
-    uint8 public constant decimals = 18;
-    uint256 public constant totalSupply = 1_000_000_000 * (10 ** decimals);
+    uint256 private constant INITIAL_SUPPLY = 1_000_000_000 * 10**18;
+    uint256 private constant TOTAL_SUPPLY = 1_000_000_000 * 10**18;
 
-    // Staking parameters
-    uint256 public stakingRewardRate = 0.0045 ether;
-    uint256 public stakingRewardInterval = 1 days;
-    uint256 public minimumStakeAmount = 100 * (10 ** decimals);
+    uint256 private _totalStaked;
+    uint256 private _rewardRate;
+    uint256 private _lastUpdateTime;
 
-    // Contract state
-    mapping(address => uint256) public stakedBalances;
-    mapping(address => uint256) public rewards;
-    uint256 public lastRewardUpdate;
+    mapping(address => uint256) private _stakes;
+    mapping(address => uint256) private _rewards;
 
-    // Events
     event Staked(address indexed user, uint256 amount);
-    event Withdrawn(address indexed user, uint256 amount);
-    event RewardClaimed(address indexed user, uint256 amount);
+    event Unstaked(address indexed user, uint256 amount);
+    event RewardPaid(address indexed user, uint256 amount);
 
-    // Modifiers
-    modifier onlyStaker(address _user) {
-        require(stakedBalances[_user] > 0, "Not a staker");
-        _;
+    constructor() ERC20("Magnum Opus Token", "MOPUS") {
+        _mint(msg.sender, TOTAL_SUPPLY);
+        _rewardRate = 10000000000000000; // 0.01 MOPUS per second
     }
 
-    // Constructor
-    constructor() ERC20(name, symbol) {
-        _mint(msg.sender, totalSupply);
-        lastRewardUpdate = block.timestamp;
+    function stake(uint256 amount) external {
+        require(amount > 0, "Amount must be greater than 0");
+        require(balanceOf(msg.sender) >= amount, "Insufficient balance");
+
+        _updateReward(msg.sender);
+        _stakes[msg.sender] = _stakes[msg.sender].add(amount);
+        _totalStaked = _totalStaked.add(amount);
+        _transfer(msg.sender, address(this), amount);
+
+        emit Staked(msg.sender, amount);
     }
 
-    // Staking functions
-    function stake(uint256 _amount) external {
-        require(_amount >= minimumStakeAmount, "Amount too low");
-        require(balanceOf(msg.sender) >= _amount, "Insufficient balance");
+    function unstake(uint256 amount) external {
+        require(amount > 0, "Amount must be greater than 0");
+        require(_stakes[msg.sender] >= amount, "Insufficient staked balance");
 
-        _transfer(msg.sender, address(this), _amount);
-        stakedBalances[msg.sender] = stakedBalances[msg.sender].add(_amount);
+        _updateReward(msg.sender);
+        _stakes[msg.sender] = _stakes[msg.sender].sub(amount);
+        _totalStaked = _totalStaked.sub(amount);
+        _transfer(address(this), msg.sender, amount);
 
-        emit Staked(msg.sender, _amount);
+        emit Unstaked(msg.sender, amount);
     }
 
-    function withdraw(uint256 _amount) external onlyStaker(msg.sender) {
-        require(_amount <= stakedBalances[msg.sender], "Insufficient staked balance");
-
-        _transfer(address(this), msg.sender, _amount);
-        stakedBalances[msg.sender] = stakedBalances[msg.sender].sub(_amount);
-
-        emit Withdrawn(msg.sender, _amount);
+    function claimRewards() external {
+        _updateReward(msg.sender);
+        uint256 reward = _rewards[msg.sender];
+        if (reward > 0) {
+            _rewards[msg.sender] = 0;
+            _transfer(address(this), msg.sender, reward);
+            emit RewardPaid(msg.sender, reward);
+        }
     }
 
-    function claimRewards() external onlyStaker(msg.sender) {
-        uint256 reward = calculateReward(msg.sender);
-        require(reward > 0, "No rewards to claim");
-
-        rewards[msg.sender] = 0;
-        _transfer(address(this), msg.sender, reward);
-
-        emit RewardClaimed(msg.sender, reward);
+    function getStakedBalance(address user) external view returns (uint256) {
+        return _stakes[user];
     }
 
-    // View functions
-    function calculateReward(address _user) public view returns (uint256) {
-        uint256 timeElapsed = block.timestamp.sub(lastRewardUpdate);
-        uint256 reward = stakedBalances[_user].mul(stakingRewardRate).mul(timeElapsed).div(stakingRewardInterval);
-        return reward.add(rewards[_user]);
+    function getPendingRewards(address user) external view returns (uint256) {
+        _updateReward(user);
+        return _rewards[user];
     }
 
-    function getStakedBalance(address _user) external view returns (uint256) {
-        return stakedBalances[_user];
+    function setRewardRate(uint256 newRate) external onlyOwner {
+        _rewardRate = newRate;
     }
 
-    function getRewards(address _user) external view returns (uint256) {
-        return calculateReward(_user);
+    function _updateReward(address user) private {
+        uint256 currentTime = block.timestamp;
+        uint256 timeElapsed = currentTime.sub(_lastUpdateTime);
+        if (timeElapsed > 0 && _totalStaked > 0) {
+            uint256 reward = timeElapsed.mul(_rewardRate).mul(_stakes[user]).div(_totalStaked);
+            _rewards[user] = _rewards[user].add(reward);
+            _lastUpdateTime = currentTime;
+        }
     }
 
-    // Admin functions
-    function setStakingRewardRate(uint256 _newRate) external onlyOwner {
-        stakingRewardRate = _newRate;
-    }
-
-    function setMinimumStakeAmount(uint256 _newAmount) external onlyOwner {
-        minimumStakeAmount = _newAmount;
-    }
-
-    // Fallback function
-    fallback() external payable {
-        revert("Direct ETH transfers not allowed");
-    }
-
-    // Receive function
-    receive() external payable {
-        revert("Direct ETH transfers not allowed");
+    function _transfer(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) internal override {
+        super._transfer(sender, recipient, amount);
     }
 }

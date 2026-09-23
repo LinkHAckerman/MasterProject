@@ -1,167 +1,220 @@
--- Magnum Opus Data Layer Schema
--- Purpose: Centralized relational store for users, wallets, transactions, NFTs, staking, and governance.
--- Compatible with PostgreSQL 14+.
+-- schema.sql — Data Layer for Magnum Opus: All-in-One Crypto, NFTs, Web3 & DeFi Platform
+-- Designed for PostgreSQL 15+ with extensibility for multi-ecosystem support (Ethereum, Solana, BNB Chain, etc.)
 
--- Enable extensions for UUID and crypto functions
+-- ============================================================
+-- EXTENSIONS & SETTINGS
+-- ============================================================
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+SET timezone = 'UTC';
 
--- Enums for type safety and query optimization
-CREATE TYPE enum_user_role AS ENUM ('standard', 'validator', 'governor', 'admin');
-CREATE TYPE enum_wallet_type AS ENUM ('external', 'contract', 'multisig', 'smart_account');
-CREATE TYPE enum_tx_status AS ENUM ('pending', 'confirmed', 'failed', 'reverted', 'dropped');
-CREATE TYPE enum_tx_type AS ENUM ('transfer', 'swap', 'liquidity_add', 'liquidity_remove', 'stake', 'unstake', 'mint', 'burn', 'governance_vote');
-CREATE TYPE enum_chain_id AS ENUM ('eip155_1', 'eip155_137', 'eip155_56', 'solana', 'eip155_42161', 'eip155_324');
+-- ============================================================
+-- CORE ENTITIES
+-- ============================================================
 
--- Core entities
-
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    wallet_address VARCHAR(42) NOT NULL UNIQUE,
-    email VARCHAR(255),
-    role enum_user_role DEFAULT 'standard',
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    last_active_at TIMESTAMPTZ DEFAULT NOW(),
-    is_active BOOLEAN DEFAULT TRUE
+    wallet_address BYTEA NOT NULL UNIQUE,
+    username VARCHAR(64) UNIQUE,
+    email VARCHAR(128) UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_login TIMESTAMPTZ,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    metadata JSONB DEFAULT '{}'::jsonb
 );
 
-CREATE TABLE wallets (
+CREATE TABLE IF NOT EXISTS wallets (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    chain enum_chain_id NOT NULL,
-    address VARCHAR(42) NOT NULL,
-    type enum_wallet_type DEFAULT 'external',
-    label VARCHAR(100),
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (user_id, chain, address)
+    chain_id INTEGER NOT NULL,
+    network_name VARCHAR(32) NOT NULL,
+    address BYTEA NOT NULL,
+    derivation_path VARCHAR(128),
+    label VARCHAR(32),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id, chain_id, address)
 );
 
-CREATE TABLE transactions (
+-- ============================================================
+-- BALANCES & ASSET POSITIONS
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS balances (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    block_hash VARCHAR(66),
+    wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
+    symbol VARCHAR(16) NOT NULL,
+    raw_amount NUMERIC(78, 0) NOT NULL,
+    display_amount NUMERIC(30, 18) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(wallet_id, symbol)
+);
+
+-- ============================================================
+-- TRANSACTION HISTORY
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS transactions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    wallet_id UUID REFERENCES wallets(id) ON DELETE SET NULL,
+    tx_hash BYTEA UNIQUE NOT NULL,
+    from_address BYTEA,
+    to_address BYTEA,
+    value NUMERIC(78, 0) NOT NULL DEFAULT 0,
+    gas_used INTEGER,
+    gas_price_gwei NUMERIC(18, 8),
+    status VARCHAR(16) NOT NULL CHECK (status IN ('pending', 'confirmed', 'failed', 'replaced')),
     block_number BIGINT,
-    from_address VARCHAR(42),
-    to_address VARCHAR(42),
-    value NUMERIC(78, 4) NOT NULL DEFAULT '0',
-    gas_price NUMERIC(78, 4),
-    gas_limit INTEGER,
-    total_fee NUMERIC(78, 4) DEFAULT 0,
-    status enum_tx_status DEFAULT 'pending',
-    type enum_tx_type NOT NULL,
-    raw_receipt JSONB,
-    timestamp TIMESTAMPTZ DEFAULT NOW(),
-    confirmed_at TIMESTAMPTZ,
-    confirmations INTEGER DEFAULT 0
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    type VARCHAR(32) NOT NULL CHECK (type IN ('transfer', 'swap', 'stake', 'unstake', 'mint', 'burn', 'governance')),
+    extra_data JSONB DEFAULT '{}'::jsonb,
+    INDEX idx_transactions_wallet (wallet_id, timestamp DESC),
+    INDEX idx_transactions_status (status),
+    INDEX idx_transactions_type (type)
 );
 
-CREATE INDEX idx_tx_from ON transactions(from_address);
-CREATE INDEX idx_tx_to ON transactions(to_address);
-CREATE INDEX idx_tx_status ON transactions(status);
-CREATE INDEX idx_tx_block ON transactions(block_number);
-CREATE INDEX idx_tx_timestamp ON transactions(timestamp);
+-- ============================================================
+-- NFTs & COLLECTIBLES
+-- ============================================================
 
-CREATE TABLE nfts (
+CREATE TABLE IF NOT EXISTS nfts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    contract_address VARCHAR(42) NOT NULL,
-    token_id VARCHAR(66) NOT NULL,
-    name VARCHAR(255),
-    description TEXT,
-    owner_address VARCHAR(42) NOT NULL,
-    image_url TEXT,
-    metadata_url TEXT,
-    chain enum_chain_id NOT NULL,
-    schema_name VARCHAR(50),
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (contract_address, token_id, chain)
+    wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
+    contract_address BYTEA NOT NULL,
+    token_id VARCHAR(128) NOT NULL,
+    name VARCHAR(128),
+    symbol VARCHAR(16),
+    token_uri TEXT,
+    metadata_cid CIDR,
+    rarity_tier VARCHAR(16),
+    chain_id INTEGER NOT NULL,
+    acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(wallet_id, contract_address, token_id)
 );
 
-CREATE INDEX idx_nfts_owner ON nfts(owner_address);
-CREATE INDEX idx_nfts_contract ON nfts(contract_address);
+CREATE INDEX IF NOT EXISTS idx_nfts_contract ON nfts (contract_address, chain_id);
+CREATE INDEX IF NOT EXISTS idx_nfts_wallet ON nfts (wallet_id);
 
-CREATE TABLE staking_pools (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(255) NOT NULL,
-    symbol VARCHAR(20) NOT NULL,
-    chain enum_chain_id NOT NULL,
-    total_staked NUMERIC(78, 4) DEFAULT 0,
-    reward_rate_per_sec NUMERIC(78, 8) DEFAULT 0,
-    apr_percentage NUMERIC(5, 2) DEFAULT 0,
-    minimum_withdrawal NUMERIC(78, 4),
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- ============================================================
+-- STAKING & YIELD POSITIONS
+-- ============================================================
 
-CREATE TABLE staking_participants (
+CREATE TABLE IF NOT EXISTS staking_positions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    pool_id UUID REFERENCES staking_pools(id) ON DELETE CASCADE,
-    amount NUMERIC(78, 4) NOT NULL,
-    amount_usd NUMERIC(78, 2),
-    staked_at TIMESTAMPTZ DEFAULT NOW(),
+    wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
+    contract_address BYTEA NOT NULL,
+    token_symbol VARCHAR(16) NOT NULL,
+    amount NUMERIC(78, 0) NOT NULL,
+    staked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    rewards_earned NUMERIC(78, 0) NOT NULL DEFAULT 0,
     unlocked_at TIMESTAMPTZ,
-    rewards_earned NUMERIC(78, 4) DEFAULT 0,
-    rewards_claimed NUMERIC(78, 4) DEFAULT 0,
-    status BOOLEAN DEFAULT TRUE,
-    UNIQUE (user_id, pool_id)
+    status VARCHAR(16) NOT NULL CHECK (status IN ('active', 'unbonding', 'withdrawn')),
+    UNIQUE(wallet_id, contract_address)
 );
 
-CREATE TABLE governance_proposals (
+CREATE INDEX IF NOT EXISTS idx_staking_positions_wallet ON staking_positions (wallet_id);
+
+-- ============================================================
+-- GOVERNANCE & VOTING
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS governance_proposals (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    title VARCHAR(500) NOT NULL,
+    title VARCHAR(256) NOT NULL,
     description TEXT,
-    proposer_address VARCHAR(42) NOT NULL,
-    status VARCHAR(50) DEFAULT 'active',
-    voting_start TIMESTAMPTZ NOT NULL,
+    proposer_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    proposal_type VARCHAR(32) NOT NULL CHECK (proposal_type IN ('parameter_change', 'treasury_allocation', 'contract_upgrade', 'network_upgrade')),
+    status VARCHAR(16) NOT NULL CHECK (status IN ('active', 'passed', 'rejected', 'executed', 'cancelled')),
     voting_end TIMESTAMPTZ NOT NULL,
-    quorum_threshold NUMERIC(78, 4) NOT NULL,
-    for_votes NUMERIC(78, 4) DEFAULT 0,
-    against_votes NUMERIC(78, 4) DEFAULT 0,
-    yes_votes NUMERIC(78, 4) DEFAULT 0,
-    no_votes NUMERIC(78, 4) DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
+    for_votes NUMERIC(78, 0) NOT NULL DEFAULT 0,
+    against_votes NUMERIC(78, 0) NOT NULL DEFAULT 0,
+    quorum_requirement NUMERIC(78, 0) NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     executed_at TIMESTAMPTZ
 );
 
-CREATE TABLE governance_votes (
+CREATE INDEX IF NOT EXISTS idx_proposals_status ON governance_proposals (status);
+CREATE INDEX IF NOT EXISTS idx_proposals_end ON governance_proposals (voting_end);
+
+CREATE TABLE IF NOT EXISTS votes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    proposal_id UUID REFERENCES governance_proposals(id) ON DELETE CASCADE,
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    vote BOOLEAN NOT NULL,
-    voted_at TIMESTAMPTZ DEFAULT NOW(),
-    signature VARCHAR(128),
-    UNIQUE (proposal_id, user_id)
+    proposal_id UUID REFERENCES governance_proposals(id) ON DELETE CASCADE,
+    vote_choice VARCHAR(16) NOT NULL CHECK (vote_choice IN ('for', 'against', 'abstain')),
+    tx_hash BYTEA,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id, proposal_id)
 );
 
--- Performance indexes
+CREATE INDEX IF NOT EXISTS idx_votes_proposal ON votes (proposal_id);
 
-CREATE INDEX idx_proposals_status ON governance_proposals(status);
-CREATE INDEX idx_proposals_end ON governance_proposals(voting_end);
-CREATE INDEX idx_votes_proposal ON governance_votes(proposal_id);
-CREATE INDEX idx_participants_pool ON staking_participants(pool_id);
+-- ============================================================
+-- DEPOSIT POOLS & AMM LIQUIDITY
+-- ============================================================
 
--- Optimized view for dashboard portfolio summary (matches app.js state shape)
+CREATE TABLE IF NOT EXISTS deposit_pools (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    token_address BYTEA NOT NULL,
+    chain_id INTEGER NOT NULL,
+    pool_name VARCHAR(128) NOT NULL,
+    total_supply NUMERIC(78, 0) NOT NULL DEFAULT 0,
+    fee_bps INTEGER NOT NULL DEFAULT 30,
+    tvl NUMERIC(78, 0) NOT NULL DEFAULT 0,
+    last_tvl_update TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-CREATE OR REPLACE VIEW user_portfolio_summary AS
-SELECT
-    u.id AS user_id,
-    w.address AS wallet_address,
-    w.chain AS wallet_chain,
-    COALESCE(SUM(CASE WHEN t.type = 'transfer' AND t.from_address = w.address THEN -t.value ELSE 0 END), 0) + COALESCE(SUM(CASE WHEN t.type = 'transfer' AND t.to_address = w.address THEN t.value ELSE 0 END), 0) AS net_balance,
-    COALESCE(SUM(t.value), 0) AS total_volume_transacted,
-    (SELECT COUNT(*) FROM staking_participants sp WHERE sp.user_id = u.id AND sp.status) AS active_staking_positions,
-    (SELECT COUNT(*) FROM nfts n WHERE n.owner_address = w.address) AS nft_holdings,
-    (SELECT COALESCE(SUM(amount), 0) FROM staking_participants sp WHERE sp.user_id = u.id AND sp.status) AS total_staked
-FROM users u
-JOIN wallets w ON u.id = w.user_id
-LEFT JOIN transactions t ON (t.from_address = w.address OR t.to_address = w.address) AND t.status = 'confirmed'
-GROUP BY u.id, w.address, w.chain;
+CREATE INDEX IF NOT EXISTS idx_pools_token ON deposit_pools (token_address, chain_id);
 
--- Security & access
+-- ============================================================
+-- EXCHANGE RATES & ORACLE SNAPSHOTS
+-- ============================================================
 
-GRANT ALL ON ALL TABLES IN SCHEMA public TO app_service;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_service;
+CREATE TABLE IF NOT EXISTS exchange_rates (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    base_symbol VARCHAR(16) NOT NULL,
+    quote_symbol VARCHAR(16) NOT NULL,
+    rate NUMERIC(30, 10) NOT NULL,
+    source VARCHAR(32) NOT NULL CHECK (source IN ('coingecko', 'chainlink', 'api', 'internal')),
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    valid_until TIMESTAMPTZ NOT NULL,
+    UNIQUE (base_symbol, quote_symbol, source)
+);
 
--- Comment block for documentation
-COMMENT ON TABLE users IS 'Application users, linked to primary wallet address.';
-COMMENT ON TABLE transactions IS 'All on-chain and off-chain transaction records, indexed for fast lookup.';
-COMMENT ON TABLE governance_proposals IS 'Magnum Opus on-chain governance proposals, tracked via MIPs.';
+CREATE INDEX IF NOT EXISTS idx_rates_symbol ON exchange_rates (base_symbol, quote_symbol);
+
+-- ============================================================
+-- AUDIT & METADATA
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    entity_type VARCHAR(32) NOT NULL,
+    entity_id UUID NOT NULL,
+    action VARCHAR(16) NOT NULL,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    details JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log (entity_type, entity_id);
+
+-- ============================================================
+-- SAFETY & HELPERS
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION update_wallets_updated_at()
+RETURNS TRIGGER AS $$ BEGIN
+    NEW.updated_at = NOW(); RETURN NEW; END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_update_wallets_updated_at ON wallets;
+CREATE TRIGGER trigger_update_wallets_updated_at
+    BEFORE UPDATE ON wallets
+    FOR EACH ROW EXECUTE FUNCTION update_wallets_updated_at();
+
+COMMENT ON TABLE users IS 'Core user accounts linked to blockchain identities';
+COMMENT ON TABLE wallets IS 'Per-chain wallet instances owned by users';
+COMMENT ON TABLE transactions IS 'Immutable log of all on-chain and off-chain activity';
+COMMENT ON TABLE nfts IS 'Non-fungible token holdings with metadata references';
+COMMENT ON TABLE governance_proposals IS 'Decentralized voting proposals for protocol evolution';
+COMMENT ON TABLE exchange_rates IS 'Oracle-backed price feeds for DeFi calculations';
