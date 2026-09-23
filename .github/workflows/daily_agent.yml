@@ -2,7 +2,7 @@ name: Daily Autonomous AI Worker
 
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '17 3 * * *'   # 3:17 AM UTC instead of the crowded midnight slot
   workflow_dispatch:
 
 permissions:
