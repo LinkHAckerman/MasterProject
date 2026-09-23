@@ -1,137 +1,107 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
-import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
-/**
- * @title Magnum Opus Token (ERC20)
- * @dev Standard ERC20 with burn, permit and owner‑mint capabilities.
- */
-contract MagnumOpusToken is ERC20, ERC20Burnable, ERC20Permit, Ownable {
-    uint256 public constant MAX_SUPPLY = 1_000_000_000 * 1e18;
+contract MagnumOpusToken is ERC20, Ownable {
+    using SafeMath for uint256;
 
-    constructor() ERC20("Magnum Opus Token", "MOPUS") ERC20Permit("Magnum Opus Token") {
-        _mint(msg.sender, 500_000_000 * 1e18);
-    }
+    // Token parameters
+    string public constant name = "Magnum Opus Token";
+    string public constant symbol = "MOPUS";
+    uint8 public constant decimals = 18;
+    uint256 public constant totalSupply = 1_000_000_000 * (10 ** decimals);
 
-    function mint(address to, uint256 amount) external onlyOwner {
-        require(totalSupply() + amount <= MAX_SUPPLY, "Exceeds max supply");
-        _mint(to, amount);
-    }
-}
+    // Staking parameters
+    uint256 public stakingRewardRate = 0.0045 ether;
+    uint256 public stakingRewardInterval = 1 days;
+    uint256 public minimumStakeAmount = 100 * (10 ** decimals);
 
-/**
- * @title Magnum Opus NFT (ERC721)
- * @dev Simple ERC721 with URI storage, mintable by contract owner.
- */
-contract MagnumOpusNFT is ERC721URIStorage, Ownable {
-    uint256 public nextTokenId;
+    // Contract state
+    mapping(address => uint256) public stakedBalances;
+    mapping(address => uint256) public rewards;
+    uint256 public lastRewardUpdate;
 
-    constructor() ERC721("Magnum Opus NFT", "MOPUSNFT") {}
-
-    function mint(address to, string memory uri) external onlyOwner {
-        uint256 tokenId = nextTokenId++;
-        _safeMint(to, tokenId);
-        _setTokenURI(tokenId, uri);
-    }
-}
-
-/**
- * @title StakingPool
- * @dev Single‑token staking pool with per‑second rewards, safe withdraws and reward accounting.
- */
-contract StakingPool is ReentrancyGuard, Ownable {
-    struct StakeInfo {
-        uint256 amount;
-        uint256 rewardDebt;
-        uint256 lastStakeTime;
-    }
-
-    MagnumOpusToken public immutable token;
-    uint256 public rewardPerSecond;
-    uint256 public accRewardPerShare; // scaled by 1e18
-    uint256 public lastRewardTime;
-    uint256 public totalStaked;
-    mapping(address => StakeInfo) public stakes;
-
+    // Events
     event Staked(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount);
-    event RewardPaid(address indexed user, uint256 reward);
+    event RewardClaimed(address indexed user, uint256 amount);
 
-    constructor(MagnumOpusToken _token, uint256 _rewardPerSecond) {
-        token = _token;
-        rewardPerSecond = _rewardPerSecond;
-        lastRewardTime = block.timestamp;
+    // Modifiers
+    modifier onlyStaker(address _user) {
+        require(stakedBalances[_user] > 0, "Not a staker");
+        _;
     }
 
-    function updatePool() public {
-        if (block.timestamp <= lastRewardTime) return;
-        if (totalStaked == 0) {
-            lastRewardTime = block.timestamp;
-            return;
-        }
-        uint256 elapsed = block.timestamp - lastRewardTime;
-        uint256 reward = elapsed * rewardPerSecond;
-        accRewardPerShare += (reward * 1e18) / totalStaked;
-        lastRewardTime = block.timestamp;
+    // Constructor
+    constructor() ERC20(name, symbol) {
+        _mint(msg.sender, totalSupply);
+        lastRewardUpdate = block.timestamp;
     }
 
-    function stake(uint256 amount) external nonReentrant {
-        require(amount > 0, "Zero amount");
-        updatePool();
-        StakeInfo storage user = stakes[msg.sender];
-        if (user.amount > 0) {
-            uint256 pending = (user.amount * accRewardPerShare) / 1e18 - user.rewardDebt;
-            if (pending > 0) {
-                token.transfer(msg.sender, pending);
-                emit RewardPaid(msg.sender, pending);
-            }
-        }
-        token.transferFrom(msg.sender, address(this), amount);
-        user.amount += amount;
-        totalStaked += amount;
-        user.rewardDebt = (user.amount * accRewardPerShare) / 1e18;
-        user.lastStakeTime = block.timestamp;
-        emit Staked(msg.sender, amount);
+    // Staking functions
+    function stake(uint256 _amount) external {
+        require(_amount >= minimumStakeAmount, "Amount too low");
+        require(balanceOf(msg.sender) >= _amount, "Insufficient balance");
+
+        _transfer(msg.sender, address(this), _amount);
+        stakedBalances[msg.sender] = stakedBalances[msg.sender].add(_amount);
+
+        emit Staked(msg.sender, _amount);
     }
 
-    function withdraw(uint256 amount) external nonReentrant {
-        StakeInfo storage user = stakes[msg.sender];
-        require(user.amount >= amount, "Insufficient stake");
-        updatePool();
-        uint256 pending = (user.amount * accRewardPerShare) / 1e18 - user.rewardDebt;
-        if (pending > 0) {
-            token.transfer(msg.sender, pending);
-            emit RewardPaid(msg.sender, pending);
-        }
-        if (amount > 0) {
-            user.amount -= amount;
-            totalStaked -= amount;
-            token.transfer(msg.sender, amount);
-            emit Withdrawn(msg.sender, amount);
-        }
-        user.rewardDebt = (user.amount * accRewardPerShare) / 1e18;
+    function withdraw(uint256 _amount) external onlyStaker(msg.sender) {
+        require(_amount <= stakedBalances[msg.sender], "Insufficient staked balance");
+
+        _transfer(address(this), msg.sender, _amount);
+        stakedBalances[msg.sender] = stakedBalances[msg.sender].sub(_amount);
+
+        emit Withdrawn(msg.sender, _amount);
     }
 
-    function pendingReward(address userAddr) external view returns (uint256) {
-        StakeInfo storage user = stakes[userAddr];
-        uint256 _accRewardPerShare = accRewardPerShare;
-        if (block.timestamp > lastRewardTime && totalStaked != 0) {
-            uint256 elapsed = block.timestamp - lastRewardTime;
-            uint256 reward = elapsed * rewardPerSecond;
-            _accRewardPerShare += (reward * 1e18) / totalStaked;
-        }
-        return (user.amount * _accRewardPerShare) / 1e18 - user.rewardDebt;
+    function claimRewards() external onlyStaker(msg.sender) {
+        uint256 reward = calculateReward(msg.sender);
+        require(reward > 0, "No rewards to claim");
+
+        rewards[msg.sender] = 0;
+        _transfer(address(this), msg.sender, reward);
+
+        emit RewardClaimed(msg.sender, reward);
     }
 
-    function setRewardPerSecond(uint256 _rewardPerSecond) external onlyOwner {
-        updatePool();
-        rewardPerSecond = _rewardPerSecond;
+    // View functions
+    function calculateReward(address _user) public view returns (uint256) {
+        uint256 timeElapsed = block.timestamp.sub(lastRewardUpdate);
+        uint256 reward = stakedBalances[_user].mul(stakingRewardRate).mul(timeElapsed).div(stakingRewardInterval);
+        return reward.add(rewards[_user]);
+    }
+
+    function getStakedBalance(address _user) external view returns (uint256) {
+        return stakedBalances[_user];
+    }
+
+    function getRewards(address _user) external view returns (uint256) {
+        return calculateReward(_user);
+    }
+
+    // Admin functions
+    function setStakingRewardRate(uint256 _newRate) external onlyOwner {
+        stakingRewardRate = _newRate;
+    }
+
+    function setMinimumStakeAmount(uint256 _newAmount) external onlyOwner {
+        minimumStakeAmount = _newAmount;
+    }
+
+    // Fallback function
+    fallback() external payable {
+        revert("Direct ETH transfers not allowed");
+    }
+
+    // Receive function
+    receive() external payable {
+        revert("Direct ETH transfers not allowed");
     }
 }
