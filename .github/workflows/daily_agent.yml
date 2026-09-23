@@ -32,27 +32,38 @@ jobs:
       - name: Install Necessary Web Libraries
         run: pip install requests
 
+      # Each agent step below is marked continue-on-error: true. If one
+      # provider is down/overloaded/misconfigured that day, its step is
+      # reported as failed (shown as a warning in the run summary) but the
+      # job keeps going to the remaining agents, validation, and commit -
+      # a single provider outage no longer costs the whole day's progress.
+
       - name: Execute Gemini Agent
+        continue-on-error: true
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python ai_agent.py
 
       - name: Execute Groq Agent
+        continue-on-error: true
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: python ai_agent_groq.py
 
       - name: Execute Mistral Agent
+        continue-on-error: true
         env:
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
         run: python ai_agent_mistral.py
 
       - name: Execute OpenRouter Agent
+        continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: python ai_agent_openrouter.py
 
       - name: Execute GitHub Models Agent
+        continue-on-error: true
         env:
           GITHUB_MODELS_TOKEN: ${{ github.token }}
         run: python ai_agent_github_models.py
