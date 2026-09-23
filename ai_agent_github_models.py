@@ -25,10 +25,18 @@ NON_CHAT_KEYWORDS = ["embed", "whisper", "dall-e", "tts", "rerank", "vision"]
 # catalog is tried afterward, in whatever order the catalog returns it.
 PREFERRED_MODELS = ["openai/gpt-4.1", "openai/gpt-4o-mini", "openai/gpt-4.1-mini"]
 
+# GitHub's API gateway requires these headers on every call to models.github.ai -
+# without the Accept header specifically, responses aren't reliable plain JSON.
+BASE_HEADERS = {
+    "Authorization": f"Bearer {TOKEN}",
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28"
+}
+
 
 def get_ranked_models(token):
     """Lists GitHub Models' catalog and ranks preferred general-purpose chat models first."""
-    resp = requests.get(CATALOG_URL, headers={"Authorization": f"Bearer {token}"})
+    resp = requests.get(CATALOG_URL, headers=BASE_HEADERS)
     resp.raise_for_status()
     data = resp.json()
     raw_list = data if isinstance(data, list) else data.get("data", data.get("models", []))
@@ -65,7 +73,7 @@ prompt = common.build_prompt(
 )
 
 headers_base = {
-    "Authorization": f"Bearer {TOKEN}",
+    **BASE_HEADERS,
     "Content-Type": "application/json"
 }
 
@@ -81,7 +89,12 @@ def call_fn(model):
 
 
 def extract_text_fn(response):
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError:
+        print("GitHub Models response was not valid JSON:")
+        print(response.status_code, response.text[:500])
+        return None
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError):
@@ -91,9 +104,6 @@ def extract_text_fn(response):
 
 
 try:
-    if MODEL_CANDIDATES == FALLBACK_MODELS:
-        pass  # already logged the fallback reason above
-
     target_file, file_content = common.pick_unclaimed_file(
         MODEL_CANDIDATES, call_fn, extract_text_fn, claimed_files
     )
