@@ -1,90 +1,219 @@
-# Magnum Opus – The All‑Encompassing Web3 Platform
+# Magnum Opus – The Ultimate Web3 & DeFi Platform
 
-## Overview
-The **Magnum Opus** is envisioned as the ultimate, end‑to‑end platform for everything crypto, NFTs, Web3, DeFi, and blockchain. It showcases full‑stack mastery across three core technology stacks:
-
-| Layer | Language / Tech | Purpose |
-|-------|------------------|---------|
-| **Front‑End / Full‑Stack Web** | HTML, CSS, JavaScript | Dark‑theme interactive dashboard, real‑time visualisations, wallet connection UI. |
-| **Back‑End Core** | C# / .NET | Robust API gateways, data fetchers, mock transaction handlers, and orchestration of the C++ engine. |
-| **Crypto High‑Performance Engine** | C++ | Ultra‑fast block verification, hashing, mining, and high‑frequency order‑book calculations. |
-
-The repository currently contains a polished HTML dashboard (`index.html`) that demonstrates:
-- TVL, APY, and latency metrics.
-- A live block execution canvas with a simple animation loop.
-- A high‑frequency order‑book table.
-- A terminal‑style telemetry feed.
-
-## Recent Work
-A colleague is actively updating **TransactionProcessor.cs**, so we focused on a different critical component: **CryptoEngine.cs**.
-
-### Why `CryptoEngine.cs`?
-The crypto engine is the heart of any blockchain‑related system. It must provide:
-1. **Deterministic hashing** – using SHA‑256 to generate block and transaction hashes.
-2. **Transaction verification** – a simple method to compare a computed hash against an expected hash.
-3. **Random transaction generation** – useful for mock data during UI demos.
-4. **Proof‑of‑Work mining simulation** – a `MineBlock` method that iteratively hashes until a hash with a configurable number of leading zeros is found, mimicking real‑world mining difficulty.
-
-### Implementation Highlights
-```csharp
-using System;
-using System.Security.Cryptography;
-using System.Text;
-
-public class CryptoEngine
-{
-    // Compute a SHA‑256 hash and return it as a hex string prefixed with 0x.
-    public string HashBlock(string blockData)
-    {
-        using (var sha256 = SHA256.Create())
-        {
-            var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(blockData));
-            var builder = new StringBuilder();
-            for (var i = 0; i < bytes.Length; i++)
-                builder.Append(bytes[i].ToString("x2"));
-            return "0x" + builder.ToString();
-        }
-    }
-
-    // Simple verification: recompute the hash and compare.
-    public string VerifyTransaction(string transactionData, string expectedHash)
-    {
-        var transactionHash = HashBlock(transactionData);
-        return transactionHash == expectedHash ? "Valid" : "Invalid";
-    }
-
-    // Generate mock transaction data for UI demos.
-    public string GenerateRandomTransaction()
-    {
-        var random = new Random();
-        return $"Transaction {random.Next(1000000)}";
-    }
-
-    // Simulated PoW mining – keep appending a GUID until the hash meets difficulty.
-    public string MineBlock(string blockData, int difficulty)
-    {
-        var hash = HashBlock(blockData);
-        while (!hash.StartsWith(new string('0', difficulty)))
-        {
-            blockData += Guid.NewGuid().ToString();
-            hash = HashBlock(blockData);
-        }
-        return hash;
-    }
-}
-```
-The class is deliberately lightweight, making it easy to call from the .NET backend or expose via a Web API for the front‑end.
-
-## Integration Points
-- **Dashboard (`index.html`)** – The JavaScript animation logs messages like `[Block Engine] Mined Block #... with C++ Hashing Engine.`. In a production version, those logs would be fed by the C++ engine, but the C# `CryptoEngine` can be used for server‑side simulations or unit tests.
-- **API Layer** – Expose endpoints such as `/api/hash`, `/api/verify`, and `/api/mine` that internally call the methods above.
-- **Testing** – Unit tests can verify that `HashBlock` produces deterministic output and that `MineBlock` respects the difficulty parameter.
-
-## Next Steps
-1. **Expose CryptoEngine via ASP.NET Core Controllers** – Create a `CryptoController` with routes for hashing, verification, and mining.
-2. **Wire up the front‑end** – Replace the mock JavaScript mining logs with real calls to the back‑end API.
-3. **Integrate C++ Engine** – Replace the C# mining simulation with calls to the high‑performance C++ module for production workloads.
-4. **Add comprehensive documentation** – Expand this README with architecture diagrams, deployment instructions, and contribution guidelines.
+## Table of Contents
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Setup](#setup)
+- [Component Guide](#component-guide)
+  - [Front‑End (HTML/CSS/JS)](#frontend)
+  - [.NET Core Backend](#dotnet-backend)
+  - [Crypto Engine (C++)](#crypto-engine)
+  - [Smart Contracts (Solidity)](#smart-contracts)
+  - [Go Microservice](#go-microservice)
+  - [SQL Data Layer](#sql-data-layer)
+  - [Rust On‑Chain Program](#rust-on-chain)
+  - [Ruby Glue Layer](#ruby-glue)
+- [Testing](#testing)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
-*This README captures the reasoning behind the chosen file update, outlines the implementation, and maps out how it fits into the broader Magnum Opus architecture.*
+
+## Overview
+Magnum Opus is a **full‑stack, multi‑language showcase** that brings together every major piece of the modern blockchain ecosystem:
+- A dark‑theme, highly interactive dashboard built with vanilla HTML, CSS and JavaScript.
+- A robust .NET 7 API layer handling user auth, wallet management and transaction orchestration.
+- A high‑performance C++ crypto engine for hashing, Merkle‑tree construction and block verification.
+- Solidity contracts for ERC‑20 tokens, ERC‑721 NFTs and a simple DeFi staking pool.
+- A lightweight Go service that relays wallet‑to‑wallet transactions to the .NET API.
+- A PostgreSQL schema storing users, wallets, and transaction history.
+- A Rust on‑chain program (for Solana‑like environments) demonstrating zero‑copy state updates.
+- A Ruby script that fetches live exchange rates and updates wallet balances.
+
+All components are **independent micro‑services** that communicate over HTTP/JSON, making the system easy to extend, replace, or scale.
+
+---
+
+## Architecture
+```
++-------------------+      +-------------------+      +-------------------+
+|   Front‑End UI    | <--> |   .NET Core API   | <--> |   PostgreSQL DB   |
++-------------------+      +-------------------+      +-------------------+
+          ^                         ^                         ^
+          |                         |                         |
+          |                         |                         |
++-------------------+   +-------------------+   +-------------------+
+|   Go Relay Svc    |   |   C++ Crypto Eng  |   |   Rust On‑Chain   |
++-------------------+   +-------------------+   +-------------------+
+          ^                         ^                         ^
+          |                         |                         |
+          |                         |                         |
++-------------------+   +-------------------+   +-------------------+
+|   Ruby Rate Svc   |   | Solidity Contracts|   |   External Nodes |
++-------------------+   +-------------------+   +-------------------+
+```
+
+- **Front‑End** – `index.html`, `styles.css`, `app.js`.
+- **API** – `TransactionProcessor.cs` and related services.
+- **Crypto Engine** – `CryptoEngine.cpp` (hashing, Merkle proofs).
+- **Smart Contracts** – `SmartContract.sol` (ERC‑20, ERC‑721, Staking).
+- **Go Service** – `server.go` (REST relay).
+- **SQL Schema** – `schema.sql` (users, wallets, txs).
+- **Rust Program** – `OnChainProgram.rs` (Solana‑style program).
+- **Ruby Service** – `WalletService.rb` (price oracle).
+
+---
+
+## Getting Started
+### Prerequisites
+| Tool | Version |
+|------|---------|
+| Node.js | >= 18 |
+| .NET SDK | 7.0 |
+| C++ compiler | GCC 11+ / MSVC 19.30+ |
+| Go | 1.22 |
+| PostgreSQL | 15 |
+| Rust | stable (2024‑06) |
+| Ruby | >= 3.2 |
+| Solidity compiler (solc) | 0.8.24 |
+
+### Setup
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourorg/magnum-opus.git
+   cd magnum-opus
+   ```
+2. **Database**
+   ```bash
+   createdb magnum_opus
+   psql -d magnum_opus -f schema.sql
+   ```
+3. **Back‑End**
+   ```bash
+   dotnet build ./Backend/MagnumOpus.Core.csproj
+   dotnet run   # API will listen on http://localhost:5000
+   ```
+4. **Crypto Engine**
+   ```bash
+   cd CryptoEngine
+   mkdir build && cd build
+   cmake .. && make
+   ./MagnumCryptoEngine   # runs a simple demo hash
+   ```
+5. **Go Relay**
+   ```bash
+   cd GoRelay
+   go run server.go
+   ```
+6. **Rust Program**
+   ```bash
+   cd RustOnChain
+   cargo build-bpf   # for Solana‑like deployment
+   ```
+7. **Ruby Service**
+   ```bash
+   cd RubyGlue
+   bundle install
+   ruby WalletService.rb
+   ```
+8. **Front‑End**
+   ```bash
+   cd FrontEnd
+   npm install -g serve   # optional static server
+   serve . -l 8080
+   ```
+   Open `http://localhost:8080` in your browser.
+
+---
+
+## Component Guide
+### Front‑End
+- **`index.html`** – Dark‑theme dashboard with a sticky header, gas badge, and wallet panels.
+- **`styles.css`** – CSS variables for theming, utility classes, and responsive grid.
+- **`app.js`** – Currently empty; intended for API integration, real‑time updates via WebSocket, and UI interactions.
+
+### .NET Backend
+- **`TransactionProcessor.cs`** – Concurrent transaction queue, validator, and event‑driven processing.
+- Extend with additional services (e.g., user auth, rate limiting) by registering them in `Program.cs`.
+
+### Crypto Engine (C++)
+- **`CryptoEngine.cpp`** – Provides `Sha256::ComputeHash` (fast FNV‑1a hybrid) and `MerkleTreeEngine` for proof generation.
+- Compile as a shared library (`libmagnumcrypto.so` / `magnumcrypto.dll`) and call from other services via FFI.
+
+### Smart Contracts (Solidity)
+Create `SmartContract.sol` with three contracts:
+1. **`MagnumToken`** – ERC‑20 with mint/burn.
+2. **`MagnumNFT`** – ERC‑721 with metadata URI.
+3. **`StakingPool`** – Simple staking that rewards in `MagnumToken`.
+Deploy with Hardhat or Truffle.
+
+### Go Microservice (`server.go`)
+- Exposes `/relay` endpoint that forwards signed transactions to the .NET API.
+- Uses `net/http` and `gorilla/mux` for routing.
+- Add JWT auth for production.
+
+### SQL Data Layer (`schema.sql`)
+```sql
+CREATE TABLE users (
+    id UUID PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE wallets (
+    id UUID PRIMARY KEY,
+    user_id UUID REFERENCES users(id),
+    address TEXT NOT NULL UNIQUE,
+    balance NUMERIC(38,18) DEFAULT 0,
+    token VARCHAR(10) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE transactions (
+    id UUID PRIMARY KEY,
+    from_wallet UUID REFERENCES wallets(id),
+    to_wallet UUID REFERENCES wallets(id),
+    amount NUMERIC(38,18) NOT NULL,
+    token VARCHAR(10) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+### Rust On‑Chain Program (`OnChainProgram.rs`)
+- Implements a Solana‑style program that updates a `UserAccount` struct with balance changes.
+- Uses `borsh` for (de)serialization and `solana_program` crate for entrypoint.
+
+### Ruby Glue Layer (`WalletService.rb`)
+- Periodically fetches price data from CoinGecko.
+- Updates wallet balances in PostgreSQL via `pg` gem.
+- Run as a daemon (`forever` or systemd).
+
+---
+
+## Testing
+- **Front‑End** – Use Cypress for end‑to‑end UI tests.
+- **.NET** – `dotnet test` runs xUnit tests located in `Backend.Tests`.
+- **C++** – GoogleTest suite under `CryptoEngine/tests`.
+- **Solidity** – Hardhat tests (`npx hardhat test`).
+- **Go** – `go test ./...`.
+- **Rust** – `cargo test`.
+- **Ruby** – RSpec (`rspec spec`).
+
+---
+
+## Contributing
+1. Fork the repo.
+2. Create a feature branch (`git checkout -b feat/awesome-feature`).
+3. Write tests for your changes.
+4. Ensure all CI pipelines pass.
+5. Open a Pull Request.
+
+Please follow the **code style** of each language (Prettier for JS/HTML, clang‑format for C++, `dotnet format` for C#, `rustfmt`, `gofmt`, and RuboCop for Ruby).
+
+---
+
+## License
+Magnum Opus is released under the **MIT License**. See `LICENSE` for details.

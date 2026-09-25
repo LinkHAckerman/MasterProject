@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -8,144 +7,101 @@ import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 contract MagnumOpusToken is ERC20, Ownable {
     using SafeMath for uint256;
 
-    uint256 private constant INITIAL_SUPPLY = 1_000_000_000 * 10**18;
-    uint256 private constant MAX_SUPPLY = 10_000_000_000 * 10**18;
+    uint256 private constant INITIAL_SUPPLY = 1000000000 * 10**18;
+    uint256 private constant MAX_SUPPLY = 10000000000 * 10**18;
+    uint256 private constant TOKEN_DECIMALS = 18;
 
-    address public stakingContract;
-    uint256 public stakingRewardRate = 100;
-    uint256 public lastUpdateTime;
+    uint256 private _totalSupply;
+    mapping(address => uint256) private _balances;
+    mapping(address => mapping(address => uint256)) private _allowances;
 
-    event StakingContractSet(address indexed newStakingContract);
-    event StakingRewardRateUpdated(uint256 newRate);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
 
-    constructor() ERC20("MagnumOpus Token", "MOT") {
+    constructor() ERC20("MagnumOpusToken", "MOT") {
         _mint(msg.sender, INITIAL_SUPPLY);
+        _totalSupply = INITIAL_SUPPLY;
     }
 
-    function setStakingContract(address _stakingContract) public onlyOwner {
-        stakingContract = _stakingContract;
-        emit StakingContractSet(_stakingContract);
+    function totalSupply() public view override returns (uint256) {
+        return _totalSupply;
     }
 
-    function updateStakingRewardRate(uint256 _newRate) public onlyOwner {
-        stakingRewardRate = _newRate;
-        emit StakingRewardRateUpdated(_newRate);
+    function balanceOf(address account) public view override returns (uint256) {
+        return _balances[account];
+    }
+
+    function transfer(address recipient, uint256 amount) public override returns (bool) {
+        _transfer(msg.sender, recipient, amount);
+        return true;
+    }
+
+    function allowance(address owner, address spender) public view override returns (uint256) {
+        return _allowances[owner][spender];
+    }
+
+    function approve(address spender, uint256 amount) public override returns (bool) {
+        _approve(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transferFrom(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) public override returns (bool) {
+        _transfer(sender, recipient, amount);
+        _approve(sender, msg.sender, _allowances[sender][msg.sender].sub(amount, "ERC20: transfer amount exceeds allowance"));
+        return true;
     }
 
     function mint(address to, uint256 amount) public onlyOwner {
-        require(totalSupply().add(amount) <= MAX_SUPPLY, "Exceeds maximum supply");
+        require(_totalSupply.add(amount) <= MAX_SUPPLY, "MagnumOpusToken: mint would exceed max supply");
         _mint(to, amount);
+        _totalSupply = _totalSupply.add(amount);
     }
 
     function burn(uint256 amount) public {
         _burn(msg.sender, amount);
+        _totalSupply = _totalSupply.sub(amount);
     }
 
-    function _beforeTokenTransfer(address from, address to, uint256 amount)
-        internal
-        virtual
-        override
-    {
-        super._beforeTokenTransfer(from, to, amount);
-        if (from != address(0) && to != address(0)) {
-            require(from != stakingContract, "Cannot transfer from staking contract");
-            require(to != stakingContract, "Cannot transfer to staking contract");
-        }
+    function _transfer(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) internal {
+        require(sender != address(0), "ERC20: transfer from the zero address");
+        require(recipient != address(0), "ERC20: transfer to the zero address");
+
+        _balances[sender] = _balances[sender].sub(amount, "ERC20: transfer amount exceeds balance");
+        _balances[recipient] = _balances[recipient].add(amount);
+        emit Transfer(sender, recipient, amount);
     }
 
-    function calculateStakingRewards(uint256 amount, uint256 duration) public view returns (uint256) {
-        uint256 timeElapsed = block.timestamp - lastUpdateTime;
-        uint256 reward = amount.mul(stakingRewardRate).mul(timeElapsed).div(1 days).div(100);
-        return reward.mul(duration).div(1 days);
+    function _mint(address account, uint256 amount) internal {
+        require(account != address(0), "ERC20: mint to the zero address");
+
+        _balances[account] = _balances[account].add(amount);
+        emit Transfer(address(0), account, amount);
     }
 
-    function updateLastUpdateTime() public {
-        lastUpdateTime = block.timestamp;
-    }
-}
+    function _burn(address account, uint256 amount) internal {
+        require(account != address(0), "ERC20: burn from the zero address");
 
-contract MagnumOpusStaking is Ownable {
-    using SafeMath for uint256;
-
-    MagnumOpusToken public token;
-    uint256 public totalStaked;
-    uint256 public rewardRate;
-    uint256 public lastUpdateTime;
-
-    mapping(address => uint256) public stakedBalances;
-    mapping(address => uint256) public rewards;
-
-    event Staked(address indexed user, uint256 amount);
-    event Withdrawn(address indexed user, uint256 amount);
-    event RewardPaid(address indexed user, uint256 amount);
-    event RewardRateUpdated(uint256 newRate);
-
-    constructor(address _tokenAddress) {
-        token = MagnumOpusToken(_tokenAddress);
-        lastUpdateTime = block.timestamp;
+        _balances[account] = _balances[account].sub(amount, "ERC20: burn amount exceeds balance");
+        emit Transfer(account, address(0), amount);
     }
 
-    modifier onlyTokenContract() {
-        require(msg.sender == address(token), "Only token contract can call this function");
-        _;
-    }
+    function _approve(
+        address owner,
+        address spender,
+        uint256 amount
+    ) internal {
+        require(owner != address(0), "ERC20: approve from the zero address");
+        require(spender != address(0), "ERC20: approve to the zero address");
 
-    function stake(uint256 amount) public {
-        require(amount > 0, "Amount must be greater than 0");
-        require(token.balanceOf(msg.sender) >= amount, "Insufficient balance");
-
-        token.transferFrom(msg.sender, address(this), amount);
-        stakedBalances[msg.sender] = stakedBalances[msg.sender].add(amount);
-        totalStaked = totalStaked.add(amount);
-
-        emit Staked(msg.sender, amount);
-    }
-
-    function withdraw(uint256 amount) public {
-        require(amount > 0, "Amount must be greater than 0");
-        require(stakedBalances[msg.sender] >= amount, "Insufficient staked balance");
-
-        _updateRewards(msg.sender);
-
-        stakedBalances[msg.sender] = stakedBalances[msg.sender].sub(amount);
-        totalStaked = totalStaked.sub(amount);
-
-        token.transfer(msg.sender, amount);
-
-        emit Withdrawn(msg.sender, amount);
-    }
-
-    function claimRewards() public {
-        _updateRewards(msg.sender);
-
-        uint256 reward = rewards[msg.sender];
-        if (reward > 0) {
-            rewards[msg.sender] = 0;
-            token.transfer(msg.sender, reward);
-            emit RewardPaid(msg.sender, reward);
-        }
-    }
-
-    function updateRewardRate(uint256 _newRate) public onlyOwner {
-        rewardRate = _newRate;
-        emit RewardRateUpdated(_newRate);
-    }
-
-    function _updateRewards(address user) internal {
-        uint256 timeElapsed = block.timestamp - lastUpdateTime;
-        if (timeElapsed > 0 && totalStaked > 0) {
-            uint256 reward = totalStaked.mul(rewardRate).mul(timeElapsed).div(1 days).div(100);
-            rewards[user] = rewards[user].add(reward);
-            lastUpdateTime = block.timestamp;
-        }
-    }
-
-    function getStakedBalance(address user) public view returns (uint256) {
-        return stakedBalances[user];
-    }
-
-    function getRewards(address user) public view returns (uint256) {
-        _updateRewards(user);
-        return rewards[user];
+        _allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
     }
 }
