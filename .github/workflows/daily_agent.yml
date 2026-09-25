@@ -73,8 +73,8 @@ jobs:
 
       - name: Commit and Push Code to Repo
         run: |
-          git config --global user.name "Cloud-AI-Agent"
-          git config --global user.email "agent@github-actions.local"
+          git config --global user.name "LinkHAckerman"
+          git config --global user.email "151451018+LinkHAckerman@users.noreply.github.com"
           git add -A
           git commit -m "Autonomous multi-language architecture evolution (5 agents)" || echo "No changes to commit"
 
