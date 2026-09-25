@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -7,101 +8,118 @@ import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 contract MagnumOpusToken is ERC20, Ownable {
     using SafeMath for uint256;
 
-    uint256 private constant INITIAL_SUPPLY = 1000000000 * 10**18;
-    uint256 private constant MAX_SUPPLY = 10000000000 * 10**18;
-    uint256 private constant TOKEN_DECIMALS = 18;
-
+    // Token parameters
+    string private _name;
+    string private _symbol;
+    uint8 private _decimals;
     uint256 private _totalSupply;
-    mapping(address => uint256) private _balances;
-    mapping(address => mapping(address => uint256)) private _allowances;
 
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(address indexed owner, address indexed spender, uint256 value);
+    // Token distribution
+    address public teamWallet;
+    address public marketingWallet;
+    address public ecosystemFund;
 
-    constructor() ERC20("MagnumOpusToken", "MOT") {
-        _mint(msg.sender, INITIAL_SUPPLY);
-        _totalSupply = INITIAL_SUPPLY;
+    // Staking parameters
+    uint256 public stakingRewardRate;
+    uint256 public stakingRewardDuration;
+    uint256 public lastUpdateTime;
+    mapping(address => uint256) public stakingBalances;
+    mapping(address => uint256) public stakingRewards;
+
+    // Event declarations
+    event TokenPurchase(address indexed buyer, uint256 amount);
+    event StakingUpdate(address indexed user, uint256 amount, bool isStake);
+
+    // Modifiers
+    modifier onlyWhileActive() {
+        require(block.timestamp >= startTime && block.timestamp <= endTime, "Token sale is not active");
+        _;
     }
 
-    function totalSupply() public view override returns (uint256) {
-        return _totalSupply;
+    // Constructor
+    constructor(
+        string memory name,
+        string memory symbol,
+        uint8 decimals,
+        uint256 initialSupply,
+        address _teamWallet,
+        address _marketingWallet,
+        address _ecosystemFund
+    ) ERC20(name, symbol) {
+        _name = name;
+        _symbol = symbol;
+        _decimals = decimals;
+        _totalSupply = initialSupply * (10 ** uint256(decimals));
+        teamWallet = _teamWallet;
+        marketingWallet = _marketingWallet;
+        ecosystemFund = _ecosystemFund;
+
+        // Distribute initial supply
+        _mint(teamWallet, initialSupply.mul(30).mul(10 ** uint256(decimals)).div(100));
+        _mint(marketingWallet, initialSupply.mul(20).mul(10 ** uint256(decimals)).div(100));
+        _mint(ecosystemFund, initialSupply.mul(50).mul(10 ** uint256(decimals)).div(100));
+
+        // Initialize staking parameters
+        stakingRewardRate = 100; // 100 tokens per second
+        stakingRewardDuration = 30 days;
+        lastUpdateTime = block.timestamp;
     }
 
-    function balanceOf(address account) public view override returns (uint256) {
-        return _balances[account];
+    // Token sale functions
+    function buyTokens() external payable onlyWhileActive {
+        uint256 tokenAmount = msg.value.mul(10 ** uint256(_decimals));
+        require(tokenAmount > 0, "Invalid token amount");
+
+        _mint(msg.sender, tokenAmount);
+        emit TokenPurchase(msg.sender, tokenAmount);
     }
 
-    function transfer(address recipient, uint256 amount) public override returns (bool) {
-        _transfer(msg.sender, recipient, amount);
-        return true;
+    // Staking functions
+    function stake(uint256 amount) external {
+        require(amount > 0, "Stake amount must be greater than 0");
+        require(balanceOf(msg.sender) >= amount, "Insufficient balance");
+
+        _transfer(msg.sender, address(this), amount);
+        stakingBalances[msg.sender] = stakingBalances[msg.sender].add(amount);
+        emit StakingUpdate(msg.sender, amount, true);
     }
 
-    function allowance(address owner, address spender) public view override returns (uint256) {
-        return _allowances[owner][spender];
+    function unstake(uint256 amount) external {
+        require(amount > 0, "Unstake amount must be greater than 0");
+        require(stakingBalances[msg.sender] >= amount, "Insufficient staked balance");
+
+        _updateRewards(msg.sender);
+        stakingBalances[msg.sender] = stakingBalances[msg.sender].sub(amount);
+        _transfer(address(this), msg.sender, amount);
+        emit StakingUpdate(msg.sender, amount, false);
     }
 
-    function approve(address spender, uint256 amount) public override returns (bool) {
-        _approve(msg.sender, spender, amount);
-        return true;
+    function claimRewards() external {
+        _updateRewards(msg.sender);
+        uint256 reward = stakingRewards[msg.sender];
+        if (reward > 0) {
+            stakingRewards[msg.sender] = 0;
+            _transfer(address(this), msg.sender, reward);
+        }
     }
 
-    function transferFrom(
-        address sender,
-        address recipient,
-        uint256 amount
-    ) public override returns (bool) {
-        _transfer(sender, recipient, amount);
-        _approve(sender, msg.sender, _allowances[sender][msg.sender].sub(amount, "ERC20: transfer amount exceeds allowance"));
-        return true;
+    // Internal functions
+    function _updateRewards(address user) internal {
+        uint256 timePassed = block.timestamp.sub(lastUpdateTime);
+        if (timePassed > 0) {
+            uint256 reward = stakingBalances[user].mul(stakingRewardRate).mul(timePassed).div(1e18);
+            stakingRewards[user] = stakingRewards[user].add(reward);
+            lastUpdateTime = block.timestamp;
+        }
     }
 
-    function mint(address to, uint256 amount) public onlyOwner {
-        require(_totalSupply.add(amount) <= MAX_SUPPLY, "MagnumOpusToken: mint would exceed max supply");
-        _mint(to, amount);
-        _totalSupply = _totalSupply.add(amount);
+    // View functions
+    function getStakingRewards(address user) external view returns (uint256) {
+        _updateRewards(user);
+        return stakingRewards[user];
     }
 
-    function burn(uint256 amount) public {
-        _burn(msg.sender, amount);
-        _totalSupply = _totalSupply.sub(amount);
-    }
-
-    function _transfer(
-        address sender,
-        address recipient,
-        uint256 amount
-    ) internal {
-        require(sender != address(0), "ERC20: transfer from the zero address");
-        require(recipient != address(0), "ERC20: transfer to the zero address");
-
-        _balances[sender] = _balances[sender].sub(amount, "ERC20: transfer amount exceeds balance");
-        _balances[recipient] = _balances[recipient].add(amount);
-        emit Transfer(sender, recipient, amount);
-    }
-
-    function _mint(address account, uint256 amount) internal {
-        require(account != address(0), "ERC20: mint to the zero address");
-
-        _balances[account] = _balances[account].add(amount);
-        emit Transfer(address(0), account, amount);
-    }
-
-    function _burn(address account, uint256 amount) internal {
-        require(account != address(0), "ERC20: burn from the zero address");
-
-        _balances[account] = _balances[account].sub(amount, "ERC20: burn amount exceeds balance");
-        emit Transfer(account, address(0), amount);
-    }
-
-    function _approve(
-        address owner,
-        address spender,
-        uint256 amount
-    ) internal {
-        require(owner != address(0), "ERC20: approve from the zero address");
-        require(spender != address(0), "ERC20: approve to the zero address");
-
-        _allowances[owner][spender] = amount;
-        emit Approval(owner, spender, amount);
+    function getTotalStaked() external view returns (uint256) {
+        return balanceOf(address(this));
     }
 }
