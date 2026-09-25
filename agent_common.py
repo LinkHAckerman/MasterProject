@@ -8,15 +8,22 @@ Each provider script only needs to define:
     out of that provider's response shape
 
 Everything else (state file, manifest truncation, prompt text, JSON
-extraction, retry loop, collision handling) lives here once.
+extraction, retry loop, collision handling, README cooldown) lives here once.
 """
 
 import os
 import json
 import time
 import requests
+from datetime import date
 
 STATE_FILE = ".agent_state.json"
+
+# Tracks README.md's last-updated date. Unlike STATE_FILE (which is reset
+# at the start of every workflow run), this file is NOT reset daily - it
+# persists across runs so the cooldown below actually works over time.
+README_STATE_FILE = ".readme_state.json"
+README_MIN_DAYS_BETWEEN_UPDATES = 7  # tune to taste
 
 # Canonical list of files the agents are allowed to touch. Keep this in
 # sync with what's actually in the repo root - if an agent invents a new
@@ -67,9 +74,49 @@ def save_claim(claimed_files, target_file):
         json.dump(state, f)
 
 
+def load_readme_last_updated():
+    if os.path.exists(README_STATE_FILE):
+        try:
+            with open(README_STATE_FILE, "r") as f:
+                return json.load(f).get("last_updated")
+        except Exception:
+            pass
+    return None
+
+
+def record_readme_updated_today():
+    with open(README_STATE_FILE, "w") as f:
+        json.dump({"last_updated": date.today().isoformat()}, f)
+
+
+def readme_is_due():
+    """True if README.md hasn't been updated recently enough to still be
+    on cooldown - i.e. it's actually available to pick again."""
+    last = load_readme_last_updated()
+    if not last:
+        return True
+    try:
+        last_date = date.fromisoformat(last)
+    except ValueError:
+        return True
+    return (date.today() - last_date).days >= README_MIN_DAYS_BETWEEN_UPDATES
+
+
 def get_available_files(claimed_files):
-    available = [f for f in ALL_PROJECT_FILES if f not in claimed_files]
-    return available if available else ALL_PROJECT_FILES
+    """Files not yet claimed today, with README.md filtered out unless its
+    cooldown has elapsed - unless that filtering would leave nothing to
+    pick, in which case README is allowed back in rather than starving
+    every agent that day."""
+    base_available = [f for f in ALL_PROJECT_FILES if f not in claimed_files]
+    if not base_available:
+        base_available = list(ALL_PROJECT_FILES)
+
+    if "README.md" in base_available and not readme_is_due():
+        filtered = [f for f in base_available if f != "README.md"]
+        if filtered:
+            return filtered
+
+    return base_available
 
 
 def build_manifest():
@@ -241,3 +288,5 @@ def write_file_and_claim(target_file, file_content, claimed_files):
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(file_content)
     save_claim(claimed_files, target_file)
+    if target_file == "README.md":
+        record_readme_updated_today()
