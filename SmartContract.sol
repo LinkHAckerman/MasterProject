@@ -14,112 +14,92 @@ contract MagnumOpusToken is ERC20, Ownable {
     uint8 private _decimals;
     uint256 private _totalSupply;
 
-    // Token distribution
-    address public teamWallet;
-    address public marketingWallet;
-    address public ecosystemFund;
-
     // Staking parameters
-    uint256 public stakingRewardRate;
-    uint256 public stakingRewardDuration;
+    uint256 public stakingRewardRate = 1 ether;
+    uint256 public stakingDuration = 30 days;
     uint256 public lastUpdateTime;
-    mapping(address => uint256) public stakingBalances;
-    mapping(address => uint256) public stakingRewards;
+    mapping(address => uint256) public stakedBalances;
+    mapping(address => uint256) public rewards;
 
-    // Event declarations
-    event TokenPurchase(address indexed buyer, uint256 amount);
-    event StakingUpdate(address indexed user, uint256 amount, bool isStake);
-
-    // Modifiers
-    modifier onlyWhileActive() {
-        require(block.timestamp >= startTime && block.timestamp <= endTime, "Token sale is not active");
-        _;
-    }
+    // Events
+    event Staked(address indexed user, uint256 amount);
+    event Withdrawn(address indexed user, uint256 amount);
+    event RewardPaid(address indexed user, uint256 amount);
 
     // Constructor
     constructor(
         string memory name,
         string memory symbol,
         uint8 decimals,
-        uint256 initialSupply,
-        address _teamWallet,
-        address _marketingWallet,
-        address _ecosystemFund
+        uint256 initialSupply
     ) ERC20(name, symbol) {
         _name = name;
         _symbol = symbol;
         _decimals = decimals;
-        _totalSupply = initialSupply * (10 ** uint256(decimals));
-        teamWallet = _teamWallet;
-        marketingWallet = _marketingWallet;
-        ecosystemFund = _ecosystemFund;
-
-        // Distribute initial supply
-        _mint(teamWallet, initialSupply.mul(30).mul(10 ** uint256(decimals)).div(100));
-        _mint(marketingWallet, initialSupply.mul(20).mul(10 ** uint256(decimals)).div(100));
-        _mint(ecosystemFund, initialSupply.mul(50).mul(10 ** uint256(decimals)).div(100));
-
-        // Initialize staking parameters
-        stakingRewardRate = 100; // 100 tokens per second
-        stakingRewardDuration = 30 days;
-        lastUpdateTime = block.timestamp;
-    }
-
-    // Token sale functions
-    function buyTokens() external payable onlyWhileActive {
-        uint256 tokenAmount = msg.value.mul(10 ** uint256(_decimals));
-        require(tokenAmount > 0, "Invalid token amount");
-
-        _mint(msg.sender, tokenAmount);
-        emit TokenPurchase(msg.sender, tokenAmount);
+        _mint(msg.sender, initialSupply);
+        _totalSupply = initialSupply;
     }
 
     // Staking functions
     function stake(uint256 amount) external {
-        require(amount > 0, "Stake amount must be greater than 0");
+        require(amount > 0, "Amount must be greater than 0");
         require(balanceOf(msg.sender) >= amount, "Insufficient balance");
 
         _transfer(msg.sender, address(this), amount);
-        stakingBalances[msg.sender] = stakingBalances[msg.sender].add(amount);
-        emit StakingUpdate(msg.sender, amount, true);
+        stakedBalances[msg.sender] = stakedBalances[msg.sender].add(amount);
+        lastUpdateTime = block.timestamp;
+
+        emit Staked(msg.sender, amount);
     }
 
-    function unstake(uint256 amount) external {
-        require(amount > 0, "Unstake amount must be greater than 0");
-        require(stakingBalances[msg.sender] >= amount, "Insufficient staked balance");
+    function withdraw(uint256 amount) external {
+        require(amount > 0, "Amount must be greater than 0");
+        require(stakedBalances[msg.sender] >= amount, "Insufficient staked balance");
 
         _updateRewards(msg.sender);
-        stakingBalances[msg.sender] = stakingBalances[msg.sender].sub(amount);
+        stakedBalances[msg.sender] = stakedBalances[msg.sender].sub(amount);
         _transfer(address(this), msg.sender, amount);
-        emit StakingUpdate(msg.sender, amount, false);
+
+        emit Withdrawn(msg.sender, amount);
     }
 
     function claimRewards() external {
         _updateRewards(msg.sender);
-        uint256 reward = stakingRewards[msg.sender];
+        uint256 reward = rewards[msg.sender];
+        rewards[msg.sender] = 0;
+
         if (reward > 0) {
-            stakingRewards[msg.sender] = 0;
             _transfer(address(this), msg.sender, reward);
+            emit RewardPaid(msg.sender, reward);
         }
     }
 
     // Internal functions
     function _updateRewards(address user) internal {
         uint256 timePassed = block.timestamp.sub(lastUpdateTime);
-        if (timePassed > 0) {
-            uint256 reward = stakingBalances[user].mul(stakingRewardRate).mul(timePassed).div(1e18);
-            stakingRewards[user] = stakingRewards[user].add(reward);
+        if (timePassed > 0 && stakedBalances[user] > 0) {
+            uint256 reward = stakedBalances[user].mul(stakingRewardRate).mul(timePassed).div(stakingDuration);
+            rewards[user] = rewards[user].add(reward);
             lastUpdateTime = block.timestamp;
         }
     }
 
-    // View functions
-    function getStakingRewards(address user) external view returns (uint256) {
-        _updateRewards(user);
-        return stakingRewards[user];
+    // Override transfer function to prevent transfers during staking
+    function transfer(address recipient, uint256 amount)
+        public
+        override
+        returns (bool)
+    {
+        require(stakedBalances[msg.sender] == 0, "Cannot transfer while staking");
+        return super.transfer(recipient, amount);
     }
 
-    function getTotalStaked() external view returns (uint256) {
-        return balanceOf(address(this));
+    // Admin functions
+    function setStakingRewardRate(uint256 newRate) external onlyOwner {
+        stakingRewardRate = newRate;
+    }
+
+    function setStakingDuration(uint256 newDuration) external onlyOwner {
+        stakingDuration = newDuration;
     }
 }
