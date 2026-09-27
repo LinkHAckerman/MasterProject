@@ -1,188 +1,203 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"sync"
-	"time"
+    "encoding/json"
+    "fmt"
+    "log"
+    "net/http"
+    "sync"
+    "time"
+    "github.com/gorilla/mux"
 )
 
-// --- Magnum Opus: Web3 & DeFi Nexus Engine ---
-// Go Microservice: Wallet & Transaction Relay
-// Purpose: Lightweight, high-performance relay for wallet state queries
-// and transaction propagation across supported ecosystems.
+// Wallet represents a blockchain wallet
+// with balance and transaction history
 
-// --- Core Types ---
-
+// Wallet represents a blockchain wallet with balance and transaction history
 type Wallet struct {
-	Address     string  `json:"address"`
-	BalanceEth  float64 `json:"balance_eth"`
-	BalanceMopus float64 `json:"balance_mopus"`
-	BalanceUsdc float64 `json:"balance_usdc"`
-	ChainID     uint64  `json:"chain_id"`
-	Connected   bool    `json:"connected"`
+    Address     string      `json:"address"`
+    Balance     float64     `json:"balance"`
+    Nonce       uint64      `json:"nonce"`
+    Transactions []Transaction `json:"transactions"`
 }
 
+// Transaction represents a blockchain transaction
 type Transaction struct {
-	ID        string  `json:"id"`
-	From      string  `json:"from"`
-	To        string  `json:"to"`
-	Value     float64 `json:"value"`
-	GasPrice  uint64  `json:"gas_price"`
-	GasLimit  uint64  `json:"gas_limit"`
-	Status    string  `json:"status"`
-	Timestamp int64   `json:"timestamp"`
+    Hash        string    `json:"hash"`
+    From        string    `json:"from"`
+    To          string    `json:"to"`
+    Value       float64   `json:"value"`
+    GasPrice    float64   `json:"gasPrice"`
+    GasLimit    uint64    `json:"gasLimit"`
+    Nonce       uint64    `json:"nonce"`
+    Timestamp   time.Time `json:"timestamp"`
+    Status      string    `json:"status"`
 }
 
-type RelayRequest struct {
-	Tx      Transaction `json:"tx"`
-	Source  string      `json:"source"`
-	Sig     string      `json:"sig"`
+// WalletService manages wallet operations
+// with thread-safe access
+
+type WalletService struct {
+    wallets map[string]*Wallet
+    mu      sync.RWMutex
 }
 
-type RelayResponse struct {
-	Success bool     `json:"success"`
-	TxID    string   `json:"tx_id"`
-	Message string   `json:"message"`
-	Details *Transaction `json:"details,omitempty"`
+// NewWalletService creates a new WalletService
+func NewWalletService() *WalletService {
+    return &WalletService{
+        wallets: make(map[string]*Wallet),
+    }
 }
 
-// --- Mock State ---
+// GetWallet retrieves a wallet by address
+func (ws *WalletService) GetWallet(address string) (*Wallet, error) {
+    ws.mu.RLock()
+    defer ws.mu.RUnlock()
 
-var (
-	wallets map[string]*Wallet
-	mempool []Transaction
-	mu      sync.RWMutex
-)
-
-func initState() {
-	wallets = map[string]*Wallet{
-		"0xAbC123": {Address: "0xAbC123", BalanceEth: 14.8520, BalanceMopus: 4500.00, BalanceUsdc: 18500.25, ChainID: 1, Connected: true},
-		"0xDef456": {Address: "0xDef456", BalanceEth: 2.3150, BalanceMopus: 1200.50, BalanceUsdc: 50000.00, ChainID: 1, Connected: true},
-	}
-	mempool = []Transaction{}
+    wallet, exists := ws.wallets[address]
+    if !exists {
+        return nil, fmt.Errorf("wallet not found")
+    }
+    return wallet, nil
 }
 
-// --- HTTP Handlers ---
+// CreateWallet creates a new wallet
+func (ws *WalletService) CreateWallet(address string) *Wallet {
+    ws.mu.Lock()
+    defer ws.mu.Unlock()
 
-func handleWalletBalance(w http.ResponseWriter, r *http.Request) {
-	mu.RLock()
-	defer mu.RUnlock()
-
-	addr := r.PathValue("address")
-	if addr == "" {
-		http.Error(w, "address parameter required", http.StatusBadRequest)
-		return
-	}
-	wlt, exists := wallets[addr]
-	if !exists {
-		wlt = &Wallet{Address: addr, BalanceEth: 0, BalanceMopus: 0, BalanceUsdc: 0, ChainID: 1, Connected: false}
-	}
-	wltJSON, _ := json.Marshal(wlt)
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Theme", "magnum-opus-dark")
-	w.Write(wltJSON)
+    wallet := &Wallet{
+        Address: address,
+        Balance: 0,
+        Nonce:   0,
+    }
+    ws.wallets[address] = wallet
+    return wallet
 }
 
-func handleRelayTx(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+// AddTransaction adds a transaction to a wallet
+func (ws *WalletService) AddTransaction(tx Transaction) error {
+    ws.mu.Lock()
+    defer ws.mu.Unlock()
 
-	var req RelayRequest
-	dec := json.NewDecoder(r.Body)
-	if err := dec.Decode(&req); err != nil {
-		http.Error(w, "invalid JSON payload", http.StatusBadRequest)
-		return
-	}
-	mu.Lock()
-	mempool = append(mempool, req.Tx)
-	mu.Unlock()
+    fromWallet, exists := ws.wallets[tx.From]
+    if !exists {
+        return fmt.Errorf("sender wallet not found")
+    }
 
-	// Simulate consensus inclusion
-	tx := req.Tx
-tx.Status = "pending"
-tx.Timestamp = time.Now().Unix()
+    toWallet, exists := ws.wallets[tx.To]
+    if !exists {
+        return fmt.Errorf("recipient wallet not found")
+    }
 
-	resp := RelayResponse{
-		Success: true,
-		TxID:    fmt.Sprintf("0x%x", []byte(tx.ID[:8])),
-		Message: "transaction relayed to mempool",
-		Details: &tx,
+    // Update balances
+    fromWallet.Balance -= tx.Value
+    toWallet.Balance += tx.Value
+
+    // Update nonces
+    fromWallet.Nonce++
+    toWallet.Nonce++
+
+    // Add transaction to both wallets
+    fromWallet.Transactions = append(fromWallet.Transactions, tx)
+    toWallet.Transactions = append(toWallet.Transactions, tx)
+
+    return nil
 }
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Transaction-ID", resp.TxID)
-	json.NewEncoder(w).Encode(resp)
+// GetTransactionHistory retrieves transaction history for a wallet
+func (ws *WalletService) GetTransactionHistory(address string) ([]Transaction, error) {
+    ws.mu.RLock()
+    defer ws.mu.RUnlock()
+
+    wallet, exists := ws.wallets[address]
+    if !exists {
+        return nil, fmt.Errorf("wallet not found")
+    }
+    return wallet.Transactions, nil
 }
 
-func handleMempoolStats(w http.ResponseWriter, r *http.Request) {
-	mu.RLock()
-	defer mu.RUnlock()
+// WalletHandler handles wallet-related HTTP requests
 
-	total := len(mempool)
-	var totalValue float64
-	for _, tx := range mempool {
-		totalValue += tx.Value
-	}
-	type Stats struct {
-		TotalTxs   int     `json:"total_txs"`
-		TotalValue float64 `json:"total_value"`
-		AvgFee     float64 `json:"avg_fee"`
-	}
-	json.NewEncoder(w).Encode(Stats{TotalTxs: total, TotalValue: totalValue})
+type WalletHandler struct {
+    service *WalletService
 }
 
-// --- Middleware ---
-
-func loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		next(w, r)
-		fmt.Printf("[%s] %s %s %v\n", r.Method, r.URL.Path, r.RemoteAddr, time.Since(start))
-	}
+// NewWalletHandler creates a new WalletHandler
+func NewWalletHandler(service *WalletService) *WalletHandler {
+    return &WalletHandler{service: service}
 }
 
-func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		next(w, r)
-	}
+// GetWalletHandler handles GET requests for wallet information
+func (wh *WalletHandler) GetWalletHandler(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    address := vars["address"]
+
+    wallet, err := wh.service.GetWallet(address)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusNotFound)
+        return
+    }
+
+    json.NewEncoder(w).Encode(wallet)
 }
 
-// --- Main ---
+// CreateWalletHandler handles POST requests for creating a new wallet
+func (wh *WalletHandler) CreateWalletHandler(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    address := vars["address"]
+
+    wallet := wh.service.CreateWallet(address)
+    json.NewEncoder(w).Encode(wallet)
+}
+
+// AddTransactionHandler handles POST requests for adding a transaction
+func (wh *WalletHandler) AddTransactionHandler(w http.ResponseWriter, r *http.Request) {
+    var tx Transaction
+    if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    if err := wh.service.AddTransaction(tx); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    w.WriteHeader(http.StatusCreated)
+}
+
+// GetTransactionHistoryHandler handles GET requests for transaction history
+func (wh *WalletHandler) GetTransactionHistoryHandler(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    address := vars["address"]
+
+    transactions, err := wh.service.GetTransactionHistory(address)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusNotFound)
+        return
+    }
+
+    json.NewEncoder(w).Encode(transactions)
+}
 
 func main() {
-	initState()
+    // Initialize wallet service
+    walletService := NewWalletService()
 
-	mux := http.NewServeMux()
+    // Initialize wallet handler
+    walletHandler := NewWalletHandler(walletService)
 
-	mux.HandleFunc("/wallet/{address}/balance", handleWalletBalance)
-	mux.HandleFunc("/tx/relay", handleRelayTx)
-	mux.HandleFunc("/mempool/stats", handleMempoolStats)
+    // Create router
+    r := mux.NewRouter()
 
-	wrapped := corsMiddleware(loggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	}))
+    // Define routes
+    r.HandleFunc("/wallets/{address}", walletHandler.GetWalletHandler).Methods("GET")
+    r.HandleFunc("/wallets/{address}", walletHandler.CreateWalletHandler).Methods("POST")
+    r.HandleFunc("/transactions", walletHandler.AddTransactionHandler).Methods("POST")
+    r.HandleFunc("/wallets/{address}/transactions", walletHandler.GetTransactionHistoryHandler).Methods("GET")
 
-	srv := &http.Server{
-		Addr:         ":8080",
-		Handler:      wrapped,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-
-	fmt.Printf("[Magnum Opus] Go Relay Service starting on %s\n", srv.Addr)
-	if err := srv.ListenAndServe(); err != nil {
-		fmt.Printf("[Magnum Opus] Server error: %v\n", err)
-	}
+    // Start server
+    log.Println("Starting server on :8080")
+    log.Fatal(http.ListenAndServe(":8080", r))
 }
