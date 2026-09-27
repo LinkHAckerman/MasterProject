@@ -213,6 +213,8 @@ CREATE TABLE transactions (
 
 Please follow the **code style** of each language (Prettier for JS/HTML, clang‑format for C++, `dotnet format` for C#, `rustfmt`, `gofmt`, and RuboCop for Ruby).
 
+All contributors must read and agree to our [Individual CLA](./CLA.md) before a pull request can be merged.
+
 ---
 
 ## License
