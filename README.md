@@ -216,4 +216,12 @@ Please follow the **code style** of each language (Prettier for JS/HTML, clang�
 ---
 
 ## License
-Magnum Opus is released under the **MIT License**. See `LICENSE` for details.
+
+Magnum Opus is released under the **Business Source License 1.1 (BUSL-1.1)**.
+
+Non-production use — including forking, modifying, and contributing — is
+freely permitted. Production or commercial use requires a separate license
+from the Licensor until the Change Date (2030-09-27), at which point the
+project automatically converts to the **MIT License**.
+
+See [`LICENSE`](./LICENSE) for the full terms.
