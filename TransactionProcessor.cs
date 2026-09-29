@@ -1,1 +1,154 @@
-using System;\nusing System.Collections.Generic;\nusing System.Threading.Tasks;\nusing System.Security.Cryptography;\nusing System.Text;\n\nnamespace MagnumOpus.Core\n{\n    public record Wallet(string Address, decimal BalanceEth, decimal BalanceUsdt);\n\n    public record Transaction(string From, string To, decimal AmountEth, decimal AmountUsdt, string Signature, long Timestamp);\n\n    public class TransactionProcessor\n    {\n        private readonly IDictionary<string, Wallet> _wallets;\n        private readonly List<Transaction> _ledger = new();\n\n        public TransactionProcessor(IDictionary<string, Wallet> initialWallets)\n        {\n            _wallets = new Dictionary<string, Wallet>(initialWallets);\n        }\n\n        public async Task<bool> ProcessTransactionAsync(Transaction tx)\n        {\n            if (!ValidateTransaction(tx))\n                return false;\n\n            await UpdateBalancesAsync(tx);\n            _ledger.Add(tx);\n            OnTransactionProcessed?.Invoke(this, tx);\n            return true;\n        }\n\n        private bool ValidateTransaction(Transaction tx)\n        {\n            // Basic checks\n            if (string.IsNullOrWhiteSpace(tx.From) ||\n                string.IsNullOrWhiteSpace(tx.To) ||\n                tx.Timestamp <= 0)\n                return false;\n\n            if (!_wallets.ContainsKey(tx.From) || !_wallets.ContainsKey(tx.To))\n                return false;\n\n            // Simple signature verification (hash of concatenated fields)\n            var data = $"{tx.From}{tx.To}{tx.AmountEth}{tx.AmountUsdt}{tx.Timestamp}";\n            var expectedSig = ComputeHash(data);\n            return string.Equals(expectedSig, tx.Signature, StringComparison.OrdinalIgnoreCase);\n        }\n\n        private async Task UpdateBalancesAsync(Transaction tx)\n        {\n            // Simulate async I/O\n            await Task.Yield();\n\n            var fromWallet = _wallets[tx.From];\n            var toWallet = _wallets[tx.To];\n\n            if (tx.AmountEth > 0)\n            {\n                if (fromWallet.BalanceEth < tx.AmountEth)\n                    throw new InvalidOperationException("Insufficient ETH balance.");\n                fromWallet = fromWallet with { BalanceEth = fromWallet.BalanceEth - tx.AmountEth };\n                toWallet = toWallet with { BalanceEth = toWallet.BalanceEth + tx.AmountEth };\n            }\n\n            if (tx.AmountUsdt > 0)\n            {\n                if (fromWallet.BalanceUsdt < tx.AmountUsdt)\n                    throw new InvalidOperationException("Insufficient USDT balance.");\n                fromWallet = fromWallet with { BalanceUsdt = fromWallet.BalanceUsdt - tx.AmountUsdt };\n                toWallet = toWallet with { BalanceUsdt = toWallet.BalanceUsdt + tx.AmountUsdt };\n            }\n\n            _wallets[tx.From] = fromWallet;\n            _wallets[tx.To] = toWallet;\n        }\n\n        private static string ComputeHash(string input)\n        {\n            using var sha256 = SHA256.Create();\n            var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(input));\n            var sb = new StringBuilder();\n            foreach (var b in bytes)\n                sb.Append(b.ToString("x2"));\n            return sb.ToString();\n        }\n\n        public event EventHandler<Transaction>? OnTransactionProcessed;\n\n        public IReadOnlyDictionary<string, Wallet> Wallets => (IReadOnlyDictionary<string, Wallet>)_wallets;\n\n        public IReadOnlyList<Transaction> Ledger => _ledger.AsReadOnly();\n    }\n}\n
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace MagnumOpus.BackendCore
+{
+    public enum TransactionStatus
+    {
+        Pending,
+        Processing,
+        Validated,
+        Confirmed,
+        Failed,
+        Reverted
+    }
+
+    public enum NetworkType
+    {
+        EthereumMainnet,
+        Polygon,
+        Arbitrum,
+        Solana,
+        Bitcoin
+    }
+
+    public record BlockchainTransaction(
+        string TxHash,
+        string Sender,
+        string Recipient,
+        decimal Value,
+        decimal GasPriceGwei,
+        long Nonce,
+        NetworkType Network,
+        DateTime Timestamp
+    )
+    {
+        public TransactionStatus Status { get; set; } = TransactionStatus.Pending;
+        public int Confirmations { get; set; } = 0;
+        public string BlockHash { get; set; } = string.Empty;
+        public long BlockNumber { get; set; } = 0;
+    }
+
+    public interface ITransactionProcessor
+    {
+        Task<string> SubmitTransactionAsync(BlockchainTransaction tx);
+        Task<BlockchainTransaction?> GetTransactionStatusAsync(string txHash);
+        Task<IEnumerable<BlockchainTransaction>> GetPendingTransactionsAsync();
+        Task ProcessQueueAsync(CancellationToken cancellationToken);
+    }
+
+    public class TransactionProcessor : ITransactionProcessor
+    {
+        private readonly ConcurrentDictionary<string, BlockchainTransaction> _transactionPool = new();
+        private readonly ConcurrentQueue<string> _processingQueue = new();
+        private readonly SemaphoreSlim _semaphore = new(10, 10);
+        private long _currentBlockNumber = 18_500_000;
+
+        public async Task<string> SubmitTransactionAsync(BlockchainTransaction tx)
+        {
+            if (string.IsNullOrWhiteSpace(tx.TxHash))
+            {
+                tx = tx with { TxHash = GenerateTxHash(tx) };
+            }
+
+            if (!_transactionPool.TryAdd(tx.TxHash, tx))
+            {
+                throw new InvalidOperationException($"Transaction {tx.TxHash} already exists in the pool.");
+            }
+
+            _processingQueue.Enqueue(tx.TxHash);
+            return await Task.FromResult(tx.TxHash);
+        }
+
+        public Task<BlockchainTransaction?> GetTransactionStatusAsync(string txHash)
+        {
+            _transactionPool.TryGetValue(txHash, out var tx);
+            return Task.FromResult(tx);
+        }
+
+        public Task<IEnumerable<BlockchainTransaction>> GetPendingTransactionsAsync()
+        {
+            var pending = _transactionPool.Values
+                .Where(t => t.Status == TransactionStatus.Pending || t.Status == TransactionStatus.Processing)
+                .ToList();
+            return Task.FromResult<IEnumerable<BlockchainTransaction>>(pending);
+        }
+
+        public async Task ProcessQueueAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                if (_processingQueue.TryDequeue(out var txHash))
+                {
+                    if (_transactionPool.TryGetValue(txHash, out var tx))
+                    {
+                        await _semaphore.WaitAsync(cancellationToken);
+                        _ = Task.Run(async ()
+                        => {
+                            try
+                            {
+                                tx.Status = TransactionStatus.Processing;
+                                await SimulateNetworkValidationAsync(tx);
+                                tx.Status = TransactionStatus.Validated;
+                                tx.BlockNumber = Interlocked.Increment(ref _currentBlockNumber);
+                                tx.BlockHash = "0x" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(tx.BlockNumber.ToString())));
+                                tx.Confirmations = 12;
+                                tx.Status = TransactionStatus.Confirmed;
+                            }
+                            catch
+                            {
+                                tx.Status = TransactionStatus.Failed;
+                            }
+                            finally
+                            {
+                                _semaphore.Release();
+                            }
+                        }, cancellationToken);
+                    }
+                }
+                else
+                {
+                    await Task.Delay(100, cancellationToken);
+                }
+            }
+        }
+
+        private static async Task SimulateNetworkValidationAsync(BlockchainTransaction tx)
+        {
+            int delayMs = tx.Network switch
+            {
+                NetworkType.Solana => 50,
+                NetworkType.Arbitrum => 200,
+                NetworkType.Polygon => 400,
+                NetworkType.EthereumMainnet => 1200,
+                NetworkType.Bitcoin => 3000,
+                _ => 500
+            };
+            await Task.Delay(delayMs);
+        }
+
+        private static string GenerateTxHash(BlockchainTransaction tx)
+        {
+            string rawData = $"{tx.Sender}:{tx.Recipient}:{tx.Value}:{tx.Nonce}:{tx.Timestamp.Ticks}:{tx.Network}";
+            byte[] bytes = Encoding.UTF8.GetBytes(rawData);
+            byte[] hash = SHA256.HashData(bytes);
+            return "0x" + Convert.ToHexString(hash).ToLowerInvariant();
+        }
+    }
+}
