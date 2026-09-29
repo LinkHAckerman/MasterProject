@@ -10,13 +10,21 @@ BLOCKING checks (fail the workflow, commit is skipped):
   .js   -> node --check
   .go   -> gofmt -l        (parses syntax; doesn't need a go.mod)
   .cpp  -> g++ -fsyntax-only
-  .rs   -> rustc --emit=metadata (full type-check as a library, no Cargo.toml needed)
   .rb   -> ruby -c          (syntax check only, no gem dependencies needed)
 
 ADVISORY checks (printed as a warning only, never blocks the commit):
   .sql  -> sqlite3 parse (schema.sql may use dialect features sqlite
            rejects even when valid for the intended database, so this is
            informational rather than authoritative)
+  .rs   -> rustc --emit=metadata, no Cargo.toml/dependencies available.
+           Real on-chain Rust (OnChainProgram.rs) depends on external
+           crates like solana_program and borsh - a bare rustc check has
+           no way to resolve those, so it will always report "cannot find
+           crate" and cascading errors for legitimate, correct code. This
+           was tried as a blocking check and produced exactly that false
+           failure, so it's advisory-only rather than pinning a full
+           Cargo+Solana toolchain (which would trade this problem for a
+           different one: stale pinned crate versions breaking checks).
 
 NOT CHECKED (no lightweight tool available without heavier CI setup):
   .cs   (C# - would need a scaffolded .csproj to compile a single file)
@@ -69,13 +77,13 @@ def validate_cpp(path):
     return run(["g++", "-fsyntax-only", "-std=c++17", path])
 
 
-def validate_rust(path):
-    return run(["rustc", "--edition", "2021", "--crate-type", "lib",
-                "--emit=metadata", "-o", "/dev/null", path])
-
-
 def validate_ruby(path):
     return run(["ruby", "-c", path])
+
+
+def validate_rust_advisory(path):
+    return run(["rustc", "--edition", "2021", "--crate-type", "lib",
+                "--emit=metadata", "-o", "/dev/null", path])
 
 
 def validate_sql_advisory(path):
@@ -87,12 +95,12 @@ BLOCKING_VALIDATORS = {
     ".js": validate_js,
     ".go": validate_go,
     ".cpp": validate_cpp,
-    ".rs": validate_rust,
     ".rb": validate_ruby,
 }
 
 ADVISORY_VALIDATORS = {
     ".sql": validate_sql_advisory,
+    ".rs": validate_rust_advisory,
 }
 
 
