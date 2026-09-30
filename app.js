@@ -41,7 +41,11 @@
             { symbol: 'BTC', name: 'Bitcoin', balance: 0.65, price: 64200.00, value: 41730.00, allocation: 44.1 },
             { symbol: 'SOL', name: 'Solana', balance: 12.5, price: 145.20, value: 1815.00, allocation: 1.7 }
         ],
-        notifications: []
+        notifications: [],
+        chartData: {
+            labels: [],
+            prices: []
+        }
     };
 
     // DOM Elements Cache
@@ -63,8 +67,33 @@
             swapBtn: document.getElementById('execute-swap-btn'),
             chartCanvas: document.getElementById('price-chart-canvas'),
             notificationContainer: document.getElementById('notification-container'),
-            portfolioTable: document.getElementById('portfolio-table-body')
+            portfolioTable: document.getElementById('portfolio-table-body'),
+            themeToggle: document.getElementById('theme-toggle')
         };
+    }
+
+    // Theme Management System
+    class ThemeManager {
+        static init() {
+            const savedTheme = localStorage.getItem('theme') || 'dark';
+            ThemeManager.applyTheme(savedTheme);
+            
+            DOM.themeToggle.addEventListener('click', () => {
+                const newTheme = document.documentElement.classList.contains('dark') ? 'light' : 'dark';
+                ThemeManager.applyTheme(newTheme);
+                localStorage.setItem('theme', newTheme);
+            });
+        }
+
+        static applyTheme(theme) {
+            if (theme === 'dark') {
+                document.documentElement.classList.add('dark');
+                DOM.themeToggle.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
+            } else {
+                document.documentElement.classList.remove('dark');
+                DOM.themeToggle.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+            }
+        }
     }
 
     // Notification System
@@ -77,352 +106,298 @@
             DOM.notificationContainer.appendChild(notification);
 
             setTimeout(() => {
-                notification.classList.add('show');
-            }, 10);
-
-            setTimeout(() => {
-                notification.classList.remove('show');
+                notification.classList.add('fade-out');
                 setTimeout(() => {
-                    notification.remove();
+                    DOM.notificationContainer.removeChild(notification);
                 }, 300);
             }, duration);
         }
     }
 
-    // Enhanced Chart Engine with WebGL acceleration
-    class ChartEngine {
-        constructor(canvas) {
-            this.canvas = canvas;
-            this.ctx = canvas ? canvas.getContext('2d') : null;
-            this.dataPoints = [];
-            this.generateHistoricalData();
-            this.initWebGL();
-        }
-
-        initWebGL() {
-            if (!this.canvas) return;
-
-            this.gl = this.canvas.getContext('webgl') || this.canvas.getContext('experimental-webgl');
-            if (!this.gl) {
-                console.warn('WebGL not supported, falling back to 2D canvas');
-                return;
-            }
-
-            // WebGL initialization code would go here
-            // This would include shader compilation, buffer setup, etc.
-        }
-
-        generateHistoricalData() {
-            let basePrice = 3400;
-            const now = Date.now();
-            for (let i = 50; i >= 0; i--) {
-                const time = now - i * 60000 * 5;
-                const variation = (Math.random() - 0.48) * 15;
-                basePrice += variation;
-                this.dataPoints.push({
-                    time: new Date(time),
-                    price: Math.max(3000, Math.min(3800, basePrice))
-                });
-            }
-        }
-
-        render() {
-            if (this.gl) {
-                // WebGL rendering code would go here
-                // This would include clearing the canvas, setting up the viewport,
-                // binding buffers, and drawing the chart
-            } else if (this.ctx) {
-                // Fallback to 2D canvas rendering
-                this.renderCanvas();
-            }
-        }
-
-        renderCanvas() {
-            // 2D canvas rendering code would go here
-            // This would include clearing the canvas, drawing the axes,
-            // and plotting the data points
-        }
-    }
-
-    // Enhanced Order Book Engine with WebSocket integration
-    class OrderBookEngine {
-        constructor() {
-            this.bids = [];
-            this.asks = [];
-            this.ws = null;
-            this.initWebSocket();
-        }
-
-        initWebSocket() {
-            // In a real implementation, this would connect to a WebSocket endpoint
-            // For this example, we'll simulate WebSocket messages
-            setInterval(() => {
-                this.simulateWebSocketMessage();
-            }, 2000);
-        }
-
-        simulateWebSocketMessage() {
-            const isBid = Math.random() > 0.5;
-            const price = state.market.price + (Math.random() - 0.5) * 10;
-            const amount = Math.random() * 2;
-
-            const message = {
-                type: isBid ? 'bid' : 'ask',
-                price: parseFloat(price.toFixed(2)),
-                amount: parseFloat(amount.toFixed(4))
-            };
-
-            this.handleWebSocketMessage(message);
-        }
-
-        handleWebSocketMessage(message) {
-            if (message.type === 'bid') {
-                this.addBid(message.price, message.amount);
-            } else if (message.type === 'ask') {
-                this.addAsk(message.price, message.amount);
-            }
-
-            this.updateOrderBook();
-        }
-
-        addBid(price, amount) {
-            const existingBid = this.bids.find(bid => bid.price === price);
-            if (existingBid) {
-                existingBid.amount += amount;
-            } else {
-                this.bids.push({ price, amount });
-                this.bids.sort((a, b) => b.price - a.price);
-            }
-        }
-
-        addAsk(price, amount) {
-            const existingAsk = this.asks.find(ask => ask.price === price);
-            if (existingAsk) {
-                existingAsk.amount += amount;
-            } else {
-                this.asks.push({ price, amount });
-                this.asks.sort((a, b) => a.price - b.price);
-            }
-        }
-
-        updateOrderBook() {
-            // Update the state
-            state.orderBook.bids = this.bids.slice(0, 10);
-            state.orderBook.asks = this.asks.slice(0, 10);
-
-            // Update the UI
-            this.renderOrderBook();
-        }
-
-        renderOrderBook() {
-            // Render bids
-            DOM.orderBookBids.innerHTML = '';
-            state.orderBook.bids.forEach(bid => {
-                const bidElement = document.createElement('div');
-                bidElement.className = 'orderbook-item bid';
-                bidElement.innerHTML = `
-                    <span class="price">${bid.price.toFixed(2)}</span>
-                    <span class="amount">${bid.amount.toFixed(4)}</span>
-                `;
-                DOM.orderBookBids.appendChild(bidElement);
-            });
-
-            // Render asks
-            DOM.orderBookAsks.innerHTML = '';
-            state.orderBook.asks.forEach(ask => {
-                const askElement = document.createElement('div');
-                askElement.className = 'orderbook-item ask';
-                askElement.innerHTML = `
-                    <span class="price">${ask.price.toFixed(2)}</span>
-                    <span class="amount">${ask.amount.toFixed(4)}</span>
-                `;
-                DOM.orderBookAsks.appendChild(askElement);
-            });
-        }
-    }
-
-    // Enhanced Transaction Processor with simulation
-    class TransactionProcessor {
-        constructor() {
-            this.simulateTransactions();
-        }
-
-        simulateTransactions() {
-            setInterval(() => {
-                this.createSimulatedTransaction();
-            }, 5000);
-        }
-
-        createSimulatedTransaction() {
-            const types = ['swap', 'deposit', 'withdraw', 'trade'];
-            const type = types[Math.floor(Math.random() * types.length)];
-            const amount = Math.random() * 10;
-            const fee = amount * 0.001;
-            const status = Math.random() > 0.1 ? 'completed' : 'pending';
-
-            const transaction = {
-                id: Math.random().toString(36).substring(2, 15),
-                type,
-                amount: parseFloat(amount.toFixed(4)),
-                fee: parseFloat(fee.toFixed(4)),
-                status,
-                timestamp: new Date().toISOString()
-            };
-
-            state.transactions.unshift(transaction);
-            if (state.transactions.length > 20) {
-                state.transactions.pop();
-            }
-
-            this.updateTransactionHistory();
-            NotificationSystem.show(`New ${type} transaction: ${amount.toFixed(4)} ETH`, 'success');
-        }
-
-        updateTransactionHistory() {
-            DOM.txList.innerHTML = '';
-            state.transactions.forEach(tx => {
-                const txElement = document.createElement('div');
-                txElement.className = `transaction-item ${tx.status}`;
-                txElement.innerHTML = `
-                    <div class="tx-type">${tx.type}</div>
-                    <div class="tx-amount">${tx.amount.toFixed(4)} ETH</div>
-                    <div class="tx-status">${tx.status}</div>
-                    <div class="tx-time">${new Date(tx.timestamp).toLocaleTimeString()}</div>
-                `;
-                DOM.txList.appendChild(txElement);
-            });
-        }
-    }
-
-    // Enhanced Portfolio Manager
-    class PortfolioManager {
-        constructor() {
-            this.updatePortfolio();
-        }
-
-        updatePortfolio() {
-            // Calculate total portfolio value
-            const totalValue = state.portfolio.reduce((sum, asset) => sum + asset.value, 0);
-
-            // Update allocations
-            state.portfolio.forEach(asset => {
-                asset.allocation = (asset.value / totalValue) * 100;
-            });
-
-            // Sort by allocation
-            state.portfolio.sort((a, b) => b.allocation - a.allocation);
-
-            // Update UI
-            this.renderPortfolio();
-        }
-
-        renderPortfolio() {
-            DOM.portfolioTable.innerHTML = '';
-            state.portfolio.forEach(asset => {
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${asset.symbol}</td>
-                    <td>${asset.name}</td>
-                    <td>${asset.balance.toFixed(4)}</td>
-                    <td>$${asset.price.toFixed(2)}</td>
-                    <td>$${asset.value.toFixed(2)}</td>
-                    <td>${asset.allocation.toFixed(1)}%</td>
-                `;
-                DOM.portfolioTable.appendChild(row);
-            });
-        }
-    }
-
-    // Initialize the application
-    function init() {
-        initDOM();
-        new ChartEngine(DOM.chartCanvas);
-        new OrderBookEngine();
-        new TransactionProcessor();
-        new PortfolioManager();
-
-        // Set up event listeners
-        DOM.connectBtn.addEventListener('click', connectWallet);
-        DOM.swapBtn.addEventListener('click', executeSwap);
-        DOM.swapFromAmount.addEventListener('input', updateSwapPreview);
-        DOM.pairSelect.addEventListener('change', updateMarketPair);
-    }
-
-    // Wallet connection simulation
+    // Wallet Connection Handler
     function connectWallet() {
-        state.wallet.connected = true;
-        state.wallet.address = '0x' + Math.random().toString(16).substring(2, 10) +
-                                      Math.random().toString(16).substring(2, 10);
-        DOM.walletAddress.textContent = `${state.wallet.address.substring(0, 6)}...${state.wallet.address.substring(38)}`;
-        DOM.connectBtn.textContent = 'Disconnect';
-        NotificationSystem.show('Wallet connected successfully', 'success');
+        if (state.wallet.connected) {
+            state.wallet.connected = false;
+            state.wallet.address = null;
+            DOM.connectBtn.textContent = 'Connect Wallet';
+            DOM.walletAddress.textContent = 'Not connected';
+            NotificationSystem.show('Wallet disconnected', 'warning');
+        } else {
+            // Simulate wallet connection
+            setTimeout(() => {
+                state.wallet.connected = true;
+                state.wallet.address = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e';
+                DOM.connectBtn.textContent = 'Disconnect';
+                DOM.walletAddress.textContent = `${state.wallet.address.slice(0, 6)}...${state.wallet.address.slice(-4)}`;
+                NotificationSystem.show('Wallet connected successfully', 'success');
+                updateUI();
+            }, 1000);
+        }
     }
 
-    // Market pair update
-    function updateMarketPair() {
-        state.market.selectedPair = DOM.pairSelect.value;
-        // In a real implementation, this would fetch the new market data
-        // For this example, we'll just update the display
-        DOM.currentPrice.textContent = `$${state.market.price.toFixed(2)}`;
-        DOM.priceChange.textContent = `${state.market.change24h.toFixed(2)}%`;
-        DOM.priceChange.className = state.market.change24h >= 0 ? 'positive' : 'negative';
+    // Gas Price Updater
+    function updateGasPrice() {
+        const gasPrices = [state.gas.slow, state.gas.standard, state.gas.fast];
+        const randomIndex = Math.floor(Math.random() * gasPrices.length);
+        state.gas.current = gasPrices[randomIndex];
+        DOM.gasPrice.textContent = `${state.gas.current} Gwei`;
     }
 
-    // Swap execution simulation
+    // Market Data Simulator
+    function simulateMarketData() {
+        // Simulate price changes
+        const change = (Math.random() - 0.5) * 10;
+        state.market.price = Math.max(3000, state.market.price + change);
+        state.market.change24h = (change / state.market.price) * 100;
+        state.market.volume24h += Math.floor(Math.random() * 1000000);
+        state.market.high24h = Math.max(state.market.high24h, state.market.price);
+        state.market.low24h = Math.min(state.market.low24h, state.market.price);
+
+        // Update chart data
+        const now = new Date();
+        state.chartData.labels.push(now.toLocaleTimeString());
+        state.chartData.prices.push(state.market.price);
+
+        // Keep only the last 20 data points
+        if (state.chartData.labels.length > 20) {
+            state.chartData.labels.shift();
+            state.chartData.prices.shift();
+        }
+
+        updateUI();
+    }
+
+    // Order Book Simulator
+    function simulateOrderBook() {
+        // Clear existing orders
+        state.orderBook.bids = [];
+        state.orderBook.asks = [];
+
+        // Generate random bids
+        for (let i = 0; i < 5; i++) {
+            const price = state.market.price - (i * 5) - (Math.random() * 2);
+            const amount = 0.1 + (Math.random() * 0.9);
+            state.orderBook.bids.push({ price: price.toFixed(2), amount: amount.toFixed(4) });
+        }
+
+        // Generate random asks
+        for (let i = 0; i < 5; i++) {
+            const price = state.market.price + (i * 5) + (Math.random() * 2);
+            const amount = 0.1 + (Math.random() * 0.9);
+            state.orderBook.asks.push({ price: price.toFixed(2), amount: amount.toFixed(4) });
+        }
+
+        updateUI();
+    }
+
+    // Transaction Simulator
+    function simulateTransaction() {
+        if (!state.wallet.connected) return;
+
+        const isBuy = Math.random() > 0.5;
+        const amount = (Math.random() * 0.5 + 0.1).toFixed(4);
+        const price = state.market.price;
+        const total = (amount * price).toFixed(2);
+        const timestamp = new Date().toLocaleTimeString();
+
+        const transaction = {
+            id: `0x${Math.floor(Math.random() * 1000000000000).toString(16)}`,
+            type: isBuy ? 'Buy' : 'Sell',
+            amount: amount,
+            price: price.toFixed(2),
+            total: total,
+            timestamp: timestamp,
+            status: 'Completed'
+        };
+
+        state.transactions.unshift(transaction);
+        if (state.transactions.length > 10) {
+            state.transactions.pop();
+        }
+
+        // Update portfolio
+        if (isBuy) {
+            state.portfolio[0].balance = parseFloat(state.portfolio[0].balance) + parseFloat(amount);
+            state.portfolio[0].value = state.portfolio[0].balance * state.portfolio[0].price;
+        } else {
+            state.portfolio[0].balance = parseFloat(state.portfolio[0].balance) - parseFloat(amount);
+            state.portfolio[0].value = state.portfolio[0].balance * state.portfolio[0].price;
+        }
+
+        updateUI();
+        NotificationSystem.show(`${transaction.type} ${transaction.amount} ETH at ${transaction.price} USDT`, 'success');
+    }
+
+    // Swap Functionality
     function executeSwap() {
+        if (!state.wallet.connected) {
+            NotificationSystem.show('Please connect your wallet first', 'error');
+            return;
+        }
+
         const fromAmount = parseFloat(DOM.swapFromAmount.value);
         if (isNaN(fromAmount) || fromAmount <= 0) {
             NotificationSystem.show('Please enter a valid amount', 'error');
             return;
         }
 
-        const toAmount = fromAmount * 0.997; // Simulate 0.3% fee
-        DOM.swapToAmount.value = toAmount.toFixed(4);
+        const toAmount = (fromAmount * state.market.price).toFixed(2);
+        DOM.swapToAmount.value = toAmount;
 
-        // Simulate transaction
-        const transaction = {
-            id: Math.random().toString(36).substring(2, 15),
-            type: 'swap',
-            amount: fromAmount,
-            fee: fromAmount * 0.003,
-            status: 'completed',
-            timestamp: new Date().toISOString()
-        };
+        // Simulate swap
+        setTimeout(() => {
+            simulateTransaction();
+            NotificationSystem.show(`Swap successful: ${fromAmount} ETH for ${toAmount} USDT`, 'success');
+            DOM.swapFromAmount.value = '';
+            DOM.swapToAmount.value = '';
+        }, 1500);
+    }
 
-        state.transactions.unshift(transaction);
-        if (state.transactions.length > 20) {
-            state.transactions.pop();
+    // Chart Renderer
+    function renderChart() {
+        if (!DOM.chartCanvas) return;
+
+        const ctx = DOM.chartCanvas.getContext('2d');
+        const width = DOM.chartCanvas.width;
+        const height = DOM.chartCanvas.height;
+
+        // Clear canvas
+        ctx.clearRect(0, 0, width, height);
+
+        if (state.chartData.prices.length < 2) return;
+
+        // Find min and max values
+        const minPrice = Math.min(...state.chartData.prices);
+        const maxPrice = Math.max(...state.chartData.prices);
+        const priceRange = maxPrice - minPrice;
+
+        // Draw grid lines
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 5; i++) {
+            const y = height - (i * height / 4);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
         }
 
-        // Update balances
-        state.wallet.balanceEth -= fromAmount;
-        state.wallet.balanceUsdt += toAmount * state.market.price;
+        // Draw price line
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        const xStep = width / (state.chartData.prices.length - 1);
+        for (let i = 0; i < state.chartData.prices.length; i++) {
+            const x = i * xStep;
+            const y = height - ((state.chartData.prices[i] - minPrice) / priceRange) * height;
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+    }
+
+    // UI Update Function
+    function updateUI() {
+        // Update wallet info
+        if (state.wallet.connected) {
+            DOM.walletAddress.textContent = `${state.wallet.address.slice(0, 6)}...${state.wallet.address.slice(-4)}`;
+        } else {
+            DOM.walletAddress.textContent = 'Not connected';
+        }
+
+        // Update gas price
+        DOM.gasPrice.textContent = `${state.gas.current} Gwei`;
+
+        // Update market data
+        DOM.currentPrice.textContent = `$${state.market.price.toFixed(2)}`;
+        DOM.priceChange.textContent = `${state.market.change24h.toFixed(2)}%`;
+        DOM.priceChange.className = state.market.change24h >= 0 ? 'price-change positive' : 'price-change negative';
+
+        // Update order book
+        DOM.orderBookBids.innerHTML = state.orderBook.bids.map(order => {
+            return `<div class="orderbook-row">
+                <span class="orderbook-price positive">${order.price}</span>
+                <span class="orderbook-amount">${order.amount}</span>
+            </div>`;
+        }).join('');
+
+        DOM.orderBookAsks.innerHTML = state.orderBook.asks.map(order => {
+            return `<div class="orderbook-row">
+                <span class="orderbook-price negative">${order.price}</span>
+                <span class="orderbook-amount">${order.amount}</span>
+            </div>`;
+        }).join('');
+
+        // Update transaction history
+        DOM.txList.innerHTML = state.transactions.map(tx => {
+            return `<div class="transaction-item">
+                <div class="transaction-info">
+                    <span class="transaction-type ${tx.type.toLowerCase()}">${tx.type}</span>
+                    <span class="transaction-amount">${tx.amount} ETH</span>
+                    <span class="transaction-price">@ ${tx.price} USDT</span>
+                </div>
+                <div class="transaction-details">
+                    <span class="transaction-total">${tx.total} USDT</span>
+                    <span class="transaction-time">${tx.timestamp}</span>
+                    <span class="transaction-status ${tx.status.toLowerCase()}">${tx.status}</span>
+                </div>
+            </div>`;
+        }).join('');
 
         // Update portfolio
-        const ethAsset = state.portfolio.find(asset => asset.symbol === 'ETH');
-        if (ethAsset) {
-            ethAsset.balance = state.wallet.balanceEth;
-            ethAsset.value = ethAsset.balance * ethAsset.price;
-        }
+        DOM.portfolioTable.innerHTML = state.portfolio.map(asset => {
+            return `<tr>
+                <td>
+                    <div class="asset-info">
+                        <span class="asset-symbol">${asset.symbol}</span>
+                        <span class="asset-name">${asset.name}</span>
+                    </div>
+                </td>
+                <td>${asset.balance.toFixed(4)}</td>
+                <td>$${asset.price.toFixed(2)}</td>
+                <td>$${asset.value.toFixed(2)}</td>
+                <td>
+                    <div class="allocation-bar">
+                        <div class="allocation-fill" style="width: ${asset.allocation}%"></div>
+                    </div>
+                    <span class="allocation-percent">${asset.allocation.toFixed(1)}%</span>
+                </td>
+            </tr>`;
+        }).join('');
 
-        // Update UI
-        new TransactionProcessor().updateTransactionHistory();
-        new PortfolioManager().updatePortfolio();
-        NotificationSystem.show(`Swap executed: ${fromAmount.toFixed(4)} ETH for ${toAmount.toFixed(4)} USDT`, 'success');
+        // Render chart
+        renderChart();
     }
 
-    // Update swap preview
-    function updateSwapPreview() {
-        const fromAmount = parseFloat(DOM.swapFromAmount.value);
-        if (isNaN(fromAmount) || fromAmount <= 0) {
-            DOM.swapToAmount.value = '';
-            return;
-        }
+    // Initialize the application
+    function init() {
+        initDOM();
+        ThemeManager.init();
+        updateUI();
 
-        const toAmount = fromAmount * 0.997; // Simulate 0.3% fee
-        DOM.swapToAmount.value = toAmount.toFixed(4);
+        // Set up event listeners
+        DOM.connectBtn.addEventListener('click', connectWallet);
+        DOM.swapBtn.addEventListener('click', executeSwap);
+        DOM.swapFromAmount.addEventListener('input', () => {
+            const fromAmount = parseFloat(DOM.swapFromAmount.value);
+            if (!isNaN(fromAmount) && fromAmount > 0) {
+                DOM.swapToAmount.value = (fromAmount * state.market.price).toFixed(2);
+            } else {
+                DOM.swapToAmount.value = '';
+            }
+        });
+
+        // Start data simulation
+        setInterval(updateGasPrice, 15000);
+        setInterval(simulateMarketData, 5000);
+        setInterval(simulateOrderBook, 10000);
+        setInterval(simulateTransaction, 30000);
     }
 
-    // Start the application
+    // Start the application when DOM is loaded
     document.addEventListener('DOMContentLoaded', init);
+
 })();
