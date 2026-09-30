@@ -1,1 +1,193 @@
-using System;\nusing System.Collections.Generic;\nusing System.Threading.Tasks;\nusing System.Threading;\nusing System.Security.Cryptography;\nusing System.Text;\n\nnamespace MagnumOpus.Core\n{\n    public record Transaction(string Id, string From, string To, decimal Amount, string Token, DateTime Timestamp);\n\n    public interface ITransactionRepository\n    {\n        Task StoreAsync(Transaction tx);\n        Task<Transaction?> GetAsync(string id);\n    }\n\n    public class InMemoryTransactionRepository : ITransactionRepository\n    {\n        private readonly Dictionary<string, Transaction> _store = new();\n\n        public Task StoreAsync(Transaction tx)\n        {\n            lock (_store)\n            {\n                _store[tx.Id] = tx;\n            }\n            return Task.CompletedTask;\n        }\n\n        public Task<Transaction?> GetAsync(string id)\n        {\n            lock (_store)\n            {\n                _store.TryGetValue(id, out var tx);\n                return Task.FromResult<Transaction?>(tx);\n            }\n        }\n    }\n\n    public interface IBlockchainGateway\n    {\n        Task<string> BroadcastAsync(Transaction tx);\n        Task<bool> VerifyAsync(string txHash);\n    }\n\n    public class MockBlockchainGateway : IBlockchainGateway\n    {\n        public Task<string> BroadcastAsync(Transaction tx)\n        {\n            // Simulate network latency\n            return Task.Run(async () =>\n            {\n                await Task.Delay(200);\n                var hash = ComputeHash($"{tx.Id}{tx.From}{tx.To}{tx.Amount}{tx.Token}{tx.Timestamp:o}");\n                return hash;\n            });\n        }\n\n        public Task<bool> VerifyAsync(string txHash)\n        {\n            // In mock, any hash that starts with 0x is considered valid\n            return Task.FromResult(txHash.StartsWith("0x"));\n        }\n\n        private static string ComputeHash(string input)\n        {\n            using var sha = SHA256.Create();\n            var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(input));\n            var sb = new StringBuilder();\n            sb.Append("0x");\n            foreach (var b in bytes)\n                sb.Append(b.ToString("x2"));\n            return sb.ToString();\n        }\n    }\n\n    public class TransactionProcessor\n    {\n        private readonly ITransactionRepository _repo;\n        private readonly IBlockchainGateway _gateway;\n\n        public TransactionProcessor(ITransactionRepository repo, IBlockchainGateway gateway)\n        {\n            _repo = repo;\n            _gateway = gateway;\n        }\n\n        public async Task<string> ProcessAsync(string from, string to, decimal amount, string token)\n        {\n            // Basic validation\n            if (string.IsNullOrWhiteSpace(from)) throw new ArgumentException("Sender address required", nameof(from));\n            if (string.IsNullOrWhiteSpace(to)) throw new ArgumentException("Recipient address required", nameof(to));\n            if (amount <= 0) throw new ArgumentException("Amount must be positive", nameof(amount));\n            if (string.IsNullOrWhiteSpace(token)) throw new ArgumentException("Token symbol required", nameof(token));\n\n            var tx = new Transaction(\n                Id: Guid.NewGuid().ToString("N"),\n                From: from,\n                To: to,\n                Amount: amount,\n                Token: token,\n                Timestamp: DateTime.UtcNow\n            );\n\n            // Store locally first\n            await _repo.StoreAsync(tx);\n\n            // Broadcast to mock blockchain\n            var txHash = await _gateway.BroadcastAsync(tx);\n\n            // Verify broadcast\n            var verified = await _gateway.VerifyAsync(txHash);\n            if (!verified)\n                throw new InvalidOperationException("Transaction verification failed");\n\n            // Return transaction hash to caller\n            return txHash;\n        }\n\n        public Task<Transaction?> GetTransactionAsync(string id) => _repo.GetAsync(id);\n    }\n}\n
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Security.Cryptography;
+using System.Text;
+using System.Numerics;
+
+namespace MagnumOpus.Core
+{
+    public class TransactionProcessor
+    {
+        private readonly Dictionary<string, BigInteger> _balances = new Dictionary<string, BigInteger>();
+        private readonly List<Transaction> _pendingTransactions = new List<Transaction>();
+        private readonly List<Block> _blockchain = new List<Block>();
+        private readonly object _lock = new object();
+
+        public class Transaction
+        {
+            public string From { get; set; }
+            public string To { get; set; }
+            public BigInteger Amount { get; set; }
+            public string Signature { get; set; }
+            public string TransactionHash { get; set; }
+            public DateTime Timestamp { get; set; }
+        }
+
+        public class Block
+        {
+            public int Index { get; set; }
+            public string PreviousHash { get; set; }
+            public string Hash { get; set; }
+            public DateTime Timestamp { get; set; }
+            public List<Transaction> Transactions { get; set; } = new List<Transaction>();
+            public int Nonce { get; set; }
+        }
+
+        public async Task<string> CreateTransaction(string from, string to, BigInteger amount, string privateKey)
+        {
+            if (string.IsNullOrEmpty(from) || string.IsNullOrEmpty(to) || amount <= 0)
+            {
+                throw new ArgumentException("Invalid transaction parameters");
+            }
+
+            var transaction = new Transaction
+            {
+                From = from,
+                To = to,
+                Amount = amount,
+                Timestamp = DateTime.UtcNow
+            };
+
+            // Generate transaction hash
+            transaction.TransactionHash = ComputeTransactionHash(transaction);
+
+            // Sign the transaction
+            transaction.Signature = SignTransaction(transaction.TransactionHash, privateKey);
+
+            lock (_lock)
+            {
+                _pendingTransactions.Add(transaction);
+            }
+
+            return transaction.TransactionHash;
+        }
+
+        public async Task<Block> MineBlock(string minerAddress)
+        {
+            List<Transaction> transactionsToMine;
+            lock (_lock)
+            {
+                transactionsToMine = _pendingTransactions.Take(10).ToList();
+                _pendingTransactions.RemoveRange(0, transactionsToMine.Count);
+            }
+
+            var block = new Block
+            {
+                Index = _blockchain.Count,
+                PreviousHash = _blockchain.Count == 0 ? "0" : _blockchain.Last().Hash,
+                Timestamp = DateTime.UtcNow,
+                Transactions = transactionsToMine
+            };
+
+            // Proof of Work
+            block.Hash = ComputeBlockHash(block);
+            block.Nonce = await MineProofOfWork(block);
+
+            // Reward the miner
+            var rewardTransaction = new Transaction
+            {
+                From = "0",
+                To = minerAddress,
+                Amount = 10,
+                Timestamp = DateTime.UtcNow
+            };
+            rewardTransaction.TransactionHash = ComputeTransactionHash(rewardTransaction);
+            block.Transactions.Add(rewardTransaction);
+
+            lock (_lock)
+            {
+                _blockchain.Add(block);
+                UpdateBalances(block);
+            }
+
+            return block;
+        }
+
+        private string ComputeTransactionHash(Transaction transaction)
+        {
+            var data = $"{transaction.From}{transaction.To}{transaction.Amount}{transaction.Timestamp}";
+            using (var sha256 = SHA256.Create())
+            {
+                var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(data));
+                return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+            }
+        }
+
+        private string SignTransaction(string transactionHash, string privateKey)
+        {
+            // In a real implementation, this would use proper ECDSA signing
+            using (var sha256 = SHA256.Create())
+            {
+                var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(transactionHash + privateKey));
+                return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+            }
+        }
+
+        private string ComputeBlockHash(Block block)
+        {
+            var data = $"{block.Index}{block.PreviousHash}{block.Timestamp}{string.Join("", block.Transactions.Select(t => t.TransactionHash))}{block.Nonce}";
+            using (var sha256 = SHA256.Create())
+            {
+                var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(data));
+                return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+            }
+        }
+
+        private async Task<int> MineProofOfWork(Block block)
+        {
+            return await Task.Run(() =>
+            {
+                int nonce = 0;
+                string hash;
+                do
+                {
+                    block.Nonce = nonce;
+                    hash = ComputeBlockHash(block);
+                    nonce++;
+                } while (!hash.StartsWith("0000"));
+                return nonce - 1;
+            });
+        }
+
+        private void UpdateBalances(Block block)
+        {
+            foreach (var transaction in block.Transactions)
+            {
+                if (transaction.From != "0") // Not a mining reward
+                {
+                    if (_balances.ContainsKey(transaction.From))
+                    {
+                        _balances[transaction.From] -= transaction.Amount;
+                    }
+                }
+
+                if (_balances.ContainsKey(transaction.To))
+                {
+                    _balances[transaction.To] += transaction.Amount;
+                }
+                else
+                {
+                    _balances[transaction.To] = transaction.Amount;
+                }
+            }
+        }
+
+        public BigInteger GetBalance(string address)
+        {
+            lock (_lock)
+            {
+                return _balances.ContainsKey(address) ? _balances[address] : 0;
+            }
+        }
+
+        public List<Block> GetBlockchain()
+        {
+            lock (_lock)
+            {
+                return new List<Block>(_blockchain);
+            }
+        }
+    }
+}
