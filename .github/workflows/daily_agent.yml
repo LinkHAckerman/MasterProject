@@ -65,7 +65,7 @@ jobs:
       - name: Execute GitHub Models Agent
         continue-on-error: true
         env:
-          GITHUB_MODELS_TOKEN: ${{ github.token }}
+          GITHUB_MODELS_TOKEN: ${{ secrets.GH_MODELS_PAT }}
         run: python ai_agent_github_models.py
 
       - name: Validate Today's Generated Files
