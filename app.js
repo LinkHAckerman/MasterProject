@@ -15,7 +15,8 @@
             balanceEth: 14.852,
             balanceUsdt: 42500.00,
             chainId: '0x1',
-            networkName: 'Ethereum Mainnet'
+            networkName: 'Ethereum Mainnet',
+            tokens: []
         },
         gas: {
             slow: 12,
@@ -29,7 +30,11 @@
             change24h: 4.82,
             volume24h: 1284509000,
             high24h: 3520.00,
-            low24h: 3310.50
+            low24h: 3310.50,
+            chartData: {
+                labels: [],
+                prices: []
+            }
         },
         orderBook: {
             bids: [],
@@ -42,9 +47,10 @@
             { symbol: 'SOL', name: 'Solana', balance: 12.5, price: 145.20, value: 1815.00, allocation: 1.7 }
         ],
         notifications: [],
-        chartData: {
-            labels: [],
-            prices: []
+        settings: {
+            theme: 'dark',
+            currency: 'USD',
+            language: 'en'
         }
     };
 
@@ -70,7 +76,13 @@
             portfolioTable: document.getElementById('portfolio-table-body'),
             themeToggle: document.getElementById('theme-toggle'),
             networkSelector: document.getElementById('network-selector'),
-            tokenSelector: document.getElementById('token-selector')
+            tokenSelector: document.getElementById('token-selector'),
+            settingsPanel: document.getElementById('settings-panel'),
+            settingsBtn: document.getElementById('settings-btn'),
+            closeSettingsBtn: document.getElementById('close-settings-btn'),
+            themeSelect: document.getElementById('theme-select'),
+            currencySelect: document.getElementById('currency-select'),
+            languageSelect: document.getElementById('language-select')
         };
     }
 
@@ -79,151 +91,96 @@
         static init() {
             const savedTheme = localStorage.getItem('theme') || 'dark';
             ThemeManager.applyTheme(savedTheme);
-
-            DOM.themeToggle.addEventListener('click', () => {
-                const newTheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-                ThemeManager.applyTheme(newTheme);
-                localStorage.setItem('theme', newTheme);
-            });
+            DOM.themeSelect.value = savedTheme;
         }
 
         static applyTheme(theme) {
             document.documentElement.setAttribute('data-theme', theme);
-            const event = new CustomEvent('themeChanged', { detail: { theme } });
-            document.dispatchEvent(event);
+            localStorage.setItem('theme', theme);
+            state.settings.theme = theme;
+        }
+
+        static toggleTheme() {
+            const newTheme = state.settings.theme === 'dark' ? 'light' : 'dark';
+            ThemeManager.applyTheme(newTheme);
+            DOM.themeSelect.value = newTheme;
         }
     }
 
-    // Network Management System
-    class NetworkManager {
-        static networks = {
-            '0x1': { name: 'Ethereum Mainnet', symbol: 'ETH' },
-            '0x89': { name: 'Polygon Mainnet', symbol: 'MATIC' },
-            '0xa86a': { name: 'Avalanche C-Chain', symbol: 'AVAX' }
-        };
-
+    // Settings Panel Management
+    class SettingsManager {
         static init() {
-            NetworkManager.populateNetworkSelector();
-            DOM.networkSelector.addEventListener('change', NetworkManager.handleNetworkChange);
-        }
-
-        static populateNetworkSelector() {
-            DOM.networkSelector.innerHTML = '';
-            Object.entries(NetworkManager.networks).forEach(([chainId, network]) => {
-                const option = document.createElement('option');
-                option.value = chainId;
-                option.textContent = `${network.name} (${network.symbol})`;
-                DOM.networkSelector.appendChild(option);
+            DOM.settingsBtn.addEventListener('click', SettingsManager.openSettings);
+            DOM.closeSettingsBtn.addEventListener('click', SettingsManager.closeSettings);
+            DOM.themeSelect.addEventListener('change', (e) => {
+                ThemeManager.applyTheme(e.target.value);
             });
-        }
-
-        static handleNetworkChange() {
-            const chainId = DOM.networkSelector.value;
-            const network = NetworkManager.networks[chainId];
-            state.wallet.chainId = chainId;
-            state.wallet.networkName = network.name;
-            NetworkManager.updateUI();
-        }
-
-        static updateUI() {
-            const network = NetworkManager.networks[state.wallet.chainId];
-            DOM.networkSelector.value = state.wallet.chainId;
-            // Update other UI elements as needed
-        }
-    }
-
-    // Token Management System
-    class TokenManager {
-        static tokens = {
-            '0x1': [
-                { symbol: 'ETH', name: 'Ethereum', decimals: 18 },
-                { symbol: 'USDT', name: 'Tether USD', decimals: 6 }
-            ],
-            '0x89': [
-                { symbol: 'MATIC', name: 'Polygon', decimals: 18 },
-                { symbol: 'USDC', name: 'USD Coin', decimals: 6 }
-            ],
-            '0xa86a': [
-                { symbol: 'AVAX', name: 'Avalanche', decimals: 18 },
-                { symbol: 'DAI', name: 'Dai Stablecoin', decimals: 18 }
-            ]
-        };
-
-        static init() {
-            TokenManager.populateTokenSelectors();
-            DOM.tokenSelector.addEventListener('change', TokenManager.handleTokenChange);
-        }
-
-        static populateTokenSelectors() {
-            DOM.tokenSelector.innerHTML = '';
-            const tokens = TokenManager.tokens[state.wallet.chainId] || [];
-            tokens.forEach(token => {
-                const option = document.createElement('option');
-                option.value = token.symbol;
-                option.textContent = `${token.name} (${token.symbol})`;
-                DOM.tokenSelector.appendChild(option);
+            DOM.currencySelect.addEventListener('change', (e) => {
+                state.settings.currency = e.target.value;
+                SettingsManager.updateCurrency();
             });
+            DOM.languageSelect.addEventListener('change', (e) => {
+                state.settings.language = e.target.value;
+                SettingsManager.updateLanguage();
+            });
+
+            // Initialize settings from state
+            DOM.themeSelect.value = state.settings.theme;
+            DOM.currencySelect.value = state.settings.currency;
+            DOM.languageSelect.value = state.settings.language;
         }
 
-        static handleTokenChange() {
-            const symbol = DOM.tokenSelector.value;
-            // Update state and UI based on selected token
+        static openSettings() {
+            DOM.settingsPanel.classList.add('active');
+        }
+
+        static closeSettings() {
+            DOM.settingsPanel.classList.remove('active');
+        }
+
+        static updateCurrency() {
+            // Implementation for currency change
+            console.log(`Currency changed to ${state.settings.currency}`);
+        }
+
+        static updateLanguage() {
+            // Implementation for language change
+            console.log(`Language changed to ${state.settings.language}`);
         }
     }
 
     // Wallet Connection Manager
     class WalletManager {
         static init() {
-            DOM.connectBtn.addEventListener('click', WalletManager.handleConnect);
+            DOM.connectBtn.addEventListener('click', WalletManager.connectWallet);
+            WalletManager.updateWalletDisplay();
         }
 
-        static async handleConnect() {
+        static async connectWallet() {
             try {
-                if (!window.ethereum) {
-                    throw new Error('No Ethereum provider detected');
-                }
-
-                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-                const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-
+                // Simulate wallet connection
                 state.wallet.connected = true;
-                state.wallet.address = accounts[0];
-                state.wallet.chainId = chainId;
+                state.wallet.address = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e';
+                state.wallet.balanceEth = 14.852;
+                state.wallet.balanceUsdt = 42500.00;
+                state.wallet.tokens = [
+                    { symbol: 'ETH', balance: 14.852 },
+                    { symbol: 'USDT', balance: 42500.00 }
+                ];
 
-                WalletManager.updateUI();
-                NetworkManager.updateUI();
-                TokenManager.populateTokenSelectors();
-
-                // Listen for account changes
-                window.ethereum.on('accountsChanged', WalletManager.handleAccountsChanged);
-                // Listen for chain changes
-                window.ethereum.on('chainChanged', WalletManager.handleChainChanged);
+                WalletManager.updateWalletDisplay();
+                NotificationManager.showNotification('Wallet connected successfully', 'success');
             } catch (error) {
                 console.error('Wallet connection error:', error);
-                NotificationManager.show('error', 'Wallet connection failed');
+                NotificationManager.showNotification('Failed to connect wallet', 'error');
             }
         }
 
-        static handleAccountsChanged(accounts) {
-            if (accounts.length === 0) {
-                state.wallet.connected = false;
-                state.wallet.address = null;
-            } else {
-                state.wallet.address = accounts[0];
-            }
-            WalletManager.updateUI();
-        }
-
-        static handleChainChanged(chainId) {
-            state.wallet.chainId = chainId;
-            NetworkManager.updateUI();
-            TokenManager.populateTokenSelectors();
-        }
-
-        static updateUI() {
+        static updateWalletDisplay() {
             if (state.wallet.connected) {
                 DOM.connectBtn.textContent = 'Disconnect Wallet';
                 DOM.walletAddress.textContent = `${state.wallet.address.slice(0, 6)}...${state.wallet.address.slice(-4)}`;
+                DOM.walletAddress.title = state.wallet.address;
             } else {
                 DOM.connectBtn.textContent = 'Connect Wallet';
                 DOM.walletAddress.textContent = 'Not connected';
@@ -233,19 +190,195 @@
 
     // Notification System
     class NotificationManager {
-        static show(type, message, duration = 5000) {
+        static showNotification(message, type = 'info') {
             const notification = document.createElement('div');
-            notification.className = `notification notification-${type}`;
+            notification.className = `notification ${type}`;
             notification.textContent = message;
 
             DOM.notificationContainer.appendChild(notification);
 
             setTimeout(() => {
-                notification.classList.add('notification-exit');
+                notification.classList.add('show');
+            }, 10);
+
+            setTimeout(() => {
+                notification.classList.remove('show');
                 setTimeout(() => {
                     notification.remove();
                 }, 300);
-            }, duration);
+            }, 5000);
+        }
+    }
+
+    // Market Data Manager
+    class MarketDataManager {
+        static init() {
+            MarketDataManager.updateMarketData();
+            MarketDataManager.updateOrderBook();
+            MarketDataManager.updateChartData();
+
+            // Simulate real-time updates
+            setInterval(MarketDataManager.updateMarketData, 5000);
+            setInterval(MarketDataManager.updateOrderBook, 3000);
+            setInterval(MarketDataManager.updateChartData, 10000);
+        }
+
+        static updateMarketData() {
+            // Simulate market data updates
+            const change = (Math.random() - 0.5) * 0.5;
+            state.market.price += change;
+            state.market.change24h = (state.market.price / (state.market.price - change) - 1) * 100;
+            state.market.volume24h += Math.floor(Math.random() * 100000);
+
+            DOM.currentPrice.textContent = `$${state.market.price.toFixed(2)}`;
+            DOM.priceChange.textContent = `${state.market.change24h.toFixed(2)}%`;
+            DOM.priceChange.className = state.market.change24h >= 0 ? 'positive' : 'negative';
+        }
+
+        static updateOrderBook() {
+            // Simulate order book updates
+            state.orderBook.bids = [];
+            state.orderBook.asks = [];
+
+            for (let i = 0; i < 10; i++) {
+                const bidPrice = state.market.price - (Math.random() * 0.5);
+                const bidAmount = Math.random() * 5;
+                state.orderBook.bids.push({ price: bidPrice.toFixed(2), amount: bidAmount.toFixed(4) });
+
+                const askPrice = state.market.price + (Math.random() * 0.5);
+                const askAmount = Math.random() * 5;
+                state.orderBook.asks.push({ price: askPrice.toFixed(2), amount: askAmount.toFixed(4) });
+            }
+
+            // Sort bids in descending order
+            state.orderBook.bids.sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
+            // Sort asks in ascending order
+            state.orderBook.asks.sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
+
+            MarketDataManager.renderOrderBook();
+        }
+
+        static renderOrderBook() {
+            DOM.orderBookBids.innerHTML = '';
+            DOM.orderBookAsks.innerHTML = '';
+
+            state.orderBook.bids.forEach(bid => {
+                const bidElement = document.createElement('div');
+                bidElement.className = 'orderbook-item bid';
+                bidElement.innerHTML = `<span>${bid.price}</span><span>${bid.amount}</span>`;
+                DOM.orderBookBids.appendChild(bidElement);
+            });
+
+            state.orderBook.asks.forEach(ask => {
+                const askElement = document.createElement('div');
+                askElement.className = 'orderbook-item ask';
+                askElement.innerHTML = `<span>${ask.price}</span><span>${ask.amount}</span>`;
+                DOM.orderBookAsks.appendChild(askElement);
+            });
+        }
+
+        static updateChartData() {
+            // Simulate chart data updates
+            const now = new Date();
+            const label = `${now.getHours()}:${now.getMinutes()}`;
+            const price = state.market.price;
+
+            state.market.chartData.labels.push(label);
+            state.market.chartData.prices.push(price);
+
+            // Keep only the last 20 data points
+            if (state.market.chartData.labels.length > 20) {
+                state.market.chartData.labels.shift();
+                state.market.chartData.prices.shift();
+            }
+
+            MarketDataManager.renderChart();
+        }
+
+        static renderChart() {
+            // Implementation for rendering chart using Chart.js
+            console.log('Rendering chart with data:', state.market.chartData);
+        }
+    }
+
+    // Transaction Manager
+    class TransactionManager {
+        static init() {
+            DOM.swapBtn.addEventListener('click', TransactionManager.executeSwap);
+            TransactionManager.renderTransactions();
+        }
+
+        static async executeSwap() {
+            const fromAmount = parseFloat(DOM.swapFromAmount.value);
+            const toAmount = parseFloat(DOM.swapToAmount.value);
+
+            if (isNaN(fromAmount) || fromAmount <= 0) {
+                NotificationManager.showNotification('Please enter a valid amount', 'error');
+                return;
+            }
+
+            // Simulate transaction
+            const txHash = `0x${Math.random().toString(16).substr(2, 64)}`;
+            const timestamp = new Date().toISOString();
+
+            const transaction = {
+                hash: txHash,
+                from: state.wallet.address,
+                to: '0x...', // Simulated contract address
+                amount: fromAmount,
+                token: 'ETH',
+                status: 'pending',
+                timestamp: timestamp
+            };
+
+            state.transactions.unshift(transaction);
+            TransactionManager.renderTransactions();
+
+            // Simulate transaction confirmation
+            setTimeout(() => {
+                transaction.status = 'confirmed';
+                TransactionManager.renderTransactions();
+                NotificationManager.showNotification('Transaction confirmed', 'success');
+            }, 3000);
+        }
+
+        static renderTransactions() {
+            DOM.txList.innerHTML = '';
+
+            state.transactions.slice(0, 10).forEach(tx => {
+                const txElement = document.createElement('div');
+                txElement.className = `transaction-item ${tx.status}`;
+                txElement.innerHTML = `
+                    <div class="tx-hash">${tx.hash.slice(0, 6)}...${tx.hash.slice(-4)}</div>
+                    <div class="tx-amount">${tx.amount} ${tx.token}</div>
+                    <div class="tx-status">${tx.status}</div>
+                `;
+                DOM.txList.appendChild(txElement);
+            });
+        }
+    }
+
+    // Portfolio Manager
+    class PortfolioManager {
+        static init() {
+            PortfolioManager.renderPortfolio();
+        }
+
+        static renderPortfolio() {
+            DOM.portfolioTable.innerHTML = '';
+
+            state.portfolio.forEach(asset => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${asset.symbol}</td>
+                    <td>${asset.name}</td>
+                    <td>${asset.balance.toFixed(4)}</td>
+                    <td>$${asset.price.toFixed(2)}</td>
+                    <td>$${asset.value.toFixed(2)}</td>
+                    <td>${asset.allocation.toFixed(1)}%</td>
+                `;
+                DOM.portfolioTable.appendChild(row);
+            });
         }
     }
 
@@ -253,13 +386,14 @@
     function init() {
         initDOM();
         ThemeManager.init();
-        NetworkManager.init();
-        TokenManager.init();
+        SettingsManager.init();
         WalletManager.init();
-        // Initialize other modules
+        MarketDataManager.init();
+        TransactionManager.init();
+        PortfolioManager.init();
     }
 
-    // Start the application
+    // Start the application when DOM is loaded
     document.addEventListener('DOMContentLoaded', init);
 
 })();
