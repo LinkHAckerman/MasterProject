@@ -8,23 +8,22 @@ import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 contract MagnumOpusToken is ERC20, Ownable {
     using SafeMath for uint256;
 
-    // Token Parameters
+    // Token parameters
     string private _name;
     string private _symbol;
     uint8 private _decimals;
     uint256 private _totalSupply;
 
-    // Staking Parameters
+    // Staking parameters
     uint256 private _stakingRewardRate;
-    uint256 private _stakingRewardDuration;
-    uint256 private _lastRewardUpdateTime;
-    mapping(address => uint256) private _stakingBalances;
+    uint256 private _lastUpdateTime;
+    mapping(address => uint256) private _stakedBalances;
     mapping(address => uint256) private _rewards;
 
-    // Event Definitions
-    event Staked(address indexed staker, uint256 amount);
-    event Withdrawn(address indexed staker, uint256 amount);
-    event RewardPaid(address indexed staker, uint256 amount);
+    // Event declarations
+    event Staked(address indexed user, uint256 amount);
+    event Withdrawn(address indexed user, uint256 amount);
+    event RewardPaid(address indexed user, uint256 amount);
 
     // Constructor
     constructor(
@@ -32,92 +31,86 @@ contract MagnumOpusToken is ERC20, Ownable {
         string memory symbol,
         uint8 decimals,
         uint256 initialSupply,
-        uint256 stakingRewardRate,
-        uint256 stakingRewardDuration
+        uint256 stakingRewardRate
     ) ERC20(name, symbol) {
         _name = name;
         _symbol = symbol;
         _decimals = decimals;
         _stakingRewardRate = stakingRewardRate;
-        _stakingRewardDuration = stakingRewardDuration;
-        _lastRewardUpdateTime = block.timestamp;
-
         _mint(msg.sender, initialSupply);
         _totalSupply = initialSupply;
+        _lastUpdateTime = block.timestamp;
     }
 
-    // Token Functions
-    function decimals() public view override returns (uint8) {
-        return _decimals;
+    // Modifier to check if staking amount is valid
+    modifier validStakeAmount(uint256 amount) {
+        require(amount > 0, "Stake amount must be greater than 0");
+        _;
     }
 
-    function totalSupply() public view override returns (uint256) {
-        return _totalSupply;
-    }
-
-    // Staking Functions
-    function stake(uint256 amount) public {
-        require(amount > 0, "Amount must be greater than 0");
+    // Stake tokens
+    function stake(uint256 amount) external validStakeAmount(amount) {
         require(balanceOf(msg.sender) >= amount, "Insufficient balance");
-
         _updateRewards(msg.sender);
-        _stakingBalances[msg.sender] = _stakingBalances[msg.sender].add(amount);
+        _stakedBalances[msg.sender] = _stakedBalances[msg.sender].add(amount);
         _transfer(msg.sender, address(this), amount);
-
         emit Staked(msg.sender, amount);
     }
 
-    function withdraw(uint256 amount) public {
-        require(amount > 0, "Amount must be greater than 0");
-        require(_stakingBalances[msg.sender] >= amount, "Insufficient staked balance");
-
+    // Withdraw staked tokens
+    function withdraw(uint256 amount) external validStakeAmount(amount) {
+        require(_stakedBalances[msg.sender] >= amount, "Insufficient staked balance");
         _updateRewards(msg.sender);
-        _stakingBalances[msg.sender] = _stakingBalances[msg.sender].sub(amount);
+        _stakedBalances[msg.sender] = _stakedBalances[msg.sender].sub(amount);
         _transfer(address(this), msg.sender, amount);
-
         emit Withdrawn(msg.sender, amount);
     }
 
-    function claimRewards() public {
+    // Claim rewards
+    function claimRewards() external {
         _updateRewards(msg.sender);
         uint256 reward = _rewards[msg.sender];
-        _rewards[msg.sender] = 0;
-
         if (reward > 0) {
-            _transfer(address(this), msg.sender, reward);
+            _rewards[msg.sender] = 0;
+            _mint(msg.sender, reward);
             emit RewardPaid(msg.sender, reward);
         }
     }
 
-    // Internal Functions
-    function _updateRewards(address account) internal {
-        uint256 timeSinceLastUpdate = block.timestamp.sub(_lastRewardUpdateTime);
-        if (timeSinceLastUpdate > 0) {
-            uint256 reward = _stakingBalances[account].mul(_stakingRewardRate).mul(timeSinceLastUpdate).div(_stakingRewardDuration);
-            _rewards[account] = _rewards[account].add(reward);
-            _lastRewardUpdateTime = block.timestamp;
+    // Update rewards for a user
+    function _updateRewards(address user) private {
+        uint256 currentTime = block.timestamp;
+        uint256 timeElapsed = currentTime.sub(_lastUpdateTime);
+        if (timeElapsed > 0) {
+            uint256 reward = _stakedBalances[user].mul(_stakingRewardRate).mul(timeElapsed).div(1 days);
+            _rewards[user] = _rewards[user].add(reward);
+            _lastUpdateTime = currentTime;
         }
     }
 
-    // Admin Functions
-    function setStakingRewardRate(uint256 newRate) public onlyOwner {
+    // Get staked balance of a user
+    function getStakedBalance(address user) external view returns (uint256) {
+        return _stakedBalances[user];
+    }
+
+    // Get rewards of a user
+    function getRewards(address user) external view returns (uint256) {
+        _updateRewards(user);
+        return _rewards[user];
+    }
+
+    // Get total staked amount
+    function getTotalStaked() external view returns (uint256) {
+        return balanceOf(address(this));
+    }
+
+    // Get staking reward rate
+    function getStakingRewardRate() external view returns (uint256) {
+        return _stakingRewardRate;
+    }
+
+    // Set staking reward rate (only owner)
+    function setStakingRewardRate(uint256 newRate) external onlyOwner {
         _stakingRewardRate = newRate;
-    }
-
-    function setStakingRewardDuration(uint256 newDuration) public onlyOwner {
-        _stakingRewardDuration = newDuration;
-    }
-
-    function mint(address to, uint256 amount) public onlyOwner {
-        require(amount > 0, "Amount must be greater than 0");
-        _mint(to, amount);
-        _totalSupply = _totalSupply.add(amount);
-    }
-
-    function burn(uint256 amount) public {
-        require(amount > 0, "Amount must be greater than 0");
-        require(balanceOf(msg.sender) >= amount, "Insufficient balance");
-        _burn(msg.sender, amount);
-        _totalSupply = _totalSupply.sub(amount);
     }
 }
