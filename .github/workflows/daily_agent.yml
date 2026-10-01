@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write   # needed for the final commit/push step
-  models: read       # needed for the GitHub Models agent
 
 jobs:
   run-agent:
@@ -62,12 +61,6 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: python ai_agent_openrouter.py
 
-      - name: Execute GitHub Models Agent
-        continue-on-error: true
-        env:
-          GITHUB_MODELS_TOKEN: ${{ secrets.GH_MODELS_PAT }}
-        run: python ai_agent_github_models.py
-
       - name: Validate Today's Generated Files
         run: python validate_files.py
 
@@ -76,7 +69,7 @@ jobs:
           git config --global user.name "LinkHAckerman"
           git config --global user.email "151451018+LinkHAckerman@users.noreply.github.com"
           git add -A
-          git commit -m "Autonomous multi-language architecture evolution (5 agents)" || echo "No changes to commit"
+          git commit -m "Autonomous multi-language architecture evolution (4 agents)" || echo "No changes to commit"
 
           for i in 1 2 3 4 5; do
             git pull --rebase origin main && git push && break
