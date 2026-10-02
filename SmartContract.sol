@@ -1,233 +1,412 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.20;
 
 /**
- * @title MagnumOpusToken
- * @dev ERC20 token with EIP-2612 permit, governance voting, and a simple staking pool.
- * This contract showcases best practices: immutable variables, reentrancy guard,
- * safe math via built‑in overflow checks, and events for off‑chain indexing.
+ * @title IFlashLoanReceiver
+ * @notice Interface for contracts utilizing the Magnum Opus Flash Loan service.
  */
-contract MagnumOpusToken {
-    // ---------------------------------------------------------------------
-    // ERC20 storage
-    // ---------------------------------------------------------------------
-    string public constant name = "Magnum Opus Token";
-    string public constant symbol = "MOP";
-    uint8 public constant decimals = 18;
-    uint256 public totalSupply;
+interface IFlashLoanReceiver {
+    function executeOperation(
+        address asset,
+        uint256 amount,
+        uint256 fee,
+        address initiator,
+        bytes calldata params
+    ) external returns (bool);
+}
 
-    mapping(address => uint256) private _balances;
-    mapping(address => mapping(address => uint256)) private _allowances;
-
-    // ---------------------------------------------------------------------
-    // EIP-2612 Permit (meta‑transactions)
-    // ---------------------------------------------------------------------
-    bytes32 public immutable DOMAIN_SEPARATOR;
-    // keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)")
-    bytes32 public constant PERMIT_TYPEHASH = 0xd505accf9c7c8c5c5e5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5;
-    mapping(address => uint256) public nonces;
-
-    // ---------------------------------------------------------------------
-    // Governance (simple vote delegation)
-    // ---------------------------------------------------------------------
-    mapping(address => address) public delegates;
-    mapping(address => uint256) public voteBalance;
-    mapping(address => mapping(uint256 => uint256)) public checkpoints; // delegate => checkpoint => votes
-    mapping(address => uint32) public numCheckpoints;
-
-    // ---------------------------------------------------------------------
-    // Staking pool
-    // ---------------------------------------------------------------------
-    uint256 public constant REWARD_RATE = 1e18; // 1 token per second per staked token (for demo)
-    struct StakeInfo { uint256 amount; uint256 rewardDebt; uint256 lastUpdate; }
-    mapping(address => StakeInfo) public stakes;
-
-    // ---------------------------------------------------------------------
-    // Events
-    // ---------------------------------------------------------------------
+/**
+ * @title IERC20
+ * @notice Interface for standard ERC20 operations.
+ */
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address to, uint256 value) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 value) external returns (bool);
+    function transferFrom(address from, address to, uint256 value) external returns (bool);
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
-    event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
-    event DelegateVotesChanged(address indexed delegate, uint256 previousBalance, uint256 newBalance);
+}
+
+/**
+ * @title MagnumOpusNexus
+ * @notice Central coordination hub containing AMM, Staking, Flash Loans, and Governance.
+ */
+contract MagnumOpusNexus {
+    // Custom Errors for optimized gas footprint
+    error ZeroAddress();
+    error InsufficientBalance();
+    error InsufficientAllowance();
+    error ReentrancyGuardTriggered();
+    error ContractPaused();
+    error IdenticalAddresses();
+    error InsufficientLiquidity();
+    error InsufficientOutputAmount();
+    error InvalidKValue();
+    error FlashLoanFailed();
+    error Unauthorized();
+    error ProposalNotActive();
+    error AlreadyVoted();
+    error VotingClosed();
+    error ExecuteFailed();
+
+    // Reentrancy and Pause States
+    uint8 private constant _NOT_ENTERED = 1;
+    uint8 private constant _ENTERED = 2;
+    uint8 private _status = _NOT_ENTERED;
+    bool public isPaused;
+    address public owner;
+
+    // Token instances for the native AMM pair
+    IERC20 public tokenA;
+    IERC20 public tokenB;
+
+    // AMM Pool balances and total LP shares
+    uint256 public reserveA;
+    uint256 public reserveB;
+    uint256 public totalLPShares;
+    mapping(address => uint256) public lpSharesOf;
+
+    // Oracle pricing tracking
+    uint256 public priceCumulativeA;
+    uint256 public priceCumulativeB;
+    uint256 public lastBlockTimestamp;
+
+    // Staking parameters
+    uint256 public rewardRatePerBlock = 1e18; // 1 standard reward token unit per block
+    uint256 public lastRewardBlock;
+    uint256 public accRewardPerShare;
+    mapping(address => uint256) public stakedLPShares;
+    mapping(address => uint256) public rewardDebt;
+
+    // Flash Loan state
+    uint256 public flashLoanFeeBps = 9; // 0.09% fee (9 bps)
+
+    // Governance
+    struct Proposal {
+        uint256 id;
+        string description;
+        address targetContract;
+        bytes executeData;
+        uint256 forVotes;
+        uint256 againstVotes;
+        uint256 startBlock;
+        uint256 endBlock;
+        bool executed;
+    }
+    uint256 public proposalCount;
+    mapping(uint256 => Proposal) public proposals;
+    mapping(uint256 => mapping(address => bool)) public proposalVotes;
+    uint256 public votingPeriodBlocks = 1000;
+    uint256 public proposalThreshold = 1000 * 1e18; // Requires 1000 governance tokens to propose
+
+    // Mock Governance Token (OPUS) minted directly inside contract for simulation or gas savings
+    string public constant name = "Magnum Opus Governance Token";
+    string public constant symbol = "OPUS";
+    uint8 public constant decimals = 18;
+    uint256 public totalGovernanceSupply;
+    mapping(address => uint256) public governanceBalanceOf;
+    mapping(address => mapping(address => uint256)) public governanceAllowance;
+
+    // Events
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event TokenSwap(address indexed sender, address tokenIn, uint256 amountIn, address tokenOut, uint256 amountOut);
+    event LiquidityAdded(address indexed provider, uint256 amountA, uint256 amountB, uint256 lpTokens);
+    event LiquidityRemoved(address indexed provider, uint256 amountA, uint256 amountB, uint256 lpTokens);
     event Staked(address indexed user, uint256 amount);
     event Unstaked(address indexed user, uint256 amount);
-    event RewardClaimed(address indexed user, uint256 reward);
+    event RewardClaimed(address indexed user, uint256 amount);
+    event FlashLoanExecuted(address indexed receiver, address asset, uint256 amount, uint256 fee);
+    event ProposalCreated(uint256 indexed proposalId, string description, address target, bytes data);
+    event VoteCast(address indexed voter, uint256 indexed proposalId, bool support, uint256 weight);
+    event ProposalExecuted(uint256 indexed proposalId);
 
-    // ---------------------------------------------------------------------
-    // Constructor – mint initial supply to deployer and set DOMAIN_SEPARATOR
-    // ---------------------------------------------------------------------
-    constructor(uint256 initialSupply) {
-        _mint(msg.sender, initialSupply);
-        uint256 chainId;
-        assembly { chainId := chainid() }
-        DOMAIN_SEPARATOR = keccak256(abi.encode(
-            keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-            keccak256(bytes(name)),
-            keccak256(bytes("1")),
-            chainId,
-            address(this)
-        ));
+    modifier nonReentrant() {
+        if (_status == _ENTERED) revert ReentrancyGuardTriggered();
+        _status = _ENTERED;
+        _;
+        _status = _NOT_ENTERED;
     }
 
-    // ---------------------------------------------------------------------
-    // ERC20 core functions
-    // ---------------------------------------------------------------------
-    function balanceOf(address account) public view returns (uint256) { return _balances[account]; }
-    function allowance(address owner, address spender) public view returns (uint256) { return _allowances[owner][spender]; }
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert Unauthorized();
+        _;
+    }
 
-    function approve(address spender, uint256 amount) public returns (bool) {
-        _allowances[msg.sender][spender] = amount;
-        emit Approval(msg.sender, spender, amount);
+    modifier whenNotPaused() {
+        if (isPaused) revert ContractPaused();
+        _;
+    }
+
+    constructor(address _tokenA, address _tokenB) {
+        if (_tokenA == address(0) || _tokenB == address(0)) revert ZeroAddress();
+        if (_tokenA == _tokenB) revert IdenticalAddresses();
+        tokenA = IERC20(_tokenA);
+        tokenB = IERC20(_tokenB);
+        owner = msg.sender;
+        lastBlockTimestamp = block.timestamp;
+        lastRewardBlock = block.number;
+    }
+
+    // --- Governance Token Native Logic ---
+    function mintGovernanceToken(address to, uint256 amount) public onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        totalGovernanceSupply += amount;
+        governanceBalanceOf[to] += amount;
+        emit Transfer(address(0), to, amount);
+    }
+
+    function transferGovernance(address to, uint256 amount) external returns (bool) {
+        if (to == address(0)) revert ZeroAddress();
+        if (governanceBalanceOf[msg.sender] < amount) revert InsufficientBalance();
+        governanceBalanceOf[msg.sender] -= amount;
+        governanceBalanceOf[to] += amount;
+        emit Transfer(msg.sender, to, amount);
         return true;
     }
 
-    function transfer(address to, uint256 amount) public returns (bool) {
-        _transfer(msg.sender, to, amount);
-        return true;
-    }
-
-    function transferFrom(address from, address to, uint256 amount) public returns (bool) {
-        uint256 currentAllowance = _allowances[from][msg.sender];
-        require(currentAllowance >= amount, "ERC20: transfer amount exceeds allowance");
-        _allowances[from][msg.sender] = currentAllowance - amount;
-        emit Approval(from, msg.sender, _allowances[from][msg.sender]);
-        _transfer(from, to, amount);
-        return true;
-    }
-
-    // ---------------------------------------------------------------------
-    // Internal transfer with vote bookkeeping
-    // ---------------------------------------------------------------------
-    function _transfer(address from, address to, uint256 amount) internal {
-        require(to != address(0), "ERC20: transfer to zero address");
-        uint256 fromBalance = _balances[from];
-        require(fromBalance >= amount, "ERC20: transfer amount exceeds balance");
-        _balances[from] = fromBalance - amount;
-        _balances[to] += amount;
-        emit Transfer(from, to, amount);
-        _moveDelegates(delegates[from], delegates[to], amount);
-    }
-
-    // ---------------------------------------------------------------------
-    // Mint / Burn (only owner for demo purposes)
-    // ---------------------------------------------------------------------
-    address public owner = msg.sender;
-    modifier onlyOwner() { require(msg.sender == owner, "Not owner"); _; }
-    function _mint(address account, uint256 amount) internal {
-        require(account != address(0), "ERC20: mint to zero address");
-        totalSupply += amount;
-        _balances[account] += amount;
-        emit Transfer(address(0), account, amount);
-        _moveDelegates(address(0), delegates[account], amount);
-    }
-    function mint(address to, uint256 amount) external onlyOwner { _mint(to, amount); }
-
-    // ---------------------------------------------------------------------
-    // EIP-2612 Permit implementation
-    // ---------------------------------------------------------------------
-    function permit(address owner_, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external {
-        require(block.timestamp <= deadline, "Permit: expired deadline");
-        bytes32 structHash = keccak256(abi.encode(PERMIT_TYPEHASH, owner_, spender, value, nonces[owner_]++, deadline));
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
-        address signatory = ecrecover(digest, v, r, s);
-        require(signatory != address(0) && signatory == owner_, "Permit: invalid signature");
-        _allowances[owner_][spender] = value;
-        emit Approval(owner_, spender, value);
-    }
-
-    // ---------------------------------------------------------------------
-    // Governance – delegation & vote tracking
-    // ---------------------------------------------------------------------
-    function delegate(address delegatee) external {
-        address currentDelegate = delegates[msg.sender];
-        uint256 delegatorBalance = _balances[msg.sender];
-        delegates[msg.sender] = delegatee;
-        emit DelegateChanged(msg.sender, currentDelegate, delegatee);
-        _moveDelegates(currentDelegate, delegatee, delegatorBalance);
-    }
-
-    function _moveDelegates(address src, address dst, uint256 amount) internal {
-        if (src != dst && amount > 0) {
-            if (src != address(0)) {
-                uint32 srcCheckpoints = numCheckpoints[src];
-                uint256 srcOld = srcCheckpoints > 0 ? checkpoints[src][srcCheckpoints - 1] : 0;
-                uint256 srcNew = srcOld - amount;
-                _writeCheckpoint(src, srcCheckpoints, srcOld, srcNew);
-            }
-            if (dst != address(0)) {
-                uint32 dstCheckpoints = numCheckpoints[dst];
-                uint256 dstOld = dstCheckpoints > 0 ? checkpoints[dst][dstCheckpoints - 1] : 0;
-                uint256 dstNew = dstOld + amount;
-                _writeCheckpoint(dst, dstCheckpoints, dstOld, dstNew);
-            }
+    // --- AMM CORE CORE LOGIC ---
+    function _updateCumulativePrices() private {
+        uint256 timeElapsed = block.timestamp - lastBlockTimestamp;
+        if (timeElapsed > 0 && reserveA > 0 && reserveB > 0) {
+            priceCumulativeA += (reserveB * 1e18 / reserveA) * timeElapsed;
+            priceCumulativeB += (reserveA * 1e18 / reserveB) * timeElapsed;
         }
+        lastBlockTimestamp = block.timestamp;
     }
 
-    function _writeCheckpoint(address delegatee, uint32 nCheckpoints, uint256 oldVotes, uint256 newVotes) internal {
-        uint32 blockNumber = safe32(block.number, "Block number exceeds 32 bits");
-        if (nCheckpoints > 0 && checkpoints[delegatee][nCheckpoints - 1] == blockNumber) {
-            checkpoints[delegatee][nCheckpoints - 1] = newVotes;
+    function addLiquidity(uint256 amountADesired, uint256 amountBDesired) external nonReentrant whenNotPaused returns (uint256 liquidityShares) {
+        if (amountADesired == 0 || amountBDesired == 0) revert InsufficientLiquidity();
+        _updateCumulativePrices();
+
+        tokenA.transferFrom(msg.sender, address(this), amountADesired);
+        tokenB.transferFrom(msg.sender, address(this), amountBDesired);
+
+        if (totalLPShares == 0) {
+            liquidityShares = _sqrt(amountADesired * amountBDesired);
         } else {
-            checkpoints[delegatee][nCheckpoints] = newVotes;
-            numCheckpoints[delegatee] = nCheckpoints + 1;
+            uint256 shareA = (amountADesired * totalLPShares) / reserveA;
+            uint256 shareB = (amountBDesired * totalLPShares) / reserveB;
+            liquidityShares = shareA < shareB ? shareA : shareB;
         }
-        emit DelegateVotesChanged(delegatee, oldVotes, newVotes);
+
+        if (liquidityShares <= 0) revert InsufficientLiquidity();
+
+        reserveA += amountADesired;
+        reserveB += amountBDesired;
+        totalLPShares += liquidityShares;
+        lpSharesOf[msg.sender] += liquidityShares;
+
+        emit LiquidityAdded(msg.sender, amountADesired, amountBDesired, liquidityShares);
     }
 
-    function safe32(uint256 n, string memory errorMessage) internal pure returns (uint32) {
-        require(n < 2**32, errorMessage);
-        return uint32(n);
+    function removeLiquidity(uint256 lpAmount) external nonReentrant returns (uint256 amountA, uint256 amountB) {
+        if (lpAmount == 0 || lpSharesOf[msg.sender] < lpAmount) revert InsufficientLiquidity();
+        _updateCumulativePrices();
+
+        amountA = (lpAmount * reserveA) / totalLPShares;
+        amountB = (lpAmount * reserveB) / totalLPShares;
+
+        if (amountA == 0 || amountB == 0) revert InsufficientLiquidity();
+
+        lpSharesOf[msg.sender] -= lpAmount;
+        totalLPShares -= lpAmount;
+        reserveA -= amountA;
+        reserveB -= amountB;
+
+        tokenA.transfer(msg.sender, amountA);
+        tokenB.transfer(msg.sender, amountB);
+
+        emit LiquidityRemoved(msg.sender, amountA, amountB, lpAmount);
     }
 
-    // ---------------------------------------------------------------------
-    // Staking – users lock MOP to earn more MOP (demo reward rate)
-    // ---------------------------------------------------------------------
-    function stake(uint256 amount) external {
-        require(amount > 0, "Stake: zero amount");
-        _updateReward(msg.sender);
-        _transfer(msg.sender, address(this), amount);
-        stakes[msg.sender].amount += amount;
-        emit Staked(msg.sender, amount);
+    function swap(address tokenIn, uint256 amountIn, uint256 minAmountOut) external nonReentrant whenNotPaused returns (uint256 amountOut) {
+        bool isTokenA = tokenIn == address(tokenA);
+        if (!isTokenA && tokenIn != address(tokenB)) revert Unauthorized();
+
+        IERC20 sourceToken = isTokenA ? tokenA : tokenB;
+        IERC20 targetToken = isTokenA ? tokenB : tokenA;
+        uint256 resIn = isTokenA ? reserveA : reserveB;
+        uint256 resOut = isTokenA ? reserveB : reserveA;
+
+        if (amountIn == 0) revert InsufficientOutputAmount();
+        sourceToken.transferFrom(msg.sender, address(this), amountIn);
+
+        // 0.3% protocol fee
+        uint256 amountInWithFee = amountIn * 997;
+        uint256 numerator = amountInWithFee * resOut;
+        uint256 denominator = (resIn * 1000) + amountInWithFee;
+        amountOut = numerator / denominator;
+
+        if (amountOut < minAmountOut) revert InsufficientOutputAmount();
+
+        if (isTokenA) {
+            reserveA += amountIn;
+            reserveB -= amountOut;
+        } else { 
+            reserveB += amountIn;
+            reserveA -= amountOut;
+        }
+
+        _updateCumulativePrices();
+        targetToken.transfer(msg.sender, amountOut);
+
+        emit TokenSwap(msg.sender, tokenIn, amountIn, address(targetToken), amountOut);
     }
 
-    function unstake(uint256 amount) external {
-        StakeInfo storage info = stakes[msg.sender];
-        require(amount > 0 && amount <= info.amount, "Unstake: invalid amount");
-        _updateReward(msg.sender);
-        info.amount -= amount;
-        _transfer(address(this), msg.sender, amount);
-        emit Unstaked(msg.sender, amount);
-    }
-
-    function claimReward() external {
-        _updateReward(msg.sender);
-        uint256 reward = stakes[msg.sender].rewardDebt;
-        require(reward > 0, "No reward");
-        stakes[msg.sender].rewardDebt = 0;
-        _mint(msg.sender, reward);
-        emit RewardClaimed(msg.sender, reward);
-    }
-
-    function _updateReward(address user) internal {
-        StakeInfo storage info = stakes[user];
-        if (info.amount == 0) {
-            info.lastUpdate = block.timestamp;
+    // --- STAKING & YIELD FARMING ENGINE ---
+    function updateStakingPool() public {
+        if (block.number <= lastRewardBlock) return;
+        if (totalLPShares == 0) {
+            lastRewardBlock = block.number;
             return;
         }
-        uint256 elapsed = block.timestamp - info.lastUpdate;
-        uint256 accrued = (info.amount * REWARD_RATE * elapsed) / 1e18; // scale down
-        info.rewardDebt += accrued;
-        info.lastUpdate = block.timestamp;
+        uint256 multiplier = block.number - lastRewardBlock;
+        uint256 rewards = multiplier * rewardRatePerBlock;
+        accRewardPerShare += (rewards * 1e12) / totalLPShares;
+        lastRewardBlock = block.number;
     }
 
-    // ---------------------------------------------------------------------
-    // View helpers
-    // ---------------------------------------------------------------------
-    function getCurrentReward(address user) external view returns (uint256) {
-        StakeInfo memory info = stakes[user];
-        if (info.amount == 0) return 0;
-        uint256 elapsed = block.timestamp - info.lastUpdate;
-        uint256 accrued = (info.amount * REWARD_RATE * elapsed) / 1e18;
-        return info.rewardDebt + accrued;
+    function stake(uint256 lpAmount) external nonReentrant whenNotPaused {
+        if (lpAmount == 0 || lpSharesOf[msg.sender] < lpAmount) revert InsufficientLiquidity();
+        updateStakingPool();
+
+        if (stakedLPShares[msg.sender] > 0) {
+            uint256 pending = ((stakedLPShares[msg.sender] * accRewardPerShare) / 1e12) - rewardDebt[msg.sender];
+            if (pending > 0) {
+                mintGovernanceToken(msg.sender, pending);
+                emit RewardClaimed(msg.sender, pending);
+            }
+        }
+
+        lpSharesOf[msg.sender] -= lpAmount;
+        stakedLPShares[msg.sender] += lpAmount;
+        rewardDebt[msg.sender] = (stakedLPShares[msg.sender] * accRewardPerShare) / 1e12;
+
+        emit Staked(msg.sender, lpAmount);
+    }
+
+    function unstake(uint256 lpAmount) external nonReentrant {
+        if (lpAmount == 0 || stakedLPShares[msg.sender] < lpAmount) revert InsufficientLiquidity();
+        updateStakingPool();
+
+        uint256 pending = ((stakedLPShares[msg.sender] * accRewardPerShare) / 1e12) - rewardDebt[msg.sender];
+        if (pending > 0) {
+            mintGovernanceToken(msg.sender, pending);
+            emit RewardClaimed(msg.sender, pending);
+        }
+
+        stakedLPShares[msg.sender] -= lpAmount;
+        lpSharesOf[msg.sender] += lpAmount;
+        rewardDebt[msg.sender] = (stakedLPShares[msg.sender] * accRewardPerShare) / 1e12;
+
+        emit Unstaked(msg.sender, lpAmount);
+    }
+
+    // --- HIGH-PERFORMANCE FLASH LOAN SYSTEM ---
+    function flashLoan(address asset, uint256 amount, bytes calldata params) external nonReentrant whenNotPaused {
+        bool isTokenA = asset == address(tokenA);
+        if (!isTokenA && asset != address(tokenB)) revert Unauthorized();
+
+        IERC20 targetAsset = isTokenA ? tokenA : tokenB;
+        uint256 currentReserve = isTokenA ? reserveA : reserveB;
+        if (amount > currentReserve) revert InsufficientLiquidity();
+
+        uint256 fee = (amount * flashLoanFeeBps) / 10000;
+        uint256 balanceBefore = targetAsset.balanceOf(address(this));
+
+        targetAsset.transfer(msg.sender, amount);
+
+        if (!IFlashLoanReceiver(msg.sender).executeOperation(asset, amount, fee, msg.sender, params)) {
+            revert FlashLoanFailed();
+        }
+
+        uint256 balanceAfter = targetAsset.balanceOf(address(this));
+        if (balanceAfter < balanceBefore + fee) revert InsufficientBalance();
+
+        if (isTokenA) {
+            reserveA = balanceAfter;
+        } else {
+            reserveB = balanceAfter;
+        }
+
+        emit FlashLoanExecuted(msg.sender, asset, amount, fee);
+    }
+
+    // --- DECENTRALIZED GOVERNANCE ENGINE ---
+    function propose(string calldata description, address target, bytes calldata executeData) external returns (uint256) {
+        if (governanceBalanceOf[msg.sender] < proposalThreshold) revert Unauthorized();
+
+        proposalCount++;
+        Proposal storage newProposal = proposals[proposalCount];
+        newProposal.id = proposalCount;
+        newProposal.description = description;
+        newProposal.targetContract = target;
+        newProposal.executeData = executeData;
+        newProposal.startBlock = block.number;
+        newProposal.endBlock = block.number + votingPeriodBlocks;
+        newProposal.executed = false;
+
+        emit ProposalCreated(proposalCount, description, target, executeData);
+        return proposalCount;
+    }
+
+    function castVote(uint256 proposalId, bool support) external {
+        Proposal storage prop = proposals[proposalId];
+        if (block.number < prop.startBlock || block.number > prop.endBlock) revert VotingClosed();
+        if (proposalVotes[proposalId][msg.sender]) revert AlreadyVoted();
+
+        uint256 weight = governanceBalanceOf[msg.sender];
+        if (weight == 0) revert Unauthorized();
+
+        if (support) {
+            prop.forVotes += weight;
+        } else {
+            prop.againstVotes += weight;
+        }
+
+        proposalVotes[proposalId][msg.sender] = true;
+        emit VoteCast(msg.sender, proposalId, support, weight);
+    }
+
+    function executeProposal(uint256 proposalId) external nonReentrant payable {
+        Proposal storage prop = proposals[proposalId];
+        if (block.number <= prop.endBlock) revert ProposalNotActive();
+        if (prop.executed) revert AlreadyVoted();
+        if (prop.forVotes <= prop.againstVotes) revert ExecuteFailed();
+
+        prop.executed = true;
+
+        (bool success, ) = prop.targetContract.call{value: msg.value}(prop.executeData);
+        if (!success) revert ExecuteFailed();
+
+        emit ProposalExecuted(proposalId);
+    }
+
+    // --- EMERGENCY SWITCHES ---
+    function setPaused(bool _paused) external onlyOwner {
+        isPaused = _paused;
+    }
+
+    function changeOwner(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        owner = newOwner;
+    }
+
+    // --- MATHEMATICAL HELPERS ---
+    function _sqrt(uint256 y) private pure returns (uint256 z) {
+        if (y > 3) {
+            z = y;
+            uint256 x = y / 2 + 1;
+            while (x < z) {
+                z = x;
+                x = (y / x + x) / 2;
+            }
+        } else if (y != 0) {
+            z = 1;
+        }
     }
 }
