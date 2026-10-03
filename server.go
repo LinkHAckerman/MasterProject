@@ -1,178 +1,332 @@
 package main
 
 import (
-    "context"
+    "crypto/rand"
+    "encoding/hex"
     "encoding/json"
+    "fmt"
     "log"
+    "math/big"
     "net/http"
     "os"
-    "os/signal"
+    "strings"
     "sync"
-    "syscall"
     "time"
 
-    "github.com/google/uuid"
     "github.com/gorilla/mux"
-    "golang.org/x/time/rate"
+    "github.com/golang-jwt/jwt/v5"
+    "golang.org/x/net/context"
 )
+
+// =============================
+// Types & Data Structures
+// =============================
+
+type Wallet struct {
+    Address string            `json:"address"`
+    // Balances stored as token symbol -> amount (big.Int for precision)
+    Balances map[string]*big.Int `json:"balances"`
+}
 
 type Transaction struct {
     ID        string    `json:"id"`
     From      string    `json:"from"`
     To        string    `json:"to"`
-    Amount    string    `json:"amount"`
     Token     string    `json:"token"`
-    ChainID   string    `json:"chainId"`
-    Timestamp time.Time `json:"timestamp"`
+    Amount    string    `json:"amount"` // string representation for JSON safety
+    Timestamp int64     `json:"timestamp"`
     Status    string    `json:"status"`
 }
 
-type TransactionRequest struct {
-    From    string `json:"from"`
-    To      string `json:"to"`
-    Amount  string `json:"amount"`
-    Token   string `json:"token"`
-    ChainID string `json:"chainId"`
+type Claims struct {
+    Address string `json:"address"`
+    jwt.RegisteredClaims
 }
 
-type TransactionResponse struct {
-    ID     string `json:"id"`
-    Status string `json:"status"`
-}
-
-type Store struct {
-    sync.RWMutex
-    txs map[string]Transaction
-}
+// =============================
+// In‑memory Store (thread‑safe)
+// =============================
 
 var (
-    store   = Store{txs: make(map[string]Transaction)}
-    limiter = rate.NewLimiter(rate.Every(100*time.Millisecond), 5) // 5 req/s burst
+    wallets      = make(map[string]*Wallet)
+    txStore      = make(map[string]*Transaction)
+    storeMutex   sync.RWMutex
+    jwtSecret    []byte
+    tokenExpiry  = time.Hour * 24
 )
 
-func main() {
-    r := mux.NewRouter()
-    r.Use(corsMiddleware)
-    r.Use(rateLimitMiddleware)
+// =============================
+// Helper Functions
+// =============================
 
-    r.HandleFunc("/health", healthHandler).Methods("GET")
-    r.HandleFunc("/relay", relayHandler).Methods("POST")
-    r.HandleFunc("/tx/{id}", txStatusHandler).Methods("GET")
-
-    srv := &http.Server{
-        Addr:    ":8080",
-        Handler: r,
+func generateAddress() (string, error) {
+    // 20‑byte (160‑bit) address like Ethereum
+    b := make([]byte, 20)
+    _, err := rand.Read(b)
+    if err != nil {
+        return "", err
     }
-
-    go func() {
-        log.Println("Server listening on :8080")
-        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-            log.Fatalf("listen: %s\n", err)
-        }
-    }()
-
-    quit := make(chan os.Signal, 1)
-    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-    <-quit
-    log.Println("Shutting down server...")
-
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
-    if err := srv.Shutdown(ctx); err != nil {
-        log.Fatalf("Server forced to shutdown: %v", err)
-    }
-    log.Println("Server exiting")
+    return "0x" + hex.EncodeToString(b), nil
 }
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-    w.WriteHeader(http.StatusOK)
-    w.Write([]byte(`{"status":"ok"}`))
-}
-
-func relayHandler(w http.ResponseWriter, r *http.Request) {
-    var req TransactionRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        http.Error(w, "invalid JSON", http.StatusBadRequest)
-        return
-    }
-    if !validateTxRequest(req) {
-        http.Error(w, "missing required fields", http.StatusBadRequest)
-        return
-    }
-
-    tx := Transaction{
-        ID:        uuid.New().String(),
-        From:      req.From,
-        To:        req.To,
-        Amount:    req.Amount,
-        Token:     req.Token,
-        ChainID:   req.ChainID,
-        Timestamp: time.Now().UTC(),
-        Status:    "pending",
-    }
-
-    store.Lock()
-    store.txs[tx.ID] = tx
-    store.Unlock()
-
-    // Simulate async processing
-    go processTransaction(tx.ID)
-
-    resp := TransactionResponse{ID: tx.ID, Status: tx.Status}
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(resp)
-}
-
-func txStatusHandler(w http.ResponseWriter, r *http.Request) {
-    vars := mux.Vars(r)
-    id := vars["id"]
-
-    store.RLock()
-    tx, ok := store.txs[id]
-    store.RUnlock()
+func parseAmount(s string) (*big.Int, error) {
+    // Accept decimal string, convert to wei‑like integer (assume 18 decimals)
+    // For simplicity we treat the string as integer units.
+    i := new(big.Int)
+    _, ok := i.SetString(s, 10)
     if !ok {
-        http.Error(w, "transaction not found", http.StatusNotFound)
+        return nil, fmt.Errorf("invalid amount %s", s)
+    }
+    if i.Sign() < 0 {
+        return nil, fmt.Errorf("amount must be non‑negative")
+    }
+    return i, nil
+}
+
+func jsonResponse(w http.ResponseWriter, status int, payload interface{}) {
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(status)
+    if payload != nil {
+        json.NewEncoder(w).Encode(payload)
+    }
+}
+
+// =============================
+// JWT Middleware
+// =============================
+
+func jwtMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        authHeader := r.Header.Get("Authorization")
+        if authHeader == "" {
+            jsonResponse(w, http.StatusUnauthorized, map[string]string{"error": "missing Authorization header"})
+            return
+        }
+        parts := strings.SplitN(authHeader, " ", 2)
+        if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+            jsonResponse(w, http.StatusUnauthorized, map[string]string{"error": "invalid Authorization format"})
+            return
+        }
+        tokenStr := parts[1]
+        token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+            return jwtSecret, nil
+        })
+        if err != nil || !token.Valid {
+            jsonResponse(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+            return
+        }
+        claims, ok := token.Claims.(*Claims)
+        if !ok {
+            jsonResponse(w, http.StatusUnauthorized, map[string]string{"error": "invalid token claims"})
+            return
+        }
+        // Attach address to request context
+        ctx := context.WithValue(r.Context(), "address", claims.Address)
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
+}
+
+func getAddressFromContext(r *http.Request) (string, bool) {
+    addr, ok := r.Context().Value("address").(string)
+    return addr, ok
+}
+
+// =============================
+// Handlers
+// =============================
+
+// POST /wallet/create – creates a new wallet and returns JWT
+func createWalletHandler(w http.ResponseWriter, r *http.Request) {
+    addr, err := generateAddress()
+    if err != nil {
+        jsonResponse(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate address"})
         return
     }
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(tx)
-}
+    wallet := &Wallet{Address: addr, Balances: make(map[string]*big.Int)}
+    // Give some mock ETH for demo purposes
+    wallet.Balances["ETH"] = big.NewInt(1e18) // 1 ETH in wei‑like units
 
-func validateTxRequest(req TransactionRequest) bool {
-    return req.From != "" && req.To != "" && req.Amount != "" && req.Token != "" && req.ChainID != ""
-}
+    storeMutex.Lock()
+    wallets[addr] = wallet
+    storeMutex.Unlock()
 
-// Mock processing: after a short delay mark as confirmed
-func processTransaction(id string) {
-    time.Sleep(2 * time.Second)
-    store.Lock()
-    tx, ok := store.txs[id]
-    if ok {
-        tx.Status = "confirmed"
-        store.txs[id] = tx
+    // Issue JWT (no password for demo)
+    claims := Claims{Address: addr, RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(tokenExpiry))}}
+    token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+    tokenStr, err := token.SignedString(jwtSecret)
+    if err != nil {
+        jsonResponse(w, http.StatusInternalServerError, map[string]string{"error": "failed to sign token"})
+        return
     }
-    store.Unlock()
+
+    jsonResponse(w, http.StatusCreated, map[string]string{"address": addr, "token": tokenStr})
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("Access-Control-Allow-Origin", "*")
-        w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        if r.Method == http.MethodOptions {
-            w.WriteHeader(http.StatusNoContent)
-            return
-        }
-        next.ServeHTTP(w, r)
-    })
+// GET /wallet/{address} – returns wallet balances (auth optional, but if auth present must match address)
+func getWalletHandler(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    addr := vars["address"]
+
+    // If request is authenticated, ensure the caller is requesting its own wallet
+    if authAddr, ok := getAddressFromContext(r); ok && authAddr != addr {
+        jsonResponse(w, http.StatusForbidden, map[string]string{"error": "cannot access other wallets"})
+        return
+    }
+
+    storeMutex.RLock()
+    wallet, exists := wallets[addr]
+    storeMutex.RUnlock()
+    if !exists {
+        jsonResponse(w, http.StatusNotFound, map[string]string{"error": "wallet not found"})
+        return
+    }
+    // Convert balances to string for JSON safety
+    balOut := make(map[string]string)
+    for token, amount := range wallet.Balances {
+        balOut[token] = amount.String()
+    }
+    jsonResponse(w, http.StatusOK, map[string]interface{}{ "address": wallet.Address, "balances": balOut })
 }
 
-func rateLimitMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        if !limiter.Allow() {
-            http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-            return
-        }
-        next.ServeHTTP(w, r)
-    })
+// POST /transaction – submit a transaction (requires auth)
+func submitTransactionHandler(w http.ResponseWriter, r *http.Request) {
+    // Ensure caller is authenticated
+    fromAddr, ok := getAddressFromContext(r)
+    if !ok {
+        jsonResponse(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+        return
+    }
+    var req struct {
+        To    string `json:"to"`
+        Token string `json:"token"`
+        Amount string `json:"amount"`
+    }
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON payload"})
+        return
+    }
+    if req.To == "" || req.Token == "" || req.Amount == "" {
+        jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "missing fields"})
+        return
+    }
+    amount, err := parseAmount(req.Amount)
+    if err != nil {
+        jsonResponse(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+        return
+    }
+
+    // Basic validation & balance check
+    storeMutex.Lock()
+    defer storeMutex.Unlock()
+    fromWallet, ok := wallets[fromAddr]
+    if !ok {
+        jsonResponse(w, http.StatusNotFound, map[string]string{"error": "sender wallet not found"})
+        return
+    }
+    toWallet, ok := wallets[req.To]
+    if !ok {
+        jsonResponse(w, http.StatusNotFound, map[string]string{"error": "recipient wallet not found"})
+        return
+    }
+    bal, ok := fromWallet.Balances[req.Token]
+    if !ok || bal.Cmp(amount) < 0 {
+        jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "insufficient balance"})
+        return
+    }
+    // Perform transfer atomically
+    bal.Sub(bal, amount)
+    if _, exists := toWallet.Balances[req.Token]; !exists {
+        toWallet.Balances[req.Token] = big.NewInt(0)
+    }
+    toWallet.Balances[req.Token].Add(toWallet.Balances[req.Token], amount)
+
+    // Create transaction record
+    txIDBytes := make([]byte, 16)
+    rand.Read(txIDBytes)
+    txID := hex.EncodeToString(txIDBytes)
+    tx := &Transaction{
+        ID:        txID,
+        From:      fromAddr,
+        To:        req.To,
+        Token:     req.Token,
+        Amount:    amount.String(),
+        Timestamp: time.Now().Unix(),
+        Status:    "confirmed",
+    }
+    txStore[txID] = tx
+
+    jsonResponse(w, http.StatusCreated, tx)
+}
+
+// GET /transaction/{id} – fetch transaction status (auth optional)
+func getTransactionHandler(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    txID := vars["id"]
+    storeMutex.RLock()
+    tx, exists := txStore[txID]
+    storeMutex.RUnlock()
+    if !exists {
+        jsonResponse(w, http.StatusNotFound, map[string]string{"error": "transaction not found"})
+        return
+    }
+    jsonResponse(w, http.StatusOK, tx)
+}
+
+// GET /health – simple health check
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+    jsonResponse(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// =============================
+// Router Setup
+// =============================
+
+func newRouter() *mux.Router {
+    r := mux.NewRouter()
+    // Public endpoints
+    r.HandleFunc("/health", healthHandler).Methods("GET")
+    r.HandleFunc("/wallet/create", createWalletHandler).Methods("POST")
+    r.HandleFunc("/wallet/{address}", getWalletHandler).Methods("GET")
+    r.HandleFunc("/transaction/{id}", getTransactionHandler).Methods("GET")
+
+    // Protected endpoints – require JWT
+    protected := r.PathPrefix("/api").Subrouter()
+    protected.Use(jwtMiddleware)
+    protected.HandleFunc("/transaction", submitTransactionHandler).Methods("POST")
+
+    return r
+}
+
+// =============================
+// Main Entry Point
+// =============================
+
+func main() {
+    // Load JWT secret – in production use a secure secret manager
+    secret := os.Getenv("MAGNUM_JWT_SECRET")
+    if secret == "" {
+        // Fallback for local dev – NOT for production
+        secret = "dev-secret-key-please-change"
+    }
+    jwtSecret = []byte(secret)
+
+    port := os.Getenv("MAGNUM_PORT")
+    if port == "" {
+        port = "8080"
+    }
+
+    router := newRouter()
+    srv := &http.Server{
+        Addr:    ":" + port,
+        Handler: router,
+        // Good defaults for timeouts to mitigate Slowloris attacks
+        ReadTimeout:  15 * time.Second,
+        WriteTimeout: 15 * time.Second,
+        IdleTimeout:  60 * time.Second,
+    }
+
+    log.Printf("🚀 Magnum Opus Go microservice listening on %s", srv.Addr)
+    if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+        log.Fatalf("Server error: %v", err)
+    }
 }
