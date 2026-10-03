@@ -1,122 +1,132 @@
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- Magnum Opus Database Schema
+-- PostgreSQL
 
-CREATE TYPE chain_name AS ENUM ('ethereum', 'polygon', 'avalanche', 'solana', 'binance-smart-chain', 'arbitrum', 'optimism', 'base');
-CREATE TYPE tx_type AS ENUM ('transfer', 'swap', 'mint', 'burn', 'stake', 'unstake', 'claim', 'deploy');
-CREATE TYPE tx_status AS ENUM ('pending', 'confirmed', 'failed', 'replaced');
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Users
 CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email VARCHAR(255) UNIQUE NOT NULL,
-    username VARCHAR(100) UNIQUE NOT NULL,
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email VARCHAR(255) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
-    preferences JSONB DEFAULT '{"theme":"dark","currency":"USD","language":"en"}'::jsonb,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    full_name VARCHAR(255),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status VARCHAR(20) NOT NULL DEFAULT 'active'
 );
 
-CREATE TABLE chains (
-    id SERIAL PRIMARY KEY,
-    name chain_name UNIQUE NOT NULL,
-    symbol VARCHAR(10) NOT NULL,
-    rpc_url TEXT NOT NULL,
-    explorer_url TEXT,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
+-- Wallets
 CREATE TABLE wallets (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    chain_id INTEGER REFERENCES chains(id) ON DELETE SET NULL,
-    address VARCHAR(255) NOT NULL,
-    label VARCHAR(100),
-    is_primary BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(user_id, chain_id, address)
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    address VARCHAR(42) NOT NULL UNIQUE,
+    network VARCHAR(32) NOT NULL,
+    label VARCHAR(64),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Tokens (ERC20, BEP20, etc.)
 CREATE TABLE tokens (
     id SERIAL PRIMARY KEY,
-    chain_id INTEGER REFERENCES chains(id) ON DELETE CASCADE,
-    contract_address VARCHAR(255),
-    symbol VARCHAR(20) NOT NULL,
-    name VARCHAR(100) NOT NULL,
-    decimals INTEGER DEFAULT 18,
-    is_native BOOLEAN DEFAULT FALSE,
-    logo_url TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(chain_id, contract_address)
+    symbol VARCHAR(10) NOT NULL,
+    name VARCHAR(64) NOT NULL,
+    decimals SMALLINT NOT NULL,
+    contract_address VARCHAR(42) NOT NULL,
+    network VARCHAR(32) NOT NULL,
+    UNIQUE (contract_address, network)
 );
 
-CREATE TABLE portfolio_snapshots (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
-    token_id INTEGER REFERENCES tokens(id) ON DELETE SET NULL,
-    balance BIGINT NOT NULL DEFAULT 0,
-    usd_value NUMERIC(30,2) DEFAULT 0,
-    snapshot_at TIMESTAMPTZ DEFAULT NOW()
+-- Wallet token balances
+CREATE TABLE wallet_balances (
+    wallet_id UUID NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+    token_id INT NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+    balance NUMERIC(78,0) NOT NULL DEFAULT 0,
+    PRIMARY KEY (wallet_id, token_id)
 );
 
+-- Transactions (on‑chain and internal)
 CREATE TABLE transactions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    wallet_id UUID REFERENCES wallets(id) ON DELETE SET NULL,
-    token_id INTEGER REFERENCES tokens(id) ON DELETE SET NULL,
-    chain_id INTEGER REFERENCES chains(id) ON DELETE SET NULL,
-    tx_hash VARCHAR(66) UNIQUE NOT NULL,
-    from_address VARCHAR(255),
-    to_address VARCHAR(255),
-    value BIGINT NOT NULL DEFAULT 0,
-    gas_used INTEGER,
-    gas_price BIGINT,
-    gas_fee_usd NUMERIC(30,2) DEFAULT 0,
-    tx_type tx_type NOT NULL,
-    tx_status tx_status DEFAULT 'pending',
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    wallet_id UUID NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+    tx_hash VARCHAR(66) NOT NULL UNIQUE,
     block_number BIGINT,
-    log_index INTEGER,
-    timestamp TIMESTAMPTZ DEFAULT NOW(),
-    CONSTRAINT chk_tx_hash CHECK (tx_hash ~ '^0x[a-fA-F0-9]{64}$')
+    from_address VARCHAR(42) NOT NULL,
+    to_address VARCHAR(42) NOT NULL,
+    token_id INT REFERENCES tokens(id),
+    amount NUMERIC(78,0) NOT NULL,
+    gas_used BIGINT,
+    gas_price NUMERIC(78,0),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    confirmed_at TIMESTAMPTZ
 );
 
+-- NFT metadata
 CREATE TABLE nfts (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
-    chain_id INTEGER REFERENCES chains(id) ON DELETE SET NULL,
-    contract_address VARCHAR(255) NOT NULL,
-    token_id VARCHAR(255) NOT NULL,
-    standard VARCHAR(20) DEFAULT 'erc721',
-    metadata_url TEXT,
-    rarity_tier VARCHAR(50),
-    acquired_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(wallet_id, contract_address, token_id)
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    contract_address VARCHAR(42) NOT NULL,
+    token_id NUMERIC(78,0) NOT NULL,
+    owner_wallet_id UUID NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+    metadata_uri TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (contract_address, token_id)
 );
 
-CREATE TABLE defi_positions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
-    protocol_name VARCHAR(100) NOT NULL,
-    pool_id VARCHAR(255),
-    token_id INTEGER REFERENCES tokens(id) ON DELETE SET NULL,
-    amount BIGINT NOT NULL DEFAULT 0,
-    usd_value NUMERIC(30,2) DEFAULT 0,
-    apr NUMERIC(5,2),
-    last_updated TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(wallet_id, protocol_name, pool_id)
-);
+-- Indexes for fast look‑ups
+CREATE INDEX idx_wallet_balances_wallet ON wallet_balances(wallet_id);
+CREATE INDEX idx_wallet_balances_token ON wallet_balances(token_id);
+CREATE INDEX idx_transactions_wallet ON transactions(wallet_id);
+CREATE INDEX idx_transactions_status ON transactions(status);
+CREATE INDEX idx_nfts_owner ON nfts(owner_wallet_id);
 
-CREATE INDEX idx_transactions_wallet_ts ON transactions(wallet_id, timestamp DESC);
-CREATE INDEX idx_transactions_token_status ON transactions(token_id, tx_status);
-CREATE INDEX idx_transactions_txhash ON transactions(tx_hash);
-CREATE INDEX idx_portfolio_wallet ON portfolio_snapshots(wallet_id);
-CREATE INDEX idx_nfts_wallet ON nfts(wallet_id);
-CREATE INDEX idx_defi_wallet ON defi_positions(wallet_id);
-
-CREATE OR REPLACE FUNCTION update_updated_at()
-RETURNS TRIGGER AS $$
+-- Trigger to keep wallet_balances in sync with confirmed transactions
+CREATE OR REPLACE FUNCTION update_wallet_balance() RETURNS TRIGGER AS $$
+DECLARE
+    delta NUMERIC(78,0);
 BEGIN
-    NEW.updated_at := NOW();
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.status = 'confirmed' THEN
+            delta := NEW.amount;
+            IF NEW.from_address = (SELECT address FROM wallets WHERE id = NEW.wallet_id) THEN
+                delta := -delta;
+            END IF;
+            INSERT INTO wallet_balances (wallet_id, token_id, balance)
+            VALUES (NEW.wallet_id, NEW.token_id, GREATEST(delta,0))
+            ON CONFLICT (wallet_id, token_id) DO UPDATE
+            SET balance = GREATEST(wallet_balances.balance + delta, 0);
+        END IF;
+    END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_users_updated BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-CREATE TRIGGER trg_chains_updated BEFORE UPDATE ON chains FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER trg_update_balance
+AFTER INSERT ON transactions
+FOR EACH ROW EXECUTE FUNCTION update_wallet_balance();
+
+-- Auditing table for changes (optional)
+CREATE TABLE audit_log (
+    id BIGSERIAL PRIMARY KEY,
+    table_name VARCHAR(64) NOT NULL,
+    operation VARCHAR(10) NOT NULL,
+    record_id UUID NOT NULL,
+    changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    changed_by UUID REFERENCES users(id),
+    details JSONB
+);
+
+-- Function to log audit entries
+CREATE OR REPLACE FUNCTION log_audit() RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO audit_log (table_name, operation, record_id, changed_by, details)
+    VALUES (TG_TABLE_NAME, TG_OP, NEW.id, current_setting('app.current_user')::UUID, row_to_json(NEW));
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Example: attach audit to users table
+CREATE TRIGGER trg_audit_users
+AFTER INSERT OR UPDATE OR DELETE ON users
+FOR EACH ROW EXECUTE FUNCTION log_audit();
+
+-- End of schema

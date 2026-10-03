@@ -11,201 +11,244 @@ namespace MagnumOpus.Core
 {
     public class TransactionProcessor
     {
-        private readonly Dictionary<string, Wallet> _wallets = new Dictionary<string, Wallet>();
-        private readonly List<Transaction> _pendingTransactions = new List<Transaction>();
-        private readonly List<Block> _blockchain = new List<Block>();
-        private readonly int _difficulty = 4;
+        private readonly Dictionary<string, Wallet> _wallets;
+        private readonly Dictionary<string, Token> _tokens;
+        private readonly List<Transaction> _pendingTransactions;
+        private readonly List<Block> _blockchain;
+        private readonly int _difficulty;
+        private readonly int _blockTime;
         private readonly object _lock = new object();
 
-        public class Wallet
+        public TransactionProcessor(int difficulty = 4, int blockTime = 10)
         {
-            public string Address { get; set; }
-            public decimal Balance { get; set; }
-            public string PrivateKey { get; set; }
+            _wallets = new Dictionary<string, Wallet>();
+            _tokens = new Dictionary<string, Token>();
+            _pendingTransactions = new List<Transaction>();
+            _blockchain = new List<Block>();
+            _difficulty = difficulty;
+            _blockTime = blockTime;
 
-            public Wallet(string address, decimal initialBalance = 0)
-            {
-                Address = address;
-                Balance = initialBalance;
-                PrivateKey = GeneratePrivateKey();
-            }
-
-            private string GeneratePrivateKey()
-            {
-                using (var rng = RandomNumberGenerator.Create())
-                {
-                    byte[] keyBytes = new byte[32];
-                    rng.GetBytes(keyBytes);
-                    return Convert.ToBase64String(keyBytes);
-                }
-            }
+            // Initialize with genesis block
+            _blockchain.Add(CreateGenesisBlock());
         }
 
-        public class Transaction
+        private Block CreateGenesisBlock()
         {
-            public string FromAddress { get; set; }
-            public string ToAddress { get; set; }
-            public decimal Amount { get; set; }
-            public string Signature { get; set; }
-            public string TransactionId { get; set; }
-
-            public Transaction(string fromAddress, string toAddress, decimal amount)
+            var genesisTransaction = new Transaction
             {
-                FromAddress = fromAddress;
-                ToAddress = toAddress;
-                Amount = amount;
-                TransactionId = GenerateTransactionId();
-            }
+                Sender = "0",
+                Recipient = "0",
+                Amount = 0,
+                Timestamp = DateTime.UtcNow,
+                Signature = "genesis"
+            };
 
-            private string GenerateTransactionId()
+            return new Block
             {
-                using (var sha256 = SHA256.Create())
-                {
-                    var input = $"{FromAddress}{ToAddress}{Amount}{DateTime.UtcNow.Ticks}";
-                    var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(input));
-                    return Convert.ToBase64String(hashBytes);
-                }
-            }
+                Index = 0,
+                Timestamp = DateTime.UtcNow,
+                Transactions = new List<Transaction> { genesisTransaction },
+                PreviousHash = "0",
+                Nonce = 0,
+                Hash = CalculateHash(0, DateTime.UtcNow, new List<Transaction> { genesisTransaction }, "0", 0)
+            };
         }
 
-        public class Block
-        {
-            public int Index { get; set; }
-            public DateTime Timestamp { get; set; }
-            public List<Transaction> Transactions { get; set; }
-            public string PreviousHash { get; set; }
-            public string Hash { get; set; }
-            public int Nonce { get; set; }
-
-            public Block(int index, string previousHash, List<Transaction> transactions)
-            {
-                Index = index;
-                Timestamp = DateTime.UtcNow;
-                Transactions = transactions;
-                PreviousHash = previousHash;
-                Hash = CalculateHash();
-            }
-
-            public string CalculateHash()
-            {
-                using (var sha256 = SHA256.Create())
-                {
-                    var input = $"{Index}{Timestamp}{PreviousHash}{Nonce}{JsonSerializer.Serialize(Transactions)}";
-                    var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(input));
-                    return Convert.ToBase64String(hashBytes);
-                }
-            }
-
-            public void MineBlock(int difficulty)
-            {
-                var target = new string('0', difficulty);
-                while (Hash.Substring(0, difficulty) != target)
-                {
-                    Nonce++;
-                    Hash = CalculateHash();
-                }
-            }
-        }
-
-        public void CreateWallet(string address, decimal initialBalance = 0)
+        public void AddWallet(string address, Wallet wallet)
         {
             lock (_lock)
             {
-                if (!_wallets.ContainsKey(address))
-                {
-                    _wallets[address] = new Wallet(address, initialBalance);
-                }
+                _wallets[address] = wallet;
             }
         }
 
-        public async Task<string> CreateTransaction(string fromAddress, string toAddress, decimal amount)
+        public void AddToken(string symbol, Token token)
         {
-            if (!_wallets.ContainsKey(fromAddress) || !_wallets.ContainsKey(toAddress))
+            lock (_lock)
             {
-                throw new Exception("Invalid wallet address");
+                _tokens[symbol] = token;
             }
+        }
 
-            if (_wallets[fromAddress].Balance < amount)
+        public async Task<string> CreateTransaction(string sender, string recipient, decimal amount, string signature)
+        {
+            var transaction = new Transaction
             {
-                throw new Exception("Insufficient balance");
-            }
+                Sender = sender,
+                Recipient = recipient,
+                Amount = amount,
+                Timestamp = DateTime.UtcNow,
+                Signature = signature
+            };
 
-            var transaction = new Transaction(fromAddress, toAddress, amount);
-            transaction.Signature = SignTransaction(transaction, _wallets[fromAddress].PrivateKey);
+            // Validate transaction
+            if (!await ValidateTransaction(transaction))
+            {
+                throw new InvalidOperationException("Invalid transaction");
+            }
 
             lock (_lock)
             {
                 _pendingTransactions.Add(transaction);
             }
 
-            return transaction.TransactionId;
+            return transaction.Id;
         }
 
-        private string SignTransaction(Transaction transaction, string privateKey)
+        private async Task<bool> ValidateTransaction(Transaction transaction)
         {
-            using (var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(privateKey)))
+            // Check if sender has enough balance
+            if (!_wallets.ContainsKey(transaction.Sender))
             {
-                var data = Encoding.UTF8.GetBytes($"{transaction.FromAddress}{transaction.ToAddress}{transaction.Amount}");
-                var hash = hmac.ComputeHash(data);
-                return Convert.ToBase64String(hash);
-            }
-        }
-
-        public async Task MinePendingTransactions(string minerAddress)
-        {
-            if (_pendingTransactions.Count == 0)
-            {
-                return;
+                return false;
             }
 
-            var block = new Block(_blockchain.Count, GetLatestBlock()?.Hash ?? "0", _pendingTransactions.ToList());
-
-            block.MineBlock(_difficulty);
-
-            lock (_lock)
+            var senderWallet = _wallets[transaction.Sender];
+            if (senderWallet.Balance < transaction.Amount)
             {
-                _blockchain.Add(block);
-
-                foreach (var transaction in block.Transactions)
-                {
-                    _wallets[transaction.FromAddress].Balance -= transaction.Amount;
-                    _wallets[transaction.ToAddress].Balance += transaction.Amount;
-                }
-
-                _pendingTransactions.Clear();
+                return false;
             }
-        }
 
-        public Block GetLatestBlock()
-        {
-            lock (_lock)
+            // Verify signature
+            if (!await VerifySignature(transaction))
             {
-                return _blockchain.LastOrDefault();
-            }
-        }
-
-        public bool IsChainValid()
-        {
-            lock (_lock)
-            {
-                for (int i = 1; i < _blockchain.Count; i++)
-                {
-                    var currentBlock = _blockchain[i];
-                    var previousBlock = _blockchain[i - 1];
-
-                    if (currentBlock.Hash != currentBlock.CalculateHash())
-                    {
-                        return false;
-                    }
-
-                    if (currentBlock.PreviousHash != previousBlock.Hash)
-                    {
-                        return false;
-                    }
-                }
+                return false;
             }
 
             return true;
         }
+
+        private async Task<bool> VerifySignature(Transaction transaction)
+        {
+            // In a real implementation, this would verify the cryptographic signature
+            // For this example, we'll just check if the signature is not empty
+            return !string.IsNullOrEmpty(transaction.Signature);
+        }
+
+        public async Task MineBlock(string minerAddress)
+        {
+            List<Transaction> blockTransactions;
+            lock (_lock)
+            {
+                blockTransactions = _pendingTransactions.Take(10).ToList();
+                _pendingTransactions.RemoveRange(0, blockTransactions.Count);
+            }
+
+            var lastBlock = _blockchain.Last();
+            var newBlock = new Block
+            {
+                Index = lastBlock.Index + 1,
+                Timestamp = DateTime.UtcNow,
+                Transactions = blockTransactions,
+                PreviousHash = lastBlock.Hash,
+                Nonce = 0
+            };
+
+            // Mine the block
+            await Mine(newBlock);
+
+            // Add the mined block to the blockchain
+            lock (_lock)
+            {
+                _blockchain.Add(newBlock);
+            }
+
+            // Reward the miner
+            await CreateTransaction("0", minerAddress, 1, "mining_reward");
+        }
+
+        private async Task Mine(Block block)
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            while (!IsValidHash(block.Hash, _difficulty))
+            {
+                block.Nonce++;
+                block.Hash = CalculateHash(block.Index, block.Timestamp, block.Transactions, block.PreviousHash, block.Nonce);
+
+                // Check if we should stop mining
+                if (stopwatch.Elapsed.TotalSeconds >= _blockTime)
+                {
+                    break;
+                }
+            }
+            stopwatch.Stop();
+        }
+
+        private bool IsValidHash(string hash, int difficulty)
+        {
+            var leadingZeros = new string('0', difficulty);
+            return hash.StartsWith(leadingZeros);
+        }
+
+        private string CalculateHash(int index, DateTime timestamp, List<Transaction> transactions, string previousHash, int nonce)
+        {
+            var blockHeader = $"{index}{timestamp:yyyyMMddHHmmss}{previousHash}{nonce}";
+            var transactionData = string.Join("", transactions.Select(t => t.Id));
+            var blockData = blockHeader + transactionData;
+
+            using (var sha256 = SHA256.Create())
+            {
+                var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(blockData));
+                return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+            }
+        }
+
+        public List<Block> GetBlockchain()
+        {
+            lock (_lock)
+            {
+                return new List<Block>(_blockchain);
+            }
+        }
+
+        public List<Transaction> GetPendingTransactions()
+        {
+            lock (_lock)
+            {
+                return new List<Transaction>(_pendingTransactions);
+            }
+        }
+    }
+
+    public class Wallet
+    {
+        public string Address { get; set; }
+        public decimal Balance { get; set; }
+        public Dictionary<string, decimal> TokenBalances { get; set; }
+
+        public Wallet(string address)
+        {
+            Address = address;
+            Balance = 0;
+            TokenBalances = new Dictionary<string, decimal>();
+        }
+    }
+
+    public class Token
+    {
+        public string Symbol { get; set; }
+        public string Name { get; set; }
+        public decimal TotalSupply { get; set; }
+        public int Decimals { get; set; }
+    }
+
+    public class Transaction
+    {
+        public string Id { get; } = Guid.NewGuid().ToString();
+        public string Sender { get; set; }
+        public string Recipient { get; set; }
+        public decimal Amount { get; set; }
+        public DateTime Timestamp { get; set; }
+        public string Signature { get; set; }
+    }
+
+    public class Block
+    {
+        public int Index { get; set; }
+        public DateTime Timestamp { get; set; }
+        public List<Transaction> Transactions { get; set; }
+        public string PreviousHash { get; set; }
+        public int Nonce { get; set; }
+        public string Hash { get; set; }
     }
 }
