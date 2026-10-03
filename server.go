@@ -5,314 +5,158 @@ import (
     "fmt"
     "log"
     "net/http"
-    "sync"
+    "os"
+    "os/signal"
+    "syscall"
     "time"
     "github.com/gorilla/mux"
+    "github.com/gorilla/websocket"
 )
 
 // Wallet represents a blockchain wallet
 // with address, balance, and transaction history
-// This is a simplified version for demonstration
-// In a real application, you would use a proper blockchain library
-// and handle private keys securely
-
-type Wallet struct {
-    Address     string      `json:"address"`
-    Balance     float64     `json:"balance"`
-    Nonce       uint64      `json:"nonce"`
-    Transactions []Transaction `json:"transactions"`
-}
 
 // Transaction represents a blockchain transaction
-// with sender, receiver, amount, and timestamp
-// This is a simplified version for demonstration
-// In a real application, you would include more fields
-// and handle transaction signing and verification
 
-type Transaction struct {
-    Sender      string    `json:"sender"`
-    Receiver    string    `json:"receiver"`
-    Amount      float64   `json:"amount"`
-    Timestamp   time.Time `json:"timestamp"`
-    GasPrice    float64   `json:"gasPrice"`
-    GasLimit    uint64    `json:"gasLimit"`
-    Nonce       uint64    `json:"nonce"`
-    Hash        string    `json:"hash"`
-}
+// WebSocket connection pool
+var connections = make(map[*websocket.Conn]bool)
 
-// WalletService represents the wallet service
-// with a map of wallets and a mutex for thread safety
-
-type WalletService struct {
-    wallets map[string]*Wallet
-    mu      sync.Mutex
-}
-
-// NewWalletService creates a new WalletService
-// with an empty map of wallets
-
-func NewWalletService() *WalletService {
-    return &WalletService{
-        wallets: make(map[string]*Wallet),
-    }
-}
-
-// CreateWallet creates a new wallet with the given address
-// and adds it to the map of wallets
-
-func (ws *WalletService) CreateWallet(address string) *Wallet {
-    ws.mu.Lock()
-    defer ws.mu.Unlock()
-
-    wallet := &Wallet{
-        Address: address,
-        Balance: 0,
-        Nonce:   0,
-    }
-
-    ws.wallets[address] = wallet
-    return wallet
-}
-
-// GetWallet returns the wallet with the given address
-// or nil if the wallet does not exist
-
-func (ws *WalletService) GetWallet(address string) *Wallet {
-    ws.mu.Lock()
-    defer ws.mu.Unlock()
-
-    return ws.wallets[address]
-}
-
-// SendTransaction sends a transaction from the sender to the receiver
-// with the given amount, gas price, and gas limit
-// It updates the balances of the sender and receiver
-// and adds the transaction to the transaction history
-// of both wallets
-
-func (ws *WalletService) SendTransaction(sender, receiver string, amount, gasPrice float64, gasLimit uint64) (*Transaction, error) {
-    ws.mu.Lock()
-    defer ws.mu.Unlock()
-
-    senderWallet := ws.wallets[sender]
-    if senderWallet == nil {
-        return nil, fmt.Errorf("sender wallet not found")
-    }
-
-    receiverWallet := ws.wallets[receiver]
-    if receiverWallet == nil {
-        return nil, fmt.Errorf("receiver wallet not found")
-    }
-
-    if senderWallet.Balance < amount+gasPrice*float64(gasLimit) {
-        return nil, fmt.Errorf("insufficient balance")
-    }
-
-    if senderWallet.Nonce+1 != senderWallet.Nonce {
-        return nil, fmt.Errorf("invalid nonce")
-    }
-
-    tx := &Transaction{
-        Sender:    sender,
-        Receiver:  receiver,
-        Amount:    amount,
-        Timestamp: time.Now(),
-        GasPrice:  gasPrice,
-        GasLimit:  gasLimit,
-        Nonce:     senderWallet.Nonce,
-        Hash:      fmt.Sprintf("%x", Sha256([]byte(fmt.Sprintf("%s%s%f%d%d%d", sender, receiver, amount, gasPrice, gasLimit, senderWallet.Nonce)))),
-    }
-
-    senderWallet.Balance -= amount + gasPrice*float64(gasLimit)
-    senderWallet.Nonce++
-    senderWallet.Transactions = append(senderWallet.Transactions, *tx)
-
-    receiverWallet.Balance += amount
-    receiverWallet.Transactions = append(receiverWallet.Transactions, *tx)
-
-    return tx, nil
-}
-
-// GetTransactionHistory returns the transaction history
-// of the wallet with the given address
-
-func (ws *WalletService) GetTransactionHistory(address string) ([]Transaction, error) {
-    ws.mu.Lock()
-    defer ws.mu.Unlock()
-
-    wallet := ws.wallets[address]
-    if wallet == nil {
-        return nil, fmt.Errorf("wallet not found")
-    }
-
-    return wallet.Transactions, nil
-}
-
-// GetBalance returns the balance of the wallet with the given address
-
-func (ws *WalletService) GetBalance(address string) (float64, error) {
-    ws.mu.Lock()
-    defer ws.mu.Unlock()
-
-    wallet := ws.wallets[address]
-    if wallet == nil {
-        return 0, fmt.Errorf("wallet not found")
-    }
-
-    return wallet.Balance, nil
-}
-
-// GetNonce returns the nonce of the wallet with the given address
-
-func (ws *WalletService) GetNonce(address string) (uint64, error) {
-    ws.mu.Lock()
-    defer ws.mu.Unlock()
-
-    wallet := ws.wallets[address]
-    if wallet == nil {
-        return 0, fmt.Errorf("wallet not found")
-    }
-
-    return wallet.Nonce, nil
-}
-
-// Sha256 computes the SHA-256 hash of the given data
-// This is a simplified version for demonstration
-// In a real application, you would use a proper cryptographic library
-
-func Sha256(data []byte) []byte {
-    // This is a placeholder for the actual SHA-256 implementation
-    // In a real application, you would use a proper cryptographic library
-    // such as crypto/sha256 in the Go standard library
-    return data
-}
-
-// main is the entry point of the application
-// It creates a new WalletService and starts the HTTP server
-
+// HTTP server with graceful shutdown
 func main() {
-    walletService := NewWalletService()
-
-    // Create some wallets for demonstration
-    walletService.CreateWallet("0x123...")
-    walletService.CreateWallet("0x456...")
-
-    // Create a new router
+    // Initialize router
     r := mux.NewRouter()
 
-    // Define the routes
-    r.HandleFunc("/wallets", func(w http.ResponseWriter, r *http.Request) {
-        switch r.Method {
-        case "POST":
-            var wallet Wallet
-            err := json.NewDecoder(r.Body).Decode(&wallet)
+    // API endpoints
+    r.HandleFunc("/api/wallet/{address}", getWalletHandler).Methods("GET")
+    r.HandleFunc("/api/transactions", getTransactionsHandler).Methods("GET")
+    r.HandleFunc("/api/broadcast", broadcastTransactionHandler).Methods("POST")
+    r.HandleFunc("/ws", websocketHandler)
+
+    // Start HTTP server
+    srv := &http.Server{
+        Handler:      r,
+        Addr:         "127.0.0.1:8080",
+        WriteTimeout: 15 * time.Second,
+        ReadTimeout:  15 * time.Second,
+    }
+
+    // Graceful shutdown
+    go func() {
+        sigchan := make(chan os.Signal, 1)
+        signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
+        <-sigchan
+        log.Println("Shutting down server...")
+        srv.Shutdown(context.Background())
+    }()
+
+    log.Println("Server starting on port 8080...")
+    log.Fatal(srv.ListenAndServe())
+}
+
+// WebSocket handler for real-time updates
+func websocketHandler(w http.ResponseWriter, r *http.Request) {
+    // Upgrade HTTP connection to WebSocket
+    conn, err := websocket.Upgrade(w, r, nil, 1024, 1024)
+    if err != nil {
+        log.Println(err)
+        return
+    }
+
+    // Add connection to pool
+    connections[conn] = true
+
+    // Handle incoming messages
+    go func() {
+        defer func() {
+            delete(connections, conn)
+            conn.Close()
+        }()
+
+        for {
+            _, msg, err := conn.ReadMessage()
             if err != nil {
-                http.Error(w, err.Error(), http.StatusBadRequest)
-                return
+                log.Println(err)
+                break
             }
 
-            createdWallet := walletService.CreateWallet(wallet.Address)
-            json.NewEncoder(w).Encode(createdWallet)
-        default:
-            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+            // Broadcast message to all connections
+            for c := range connections {
+                if c != conn {
+                    err := c.WriteMessage(websocket.TextMessage, msg)
+                    if err != nil {
+                        log.Println(err)
+                        c.Close()
+                        delete(connections, c)
+                    }
+                }
+            }
         }
-    }).Methods("POST")
+    }()
+}
 
-    r.HandleFunc("/wallets/{address}", func(w http.ResponseWriter, r *http.Request) {
-        vars := mux.Vars(r)
-        address := vars["address"]
+// API Handlers
+func getWalletHandler(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    address := vars["address"]
 
-        switch r.Method {
-        case "GET":
-            wallet := walletService.GetWallet(address)
-            if wallet == nil {
-                http.Error(w, "Wallet not found", http.StatusNotFound)
-                return
-            }
+    // Mock wallet data
+    wallet := Wallet{
+        Address:    address,
+        Balance:    14.852,
+        ChainID:    "0x1",
+        Network:   "Ethereum Mainnet",
+        Tokens:    []Token{
+            {Symbol: "ETH", Balance: 14.852},
+            {Symbol: "USDT", Balance: 42500.00},
+        },
+    }
 
-            json.NewEncoder(w).Encode(wallet)
-        default:
-            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(wallet)
+}
+
+func getTransactionsHandler(w http.ResponseWriter, r *http.Request) {
+    // Mock transaction data
+    transactions := []Transaction{
+        {
+            Hash:     "0x123...",
+            From:     "0x456...",
+            To:       "0x789...",
+            Value:    1.234,
+            GasPrice: 18,
+            Status:   "Confirmed",
+            Timestamp: time.Now().Unix(),
+        },
+        // More transactions...
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(transactions)
+}
+
+func broadcastTransactionHandler(w http.ResponseWriter, r *http.Request) {
+    var tx Transaction
+    err := json.NewDecoder(r.Body).Decode(&tx)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    // Process transaction (mock)
+    tx.Hash = Sha256.ComputeHash(fmt.Sprintf("%v", tx))
+    tx.Status = "Pending"
+    tx.Timestamp = time.Now().Unix()
+
+    // Broadcast to WebSocket clients
+    for conn := range connections {
+        err := conn.WriteJSON(tx)
+        if err != nil {
+            log.Println(err)
+            conn.Close()
+            delete(connections, conn)
         }
-    }).Methods("GET")
+    }
 
-    r.HandleFunc("/wallets/{address}/balance", func(w http.ResponseWriter, r *http.Request) {
-        vars := mux.Vars(r)
-        address := vars["address"]
-
-        switch r.Method {
-        case "GET":
-            balance, err := walletService.GetBalance(address)
-            if err != nil {
-                http.Error(w, err.Error(), http.StatusNotFound)
-                return
-            }
-
-            json.NewEncoder(w).Encode(map[string]float64{"balance": balance})
-        default:
-            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        }
-    }).Methods("GET")
-
-    r.HandleFunc("/wallets/{address}/nonce", func(w http.ResponseWriter, r *http.Request) {
-        vars := mux.Vars(r)
-        address := vars["address"]
-
-        switch r.Method {
-        case "GET":
-            nonce, err := walletService.GetNonce(address)
-            if err != nil {
-                http.Error(w, err.Error(), http.StatusNotFound)
-                return
-            }
-
-            json.NewEncoder(w).Encode(map[string]uint64{"nonce": nonce})
-        default:
-            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        }
-    }).Methods("GET")
-
-    r.HandleFunc("/transactions", func(w http.ResponseWriter, r *http.Request) {
-        switch r.Method {
-        case "POST":
-            var tx Transaction
-            err := json.NewDecoder(r.Body).Decode(&tx)
-            if err != nil {
-                http.Error(w, err.Error(), http.StatusBadRequest)
-                return
-            }
-
-            createdTx, err := walletService.SendTransaction(tx.Sender, tx.Receiver, tx.Amount, tx.GasPrice, tx.GasLimit)
-            if err != nil {
-                http.Error(w, err.Error(), http.StatusBadRequest)
-                return
-            }
-
-            json.NewEncoder(w).Encode(createdTx)
-        default:
-            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        }
-    }).Methods("POST")
-
-    r.HandleFunc("/wallets/{address}/transactions", func(w http.ResponseWriter, r *http.Request) {
-        vars := mux.Vars(r)
-        address := vars["address"]
-
-        switch r.Method {
-        case "GET":
-            txs, err := walletService.GetTransactionHistory(address)
-            if err != nil {
-                http.Error(w, err.Error(), http.StatusNotFound)
-                return
-            }
-
-            json.NewEncoder(w).Encode(txs)
-        default:
-            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        }
-    }).Methods("GET")
-
-    // Start the HTTP server
-    log.Println("Starting server on :8080")
-    log.Fatal(http.ListenAndServe(":8080", r))
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(tx)
 }

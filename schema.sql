@@ -1,193 +1,122 @@
--- Magnum Opus // Web3 & DeFi Nexus Engine - Data Layer Schema
--- PostgreSQL 15+ compatible (adapt syntax for other RDBMS as needed)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- =============================================
--- Core Identity & Authentication
--- =============================================
-
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
-CREATE TYPE user_role AS ENUM ('user', 'admin', 'validator');
-CREATE TYPE wallet_type AS ENUM ('EOA', 'MPC', 'SmartContract');
-CREATE TYPE transaction_type AS ENUM ('transfer', 'swap', 'mint', 'burn', 'staking', 'unstaking', 'nft_transfer');
-CREATE TYPE token_standard AS ENUM ('ERC20', 'ERC721', 'ERC1155', 'BEP20', 'SPL', 'Native');
+CREATE TYPE chain_name AS ENUM ('ethereum', 'polygon', 'avalanche', 'solana', 'binance-smart-chain', 'arbitrum', 'optimism', 'base');
+CREATE TYPE tx_type AS ENUM ('transfer', 'swap', 'mint', 'burn', 'stake', 'unstake', 'claim', 'deploy');
+CREATE TYPE tx_status AS ENUM ('pending', 'confirmed', 'failed', 'replaced');
 
 CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    wallet_address VARCHAR(42) UNIQUE NOT NULL,
-    email VARCHAR(255),
-    role user_role DEFAULT 'user',
-    is_verified BOOLEAN DEFAULT FALSE,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    username VARCHAR(100) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    preferences JSONB DEFAULT '{"theme":"dark","currency":"USD","language":"en"}'::jsonb,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    last_login TIMESTAMPTZ,
-    metadata JSONB DEFAULT '{}'
-);
-
--- =============================================
--- Wallet Management (supports EOA, MPC, SmartContract)
--- =============================================
-
-CREATE TABLE wallets (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    address VARCHAR(42) NOT NULL,
-    type wallet_type DEFAULT 'EOA',
-    chain_id VARCHAR(20) NOT NULL,
-    is_primary BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    last_sync TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(user_id, address)
-);
-
--- =============================================
--- Transaction History & Blockchain Events
--- =============================================
-
-CREATE TABLE transactions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    wallet_id UUID REFERENCES wallets(id) ON DELETE SET NULL,
-    hash VARCHAR(66) UNIQUE NOT NULL,
-    type transaction_type NOT NULL,
-    status VARCHAR(50) DEFAULT 'finalized',
-    from_address VARCHAR(42),
-    to_address VARCHAR(42),
-    amount DECIMAL(78, 18) DEFAULT 0,
-    gas_used BIGINT DEFAULT 0,
-    gas_price BIGINT DEFAULT 0,
-    fee DECIMAL(78, 18) DEFAULT 0,
-    block_number BIGINT,
-    chain_id VARCHAR(20) NOT NULL,
-    timestamp TIMESTAMPTZ DEFAULT NOW(),
-    decoded_data JSONB DEFAULT '{}',
-    log_index INTEGER DEFAULT 0
-);
-
-CREATE INDEX idx_transactions_wallet_id ON transactions(wallet_id);
-CREATE INDEX idx_transactions_hash ON transactions(hash);
-CREATE INDEX idx_transactions_timestamp ON transactions(timestamp);
-CREATE INDEX idx_transactions_from_to ON transactions(from_address, to_address);
-CREATE INDEX idx_transactions_chain ON transactions(chain_id);
-
--- =============================================
--- Token & Asset Registry
--- =============================================
-
-CREATE TABLE tokens (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    symbol VARCHAR(20) NOT NULL,
-    name VARCHAR(100) NOT NULL,
-    decimals INTEGER DEFAULT 18,
-    contract_address VARCHAR(42),
-    chain_id VARCHAR(20) NOT NULL,
-    standard token_standard DEFAULT 'ERC20',
-    is_native BOOLEAN DEFAULT FALSE,
-    is_verified BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    metadata JSONB DEFAULT '{}'
-);
-
--- =============================================
--- NFT Collection & Ownership Tracker
--- =============================================
-
-CREATE TABLE nfts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    token_id VARCHAR(100) NOT NULL,
-    contract_address VARCHAR(42) NOT NULL,
-    owner_address VARCHAR(42) NOT NULL,
-    chain_id VARCHAR(20) NOT NULL,
-    token_type VARCHAR(50) DEFAULT 'standard', -- 'ERC721', 'ERC1155', 'Dynamic', 'Fractionalized'
-    metadata_json JSONB DEFAULT '{}',
-    rarity_tier VARCHAR(50),
-    last_seen_block BIGINT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_nfts_owner ON nfts(owner_address);
-CREATE INDEX idx_nfts_contract ON nfts(contract_address);
-CREATE INDEX idx_nfts_token_id ON nfts(token_id);
-
--- =============================================
--- DeFi Positions & Lifecycle Tracking
--- =============================================
-
-CREATE TABLE defi_positions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
-    token_id UUID REFERENCES tokens(id) ON DELETE SET NULL,
-    protocol VARCHAR(100) NOT NULL, -- e.g., 'UniswapV3', 'Aave', 'Compound', 'Raydium'
-    position_type VARCHAR(50) NOT NULL, -- 'liquidity', 'staking', 'lending', 'short', 'long'
-    amount DECIMAL(78, 18) DEFAULT 0,
-    entry_price DECIMAL(78, 18) DEFAULT 0,
-    current_price DECIMAL(78, 18) DEFAULT 0,
-    apy DECIMAL(10, 4),
-    apr DECIMAL(10, 4),
-    entered_at TIMESTAMPTZ DEFAULT NOW(),
-    exited_at TIMESTAMPTZ,
-    status VARCHAR(50) DEFAULT 'active' -- 'active', 'claimed', 'withdrawn', 'expired'
-);
-
-CREATE INDEX idx_defi_positions_wallet ON defi_positions(wallet_id);
-CREATE INDEX idx_defi_positions_protocol ON defi_positions(protocol);
-CREATE INDEX idx_defi_positions_status ON defi_positions(status);
-
--- =============================================
--- Staking & Validator Participation
--- =============================================
-
-CREATE TABLE staking_activations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
-    validator_index INTEGER NOT NULL,
-    stake_amount DECIMAL(78, 18) DEFAULT 0,
-    expected_return DECIMAL(78, 18) DEFAULT 0,
-    unbonding_epoch INTEGER DEFAULT 0,
-    claimed_rewards DECIMAL(78, 18) DEFAULT 0,
-    status VARCHAR(50) DEFAULT 'active',
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_staking_wallet ON staking_activations(wallet_id);
-
--- =============================================
--- Audit & Compliance Log
--- =============================================
-
-CREATE TABLE audit_log (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    action VARCHAR(100) NOT NULL, -- e.g., 'wallet_connect', 'swap_execute', 'nft_mint', 'position_claim'
-    resource_type VARCHAR(50),
-    resource_id UUID,
-    details JSONB DEFAULT '{}',
-    ip_inet INET,
-    user_agent TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_audit_user ON audit_log(user_id);
-CREATE INDEX idx_audit_created ON audit_log(created_at);
-
--- =============================================
--- Metadata & Configuration Cache
--- =============================================
-
-CREATE TABLE platform_config (
-    key VARCHAR(100) PRIMARY KEY,
-    value JSONB NOT NULL,
-    updated_by UUID REFERENCES users(id),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- =============================================
--- End of Schema
--- =============================================
---
--- Indexes, triggers, and constraints can be added per-environment.
--- Ensure proper backups and migration strategy (e.g., using Flyway or pgMigrate).
---
--- Recommended additions per ecosystem:
--- - EVM: token_approvals table, event_logs partitioning by block_number
--- - Solana: program_id indexes, slot-based partitioning
--- - Cosmos: denom tracking, fee-grant records
--- - Bitcoin: txid/wout tracking via OP_RETURN metadata
+CREATE TABLE chains (
+    id SERIAL PRIMARY KEY,
+    name chain_name UNIQUE NOT NULL,
+    symbol VARCHAR(10) NOT NULL,
+    rpc_url TEXT NOT NULL,
+    explorer_url TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE wallets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    chain_id INTEGER REFERENCES chains(id) ON DELETE SET NULL,
+    address VARCHAR(255) NOT NULL,
+    label VARCHAR(100),
+    is_primary BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, chain_id, address)
+);
+
+CREATE TABLE tokens (
+    id SERIAL PRIMARY KEY,
+    chain_id INTEGER REFERENCES chains(id) ON DELETE CASCADE,
+    contract_address VARCHAR(255),
+    symbol VARCHAR(20) NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    decimals INTEGER DEFAULT 18,
+    is_native BOOLEAN DEFAULT FALSE,
+    logo_url TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(chain_id, contract_address)
+);
+
+CREATE TABLE portfolio_snapshots (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
+    token_id INTEGER REFERENCES tokens(id) ON DELETE SET NULL,
+    balance BIGINT NOT NULL DEFAULT 0,
+    usd_value NUMERIC(30,2) DEFAULT 0,
+    snapshot_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE transactions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    wallet_id UUID REFERENCES wallets(id) ON DELETE SET NULL,
+    token_id INTEGER REFERENCES tokens(id) ON DELETE SET NULL,
+    chain_id INTEGER REFERENCES chains(id) ON DELETE SET NULL,
+    tx_hash VARCHAR(66) UNIQUE NOT NULL,
+    from_address VARCHAR(255),
+    to_address VARCHAR(255),
+    value BIGINT NOT NULL DEFAULT 0,
+    gas_used INTEGER,
+    gas_price BIGINT,
+    gas_fee_usd NUMERIC(30,2) DEFAULT 0,
+    tx_type tx_type NOT NULL,
+    tx_status tx_status DEFAULT 'pending',
+    block_number BIGINT,
+    log_index INTEGER,
+    timestamp TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT chk_tx_hash CHECK (tx_hash ~ '^0x[a-fA-F0-9]{64}$')
+);
+
+CREATE TABLE nfts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
+    chain_id INTEGER REFERENCES chains(id) ON DELETE SET NULL,
+    contract_address VARCHAR(255) NOT NULL,
+    token_id VARCHAR(255) NOT NULL,
+    standard VARCHAR(20) DEFAULT 'erc721',
+    metadata_url TEXT,
+    rarity_tier VARCHAR(50),
+    acquired_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(wallet_id, contract_address, token_id)
+);
+
+CREATE TABLE defi_positions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
+    protocol_name VARCHAR(100) NOT NULL,
+    pool_id VARCHAR(255),
+    token_id INTEGER REFERENCES tokens(id) ON DELETE SET NULL,
+    amount BIGINT NOT NULL DEFAULT 0,
+    usd_value NUMERIC(30,2) DEFAULT 0,
+    apr NUMERIC(5,2),
+    last_updated TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(wallet_id, protocol_name, pool_id)
+);
+
+CREATE INDEX idx_transactions_wallet_ts ON transactions(wallet_id, timestamp DESC);
+CREATE INDEX idx_transactions_token_status ON transactions(token_id, tx_status);
+CREATE INDEX idx_transactions_txhash ON transactions(tx_hash);
+CREATE INDEX idx_portfolio_wallet ON portfolio_snapshots(wallet_id);
+CREATE INDEX idx_nfts_wallet ON nfts(wallet_id);
+CREATE INDEX idx_defi_wallet ON defi_positions(wallet_id);
+
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at := NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_users_updated BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER trg_chains_updated BEFORE UPDATE ON chains FOR EACH ROW EXECUTE FUNCTION update_updated_at();
