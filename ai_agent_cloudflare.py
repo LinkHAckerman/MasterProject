@@ -36,11 +36,18 @@ headers_base = {
 
 
 def get_ranked_models():
-    """Lists Workers AI text-generation models, preferred ones first."""
+    """Lists Workers AI models, preferred general chat models first.
+
+    No server-side 'task' filter is applied - an earlier attempt with
+    task=text-generation came back with zero results despite a successful
+    200 response, which likely means that filter value doesn't match what
+    the API actually expects. Filtering is done client-side instead via
+    NON_CHAT_KEYWORDS, which is more robust to getting the exact slug wrong.
+    """
     resp = requests.get(
         LIST_URL,
         headers=headers_base,
-        params={"task": "text-generation", "hide_experimental": "true", "per_page": 50}
+        params={"hide_experimental": "true", "per_page": 100}
     )
     resp.raise_for_status()
     data = resp.json()
@@ -56,6 +63,9 @@ def get_ranked_models():
         candidates.append(model_id)
 
     if not candidates:
+        print(f"Workers AI catalog returned {len(raw_list)} raw entries, but none "
+              f"survived filtering. First couple raw entries for diagnosis: "
+              f"{raw_list[:2]}")
         raise RuntimeError("No usable text-generation models returned by Workers AI.")
 
     candidates.sort(key=lambda m: (0 if m in PREFERRED_MODELS else 1))
@@ -83,6 +93,7 @@ def call_fn(model):
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2,
+        "max_tokens": 8000,
         "response_format": {"type": "json_object"}
     }
     return common.call_with_retry(CHAT_URL, headers_base, payload)
