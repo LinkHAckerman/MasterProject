@@ -1,440 +1,395 @@
-// Magnum Opus On-Chain Program: High-Performance DeFi & NFT Core
-// Written in Rust with extreme attention to memory safety, gas optimization, and state integrity.
+//! Magnum Opus - On-Chain High-Performance DeFi & AMM Program
+//! Program ID: 4MagnumOpusEngine11111111111111111111111111
+//! Framework: Native High-Speed On-Chain Smart Program Logic
 
-use borsh::{BorshDeserialize, BorshSerialize};
-use solana_program::{
-    account_info::AccountInfo,
-    entrypoint::ProgramResult,
-    msg,
-    pubkey::Pubkey,
-    sysvar::rent::Rent,
-    sysvar::slot_history::SlotHistory,
-    program_error::ProgramError,
-    program::invoke,
-    program::invoke_signed,
-    system_program,
-};
-use std::{
-    collections::HashMap,
-    convert::TryInto,
-};
+use std::convert::TryInto;
+use std::mem::size_of;
 
-// =============================================================================
-// STATE & DATA STRUCTURES
-// =============================================================================
+/// Program result type
+pub type ProgramResult = Result<(), ProgramError>;
 
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy, PartialEq)]
-pub enum TokenType {
-    Native,
-    Fungible,
-    NonFungible,
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, Copy)]
-pub struct AssetState {
-    pub mint: Pubkey,
-    pub authority: Pubkey,
-    pub token_type: TokenType,
-    pub supply: u64,
-    pub decimals: u8,
-    pub is_paused: bool,
-    pub bump: u8,
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
-pub struct LiquidityPool {
-    pub pool_id: u64,
-    pub token_a_mint: Pubkey,
-    pub token_b_mint: Pubkey,
-    pub reserve_a: u64,
-    pub reserve_b: u64,
-    pub total_liquidity: u64,
-    pub fee_bps: u16, // e.g., 30 for 0.3%
-    pub creator: Pubkey,
-    pub bump: u8,
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
-pub struct UserAccount {
-    pub owner: Pubkey,
-    pub balances: HashMap<Pubkey, u64>, // Token mint -> balance
-    pub nonce: u64,
-    pub bump: u8,
-}
-
-// =============================================================================
-// INSTRUCTION DISCRIMINATORS & PAYLOADS
-// =============================================================================
-
-#[derive(BorshSerialize, BorshDeserialize, Debug)]
-pub enum ProgramInstruction {
-    InitializeAsset { decimals: u8, token_type: TokenType },
-    MintTokens { amount: u64 },
-    TransferTokens { amount: u64, to: Pubkey },
-    AddLiquidity { amount_a: u64, amount_b: u64 },
-    Swap { amount_in: u64, min_amount_out: u64, swap_direction: bool },
-    InitializeUserAccount,
-}
-
-// =============================================================================
-// CUSTOM ERROR TYPES
-// =============================================================================
-
-#[derive(Debug, Copy, Clone)]
-pub enum MagnumError {
-    Unauthorized,
-    InsufficientBalance,
-    ArithmeticOverflow,
-    ArithmeticUnderflow,
-    InvalidState,
-    InvalidMint,
-    AccountNotInitialized,
-    InvalidPda,
+/// Program error definitions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgramError {
+    InvalidInstruction,
+    NotEnoughBalance,
+    InsufficientLiquidity,
     SlippageExceeded,
+    MathOverflow,
+    Unauthorized,
+    ContractPaused,
+    InvalidAccountData,
+    ZeroAmountProvided,
+    InvalidMerkleProof,
 }
 
-impl From<MagnumError> for ProgramError {
-    fn from(e: MagnumError) -> Self {
-        ProgramError::Custom(e as u32)
+/// Precision scale for fixed-point math (18 decimal places)
+pub const PRECISION: u128 = 1_000_000_000_000_000_000;
+pub const MAX_FEE_BPS: u64 = 1000; // 10%
+pub const DEFAULT_FEE_BPS: u64 = 30; // 0.3%
+
+/// On-chain Liquidity Pool Account State
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct PoolState {
+    pub is_initialized: bool,
+    pub is_paused: bool,
+    pub admin_pubkey: [u8; 32],
+    pub token_a_reserve: u128,
+    pub token_b_reserve: u128,
+    pub lp_supply: u128,
+    pub fee_bps: u64,
+    pub accumulated_fees_a: u128,
+    pub accumulated_fees_b: u128,
+    pub last_update_timestamp: i64,
+}
+
+/// User Position Account State
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct UserPosition {
+    pub owner: [u8; 32],
+    pub lp_tokens: u128,
+    pub staked_amount: u128,
+    pub reward_debt: u128,
+    pub last_stake_timestamp: i64,
+}
+
+/// Supported Instructions
+#[derive(Debug, Clone)]
+pub enum MagnumInstruction {
+    InitializePool { fee_bps: u64 },
+    DepositLiquidity { amount_a: u128, amount_b: u128, min_lp: u128 },
+    WithdrawLiquidity { lp_amount: u128, min_a: u128, min_b: u128 },
+    Swap { amount_in: u128, min_amount_out: u128, a_to_b: bool },
+    StakeLp { amount: u128 },
+    UnstakeLp { amount: u128 },
+    ClaimRewards,
+    TogglePause,
+}
+
+impl MagnumInstruction {
+    pub fn unpack(input: &[u8]) -> Result<Self, ProgramError> {
+        if input.is_empty() {
+            return Err(ProgramError::InvalidInstruction);
+        }
+        let (tag, rest) = input.split_first().ok_or(ProgramError::InvalidInstruction)?;
+        match tag {
+            0 => {
+                if rest.len() < 8 { return Err(ProgramError::InvalidInstruction); }
+                let fee_bps = u64::from_le_bytes(rest[0..8].try_into().map_err(|_| ProgramError::InvalidInstruction)?);
+                Ok(MagnumInstruction::InitializePool { fee_bps })
+            }
+            1 => {
+                if rest.len() < 48 { return Err(ProgramError::InvalidInstruction); }
+                let amount_a = u128::from_le_bytes(rest[0..16].try_into().map_err(|_| ProgramError::InvalidInstruction)?);
+                let amount_b = u128::from_le_bytes(rest[16..32].try_into().map_err(|_| ProgramError::InvalidInstruction)?);
+                let min_lp = u128::from_le_bytes(rest[32..48].try_into().map_err(|_| ProgramError::InvalidInstruction)?);
+                Ok(MagnumInstruction::DepositLiquidity { amount_a, amount_b, min_lp })
+            }
+            2 => {
+                if rest.len() < 48 { return Err(ProgramError::InvalidInstruction); }
+                let lp_amount = u128::from_le_bytes(rest[0..16].try_into().map_err(|_| ProgramError::InvalidInstruction)?);
+                let min_a = u128::from_le_bytes(rest[16..32].try_into().map_err(|_| ProgramError::InvalidInstruction)?);
+                let min_b = u128::from_le_bytes(rest[32..48].try_into().map_err(|_| ProgramError::InvalidInstruction)?);
+                Ok(MagnumInstruction::WithdrawLiquidity { lp_amount, min_a, min_b })
+            }
+            3 => {
+                if rest.len() < 33 { return Err(ProgramError::InvalidInstruction); }
+                let amount_in = u128::from_le_bytes(rest[0..16].try_into().map_err(|_| ProgramError::InvalidInstruction)?);
+                let min_amount_out = u128::from_le_bytes(rest[16..32].try_into().map_err(|_| ProgramError::InvalidInstruction)?);
+                let a_to_b = rest[32] != 0;
+                Ok(MagnumInstruction::Swap { amount_in, min_amount_out, a_to_b })
+            }
+            4 => {
+                if rest.len() < 16 { return Err(ProgramError::InvalidInstruction); }
+                let amount = u128::from_le_bytes(rest[0..16].try_into().map_err(|_| ProgramError::InvalidInstruction)?);
+                Ok(MagnumInstruction::StakeLp { amount })
+            }
+            5 => {
+                if rest.len() < 16 { return Err(ProgramError::InvalidInstruction); }
+                let amount = u128::from_le_bytes(rest[0..16].try_into().map_err(|_| ProgramError::InvalidInstruction)?);
+                Ok(MagnumInstruction::UnstakeLp { amount })
+            }
+            6 => Ok(MagnumInstruction::ClaimRewards),
+            7 => Ok(MagnumInstruction::TogglePause),
+            _ => Err(ProgramError::InvalidInstruction),
+        }
     }
 }
 
-// =============================================================================
-// SECURITY & VALIDATION HELPERS
-// =============================================================================
-
-/// Verifies that the account is owned by the program and is writable if required
-fn verify_account_owner(account: &AccountInfo, expected_owner: &Pubkey, require_writable: bool) -> Result<(), ProgramError> {
-    if require_writable && !account.is_writable {
-        return Err(MagnumError::InvalidState.into());
-    }
-    if account.owner != expected_owner {
-        return Err(ProgramError::IncorrectProgramId);
-    }
-    Ok(())
-}
-
-/// Verifies that the account is a signer for transaction authorization
-fn verify_signer(account: &AccountInfo) -> Result<(), ProgramError> {
-    if !account.is_signer {
-        return Err(MagnumError::Unauthorized.into());
-    }
-    Ok(())
-}
-
-/// Safe arithmetic additions to prevent overflow in on-chain environments
-fn safe_add(a: u64, b: u64) -> Result<u64, ProgramError> {
-    a.checked_add(b).ok_or(MagnumError::ArithmeticOverflow.into())
-}
-
-fn safe_sub(a: u64, b: u64) -> Result<u64, ProgramError> {
-    a.checked_sub(b).ok_or(MagnumError::ArithmeticUnderflow.into())
-}
-
-fn safe_mul(a: u64, b: u64) -> Result<u64, ProgramError> {
-    a.checked_mul(b).ok_or(MagnumError::ArithmeticOverflow.into())
-}
-
-fn safe_div(a: u64, b: u64) -> Result<u64, ProgramError> {
-    if b == 0 {
-        return Err(MagnumError::InvalidState.into());
-    }
-    Ok(a / b)
-}
-
-// =============================================================================
-// CONSTANT PRODUCT MARKET MAKER (AMM) MATH (x * y = k)
-// =============================================================================
-
-struct AmmEngine;
+/// Constant-product automated market maker processor (x * y = k)
+pub struct AmmEngine;
 
 impl AmmEngine {
-    /// Calculates the output amount for a given input amount using the constant product formula:
-    /// amount_out = (amount_in * reserve_out * (10000 - fee)) / (reserve_in * 10000 + amount_in * (10000 - fee))
-    fn calculate_swap_output(
-        amount_in: u64,
-        reserve_in: u64,
-        reserve_out: u64,
-        fee_bps: u16,
-    ) -> Result<u64, ProgramError> {
-        if amount_in == 0 || reserve_in == 0 || reserve_out == 0 {
-            return Err(MagnumError::InvalidState.into());
+    /// Calculate Constant Product Output: dy = (y * dx * (10000 - fee)) / (x * 10000 + dx * (10000 - fee))
+    pub fn get_swap_output(
+        reserve_in: u128,
+        reserve_out: u128,
+        amount_in: u128,
+        fee_bps: u64,
+    ) -> Result<(u128, u128), ProgramError> {
+        if reserve_in == 0 || reserve_out == 0 || amount_in == 0 {
+            return Err(ProgramError::ZeroAmountProvided);
         }
 
-        let fee_factor = 10000u64 - fee_bps as u64;
-        
-        // Numerator: amount_in * reserve_out * fee_factor
-        let numerator = safe_mul(safe_mul(amount_in, reserve_out), fee_factor)?;
-        
-        // Denominator: reserve_in * 10000 + amount_in * fee_factor
-        let denominator = safe_add(safe_mul(reserve_in, 10000), safe_mul(amount_in, fee_factor))?;
-        
-        safe_div(numerator, denominator)
+        let fee_multiplier = 10_000u128.checked_sub(fee_bps as u128).ok_or(ProgramError::MathOverflow)?;
+        let amount_in_with_fee = amount_in.checked_mul(fee_multiplier).ok_or(ProgramError::MathOverflow)?;
+        let fee_amount = amount_in.checked_sub(amount_in_with_fee / 10_000).unwrap_or(0);
+
+        let numerator = amount_in_with_fee.checked_mul(reserve_out).ok_or(ProgramError::MathOverflow)?;
+        let denominator = reserve_in
+            .checked_mul(10_000)
+            .ok_or(ProgramError::MathOverflow)?
+            .checked_add(amount_in_with_fee)
+            .ok_or(ProgramError::MathOverflow)?;
+
+        let amount_out = numerator.checked_div(denominator).ok_or(ProgramError::MathOverflow)?;
+
+        if amount_out >= reserve_out {
+            return Err(ProgramError::InsufficientLiquidity);
+        }
+
+        Ok((amount_out, fee_amount))
     }
 
-    /// Calculates the price impact and ensures slippage tolerance is respected
-    fn verify_slippage(
-        expected_output: u64,
-        min_amount_out: u64,
-    ) -> Result<(), ProgramError> {
-        if expected_output < min_amount_out {
-            return Err(MagnumError::SlippageExceeded.into());
+    /// Calculate LP mint tokens for initial or subsequent deposit
+    pub fn calculate_lp_mint(
+        reserve_a: u128,
+        reserve_b: u128,
+        total_lp: u128,
+        amount_a: u128,
+        amount_b: u128,
+    ) -> Result<u128, ProgramError> {
+        if total_lp == 0 {
+            let product = amount_a.checked_mul(amount_b).ok_or(ProgramError::MathOverflow)?;
+            let lp = integer_sqrt(product);
+            if lp == 0 {
+                return Err(ProgramError::ZeroAmountProvided);
+            }
+            Ok(lp)
+        } else {
+            let lp_a = amount_a.checked_mul(total_lp).ok_or(ProgramError::MathOverflow)? / reserve_a;
+            let lp_b = amount_b.checked_mul(total_lp).ok_or(ProgramError::MathOverflow)? / reserve_b;
+            Ok(std::cmp::min(lp_a, lp_b))
         }
-        Ok(())
     }
 }
 
-// =============================================================================
-// CORE INSTRUCTION PROCESSOR
-// =============================================================================
+/// Integer Square Root helper using Newton-Raphson method
+pub fn integer_sqrt(n: u128) -> u128 {
+    if n == 0 {
+        return 0;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
 
+/// Main Program Logic Entrypoint
 pub fn process_instruction(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
+    program_id_bytes: &[u8; 32],
+    signer_pubkey: &[u8; 32],
+    pool: &mut PoolState,
+    user_pos: &mut UserPosition,
     instruction_data: &[u8],
+    current_timestamp: i64,
 ) -> ProgramResult {
-    let instruction = ProgramInstruction::try_from_slice(instruction_data)
-        .map_err(|_| ProgramError::InvalidInstructionData)?;
+    let instruction = MagnumInstruction::unpack(instruction_data)?;
+
+    if pool.is_paused && !matches!(instruction, MagnumInstruction::TogglePause) {
+        return Err(ProgramError::ContractPaused);
+    }
 
     match instruction {
-        ProgramInstruction::InitializeAsset { decimals, token_type } => {
-            msg!("Instruction: Initialize Asset (decimals: {}, type: {:?})", decimals, token_type);
-            Self::process_initialize_asset(program_id, accounts, decimals, token_type)
+        MagnumInstruction::InitializePool { fee_bps } => {
+            if pool.is_initialized {
+                return Err(ProgramError::InvalidAccountData);
+            }
+            if fee_bps > MAX_FEE_BPS {
+                return Err(ProgramError::InvalidInstruction);
+            }
+            pool.is_initialized = true;
+            pool.is_paused = false;
+            pool.admin_pubkey = *signer_pubkey;
+            pool.token_a_reserve = 0;
+            pool.token_b_reserve = 0;
+            pool.lp_supply = 0;
+            pool.fee_bps = fee_bps;
+            pool.accumulated_fees_a = 0;
+            pool.accumulated_fees_b = 0;
+            pool.last_update_timestamp = current_timestamp;
+            Ok(())
         }
-        ProgramInstruction::MintTokens { amount } => {
-            msg!("Instruction: Mint Tokens (amount: {})", amount);
-            Self::process_mint_tokens(program_id, accounts, amount)
+
+        MagnumInstruction::DepositLiquidity { amount_a, amount_b, min_lp } => {
+            if !pool.is_initialized {
+                return Err(ProgramError::InvalidAccountData);
+            }
+            let lp_to_mint = AmmEngine::calculate_lp_mint(
+                pool.token_a_reserve,
+                pool.token_b_reserve,
+                pool.lp_supply,
+                amount_a,
+                amount_b,
+            )?;
+
+            if lp_to_mint < min_lp {
+                return Err(ProgramError::SlippageExceeded);
+            }
+
+            pool.token_a_reserve = pool.token_a_reserve.checked_add(amount_a).ok_or(ProgramError::MathOverflow)?;
+            pool.token_b_reserve = pool.token_b_reserve.checked_add(amount_b).ok_or(ProgramError::MathOverflow)?;
+            pool.lp_supply = pool.lp_supply.checked_add(lp_to_mint).ok_or(ProgramError::MathOverflow)?;
+
+            user_pos.owner = *signer_pubkey;
+            user_pos.lp_tokens = user_pos.lp_tokens.checked_add(lp_to_mint).ok_or(ProgramError::MathOverflow)?;
+            pool.last_update_timestamp = current_timestamp;
+            Ok(())
         }
-        ProgramInstruction::TransferTokens { amount, to } => {
-            msg!("Instruction: Transfer Tokens (amount: {}, to: {})", amount, to);
-            Self::process_transfer_tokens(program_id, accounts, amount, to)
+
+        MagnumInstruction::WithdrawLiquidity { lp_amount, min_a, min_b } => {
+            if !pool.is_initialized {
+                return Err(ProgramError::InvalidAccountData);
+            }
+            if user_pos.lp_tokens < lp_amount || pool.lp_supply == 0 {
+                return Err(ProgramError::NotEnoughBalance);
+            }
+
+            let amount_a = lp_amount.checked_mul(pool.token_a_reserve).ok_or(ProgramError::MathOverflow)? / pool.lp_supply;
+            let amount_b = lp_amount.checked_mul(pool.token_b_reserve).ok_or(ProgramError::MathOverflow)? / pool.lp_supply;
+
+            if amount_a < min_a || amount_b < min_b {
+                return Err(ProgramError::SlippageExceeded);
+            }
+
+            user_pos.lp_tokens = user_pos.lp_tokens.checked_sub(lp_amount).ok_or(ProgramError::MathOverflow)?;
+            pool.lp_supply = pool.lp_supply.checked_sub(lp_amount).ok_or(ProgramError::MathOverflow)?;
+            pool.token_a_reserve = pool.token_a_reserve.checked_sub(amount_a).ok_or(ProgramError::MathOverflow)?;
+            pool.token_b_reserve = pool.token_b_reserve.checked_sub(amount_b).ok_or(ProgramError::MathOverflow)?;
+
+            pool.last_update_timestamp = current_timestamp;
+            Ok(())
         }
-        ProgramInstruction::AddLiquidity { amount_a, amount_b } => {
-            msg!("Instruction: Add Liquidity (A: {}, B: {})", amount_a, amount_b);
-            Self::process_add_liquidity(program_id, accounts, amount_a, amount_b)
+
+        MagnumInstruction::Swap { amount_in, min_amount_out, a_to_b } => {
+            if !pool.is_initialized {
+                return Err(ProgramError::InvalidAccountData);
+            }
+            let (reserve_in, reserve_out) = if a_to_b {
+                (pool.token_a_reserve, pool.token_b_reserve)
+            } else {
+                (pool.token_b_reserve, pool.token_a_reserve)
+            };
+
+            let (amount_out, fee_amount) = AmmEngine::get_swap_output(reserve_in, reserve_out, amount_in, pool.fee_bps)?;
+
+            if amount_out < min_amount_out {
+                return Err(ProgramError::SlippageExceeded);
+            }
+
+            if a_to_b {
+                pool.token_a_reserve = pool.token_a_reserve.checked_add(amount_in).ok_or(ProgramError::MathOverflow)?;
+                pool.token_b_reserve = pool.token_b_reserve.checked_sub(amount_out).ok_or(ProgramError::MathOverflow)?;
+                pool.accumulated_fees_a = pool.accumulated_fees_a.checked_add(fee_amount).ok_or(ProgramError::MathOverflow)?;
+            } else {
+                pool.token_b_reserve = pool.token_b_reserve.checked_add(amount_in).ok_or(ProgramError::MathOverflow)?;
+                pool.token_a_reserve = pool.token_a_reserve.checked_sub(amount_out).ok_or(ProgramError::MathOverflow)?;
+                pool.accumulated_fees_b = pool.accumulated_fees_b.checked_add(fee_amount).ok_or(ProgramError::MathOverflow)?;
+            }
+
+            pool.last_update_timestamp = current_timestamp;
+            Ok(())
         }
-        ProgramInstruction::Swap { amount_in, min_amount_out, swap_direction } => {
-            msg!("Instruction: Swap (in: {}, min_out: {}, reverse: {})", amount_in, min_amount_out, swap_direction);
-            Self::process_swap(program_id, accounts, amount_in, min_amount_out, swap_direction)
+
+        MagnumInstruction::StakeLp { amount } => {
+            if user_pos.lp_tokens < amount {
+                return Err(ProgramError::NotEnoughBalance);
+            }
+            user_pos.lp_tokens = user_pos.lp_tokens.checked_sub(amount).ok_or(ProgramError::MathOverflow)?;
+            user_pos.staked_amount = user_pos.staked_amount.checked_add(amount).ok_or(ProgramError::MathOverflow)?;
+            user_pos.last_stake_timestamp = current_timestamp;
+            Ok(())
         }
-        ProgramInstruction::InitializeUserAccount => {
-            msg!("Instruction: Initialize User Account");
-            Self::process_initialize_user_account(program_id, accounts)
+
+        MagnumInstruction::UnstakeLp { amount } => {
+            if user_pos.staked_amount < amount {
+                return Err(ProgramError::NotEnoughBalance);
+            }
+            user_pos.staked_amount = user_pos.staked_amount.checked_sub(amount).ok_or(ProgramError::MathOverflow)?;
+            user_pos.lp_tokens = user_pos.lp_tokens.checked_add(amount).ok_or(ProgramError::MathOverflow)?;
+            user_pos.last_stake_timestamp = current_timestamp;
+            Ok(())
+        }
+
+        MagnumInstruction::ClaimRewards => {
+            if user_pos.staked_amount == 0 {
+                return Err(ProgramError::ZeroAmountProvided);
+            }
+            let elapsed = current_timestamp.saturating_sub(user_pos.last_stake_timestamp);
+            if elapsed > 0 {
+                let reward = (user_pos.staked_amount / 1000) * (elapsed as u128);
+                user_pos.reward_debt = user_pos.reward_debt.checked_add(reward).ok_or(ProgramError::MathOverflow)?;
+            }
+            user_pos.last_stake_timestamp = current_timestamp;
+            Ok(())
+        }
+
+        MagnumInstruction::TogglePause => {
+            if pool.admin_pubkey != *signer_pubkey {
+                return Err(ProgramError::Unauthorized);
+            }
+            pool.is_paused = !pool.is_paused;
+            Ok(())
         }
     }
 }
 
-// =============================================================================
-// INSTRUCTION IMPLEMENTATIONS
-// =============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl MagnumOpusProgram {
-    fn process_initialize_asset(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-        decimals: u8,
-        token_type: TokenType,
-    ) -> ProgramResult {
-        let accounts_iter = &mut accounts.iter();
-        let asset_account = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let payer = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let mint = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let system_program = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-
-        verify_signer(payer)?;
-        verify_account_owner(asset_account, program_id, true)?;
-
-        // Deserialize or initialize state
-        let mut asset_state = if asset_account.data_len() == 0 {
-            AssetState {
-                mint: *mint.key,
-                authority: *payer.key,
-                token_type,
-                supply: 0,
-                decimals,
-                is_paused: false,
-                bump: 0, // In production, derive PDA bump
-            }
-        } else {
-            AssetState::try_from_slice(&asset_account.data.borrow())?
+    #[test]
+    fn test_pool_flow() {
+        let admin = [1u8; 32];
+        let mut pool = PoolState {
+            is_initialized: false,
+            is_paused: false,
+            admin_pubkey: [0u8; 32],
+            token_a_reserve: 0,
+            token_b_reserve: 0,
+            lp_supply: 0,
+            fee_bps: 0,
+            accumulated_fees_a: 0,
+            accumulated_fees_b: 0,
+            last_update_timestamp: 0,
         };
 
-        // Persist state back to account
-        asset_state.serialize(&mut &mut asset_account.data.borrow_mut()[..])?;
-        Ok(())
-    }
-
-    fn process_mint_tokens(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-        amount: u64,
-    ) -> ProgramResult {
-        let accounts_iter = &mut accounts.iter();
-        let asset_account = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let authority = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let recipient = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-
-        verify_signer(authority)?;
-        verify_account_owner(asset_account, program_id, true)?;
-
-        let mut asset_state = AssetState::try_from_slice(&asset_account.data.borrow())?;
-        if asset_state.authority != *authority.key {
-            return Err(MagnumError::Unauthorized.into());
-        }
-        if asset_state.is_paused {
-            return Err(MagnumError::InvalidState.into());
-        }
-
-        asset_state.supply = safe_add(asset_state.supply, amount)?;
-        asset_state.serialize(&mut &mut asset_account.data.borrow_mut()[..])?;
-
-        msg!("Minted {} tokens to recipient {}", amount, recipient.key);
-        Ok(())
-    }
-
-    fn process_transfer_tokens(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-        amount: u64,
-        to: Pubkey,
-    ) -> ProgramResult {
-        let accounts_iter = &mut accounts.iter();
-        let sender_account = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let recipient_account = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let authority = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-
-        verify_signer(authority)?;
-        verify_account_owner(sender_account, program_id, true)?;
-        verify_account_owner(recipient_account, program_id, true)?;
-
-        let mut sender_state = UserAccount::try_from_slice(&sender_account.data.borrow())?;
-        let mut recipient_state = UserAccount::try_from_slice(&recipient_account.data.borrow())?;
-
-        if sender_state.owner != *authority.key {
-            return Err(MagnumError::Unauthorized.into());
-        }
-
-        // Retrieve token mint from sender state (simplified logic)
-        let mint = Pubkey::new_from_array([0u8; 32]); // In production, extract from account context
-        
-        let sender_balance = sender_state.balances.get(&mint).ok_or(MagnumError::InsufficientBalance)?;
-        if *sender_balance < amount {
-            return Err(MagnumError::InsufficientBalance.into());
-        }
-
-        sender_state.balances.insert(mint, safe_sub(*sender_balance, amount)?);
-        let recipient_balance = recipient_state.balances.get(&mint).unwrap_or(&0);
-        recipient_state.balances.insert(mint, safe_add(*recipient_balance, amount)?);
-
-        sender_state.serialize(&mut &mut sender_account.data.borrow_mut()[..])?;
-        recipient_state.serialize(&mut &mut recipient_account.data.borrow_mut()[..])?;
-
-        msg!("Transferred {} tokens to {}", amount, to);
-        Ok(())
-    }
-
-    fn process_add_liquidity(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-        amount_a: u64,
-        amount_b: u64,
-    ) -> ProgramResult {
-        let accounts_iter = &mut accounts.iter();
-        let pool_account = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let liquidity_mint = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let user_token_a = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let user_token_b = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let user = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-
-        verify_signer(user)?;
-        verify_account_owner(pool_account, program_id, true)?;
-
-        let mut pool = LiquidityPool::try_from_slice(&pool_account.data.borrow())?;
-        
-        // Calculate initial liquidity or proportional deposit
-        let liquidity = if pool.total_liquidity == 0 {
-            // Initial deposit: geometric mean of amounts to prevent front-running
-            (amount_a as u128 * amount_b as u128).isqrt() as u64
-        } else {
-            let liquidity_a = safe_div(safe_mul(amount_a, pool.total_liquidity), pool.reserve_a)?;
-            let liquidity_b = safe_div(safe_mul(amount_b, pool.total_liquidity), pool.reserve_b)?;
-            std::cmp::min(liquidity_a, liquidity_b)
+        let mut user = UserPosition {
+            owner: [0u8; 32],
+            lp_tokens: 0,
+            staked_amount: 0,
+            reward_debt: 0,
+            last_stake_timestamp: 0,
         };
 
-        pool.reserve_a = safe_add(pool.reserve_a, amount_a)?;
-        pool.reserve_b = safe_add(pool.reserve_b, amount_b)?;
-        pool.total_liquidity = safe_add(pool.total_liquidity, liquidity)?;
+        let init_data = vec![0, 30, 0, 0, 0, 0, 0, 0, 0];
+        assert!(process_instruction(&admin, &admin, &mut pool, &mut user, &init_data, 1000).is_ok());
+        assert!(pool.is_initialized);
+        assert_eq!(pool.fee_bps, 30);
 
-        pool.serialize(&mut &mut pool_account.data.borrow_mut()[..])?;
-        msg!("Added liquidity: {} A, {} B. Minted {} LP tokens", amount_a, amount_b, liquidity);
-        Ok(())
-    }
+        let mut dep_data = vec![1];
+        dep_data.extend_from_slice(&(1_000_000u128).to_le_bytes());
+        dep_data.extend_from_slice(&(2_000_000u128).to_le_bytes());
+        dep_data.extend_from_slice(&(100u128).to_le_bytes());
 
-    fn process_swap(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-        amount_in: u64,
-        min_amount_out: u64,
-        swap_direction: bool,
-    ) -> ProgramResult {
-        let accounts_iter = &mut accounts.iter();
-        let pool_account = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let token_in_mint = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let token_out_mint = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let user_token_in = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let user_token_out = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let user = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-
-        verify_signer(user)?;
-        verify_account_owner(pool_account, program_id, true)?;
-
-        let pool = LiquidityPool::try_from_slice(&pool_account.data.borrow())?;
-
-        let (reserve_in, reserve_out) = if swap_direction {
-            (pool.reserve_a, pool.reserve_b)
-        } else {
-            (pool.reserve_b, pool.reserve_a)
-        };
-
-        let expected_out = AmmEngine::calculate_swap_output(amount_in, reserve_in, reserve_out, pool.fee_bps)?;
-        AmmEngine::verify_slippage(expected_out, min_amount_out)?;
-
-        // Update pool reserves
-        let mut updated_pool = pool.clone();
-        if swap_direction {
-            updated_pool.reserve_a = safe_add(reserve_in, amount_in)?;
-            updated_pool.reserve_b = safe_sub(reserve_out, expected_out)?;
-        } else {
-            updated_pool.reserve_b = safe_add(reserve_in, amount_in)?;
-            updated_pool.reserve_a = safe_sub(reserve_out, expected_out)?;
-        }
-
-        updated_pool.serialize(&mut &mut pool_account.data.borrow_mut()[..])?;
-        msg!("Swapped {} tokens for {} tokens", amount_in, expected_out);
-        Ok(())
-    }
-
-    fn process_initialize_user_account(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-    ) -> ProgramResult {
-        let accounts_iter = &mut accounts.iter();
-        let user_account = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let payer = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-        let system_program = accounts_iter.next().ok_or(ProgramError::NotEnoughAccountKeys)?;
-
-        verify_signer(payer)?;
-        verify_account_owner(user_account, program_id, true)?;
-
-        let user_state = UserAccount {
-            owner: *payer.key,
-            balances: HashMap::new(),
-            nonce: 0,
-            bump: 0,
-        };
-
-        user_state.serialize(&mut &mut user_account.data.borrow_mut()[..])?;
-        msg!("User account initialized for {}", payer.key);
-        Ok(())
+        assert!(process_instruction(&admin, &admin, &mut pool, &mut user, &dep_data, 1010).is_ok());
+        assert_eq!(pool.token_a_reserve, 1_000_000);
+        assert_eq!(pool.token_b_reserve, 2_000_000);
+        assert!(user.lp_tokens > 0);
     }
 }

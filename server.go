@@ -2,291 +2,204 @@ package main
 
 import (
     "context"
-    "crypto/rand"
-    "encoding/hex"
-    "encoding/json"
+    "fmt"
     "log"
-    "math/big"
+    "math/rand"
     "net/http"
     "os"
     "os/signal"
-    "strconv"
-    "sync"
+    "strings"
     "syscall"
     "time"
+
+    "github.com/gin-gonic/gin"
+    "github.com/gin-gonic/gin/binding"
+    "github.com/go-playground/validator/v10"
+    "github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Wallet represents a simple crypto wallet.
+type Server struct {
+    router *gin.Engine
+    db     *pgxpool.Pool
+}
+
 type Wallet struct {
-    Address string             `json:"address"`
-    Balance map[string]float64 `json:"balance"`
-    Mutex   sync.Mutex         `json:"-"`
-    // Transactions are stored per wallet for quick lookup.
-    Transactions []Transaction `json:"-"`
+    ID        int64   `json:"id"`
+    Address   string  `json:"address"`
+    Balance   float64 `json:"balance"`
+    Currency  string  `json:"currency"`
+    UpdatedAt string  `json:"updated_at"`
 }
 
-// Transaction represents a mock transfer between wallets.
-type Transaction struct {
-    ID        string    `json:"id"`
-    From      string    `json:"from"`
-    To        string    `json:"to"`
-    Token     string    `json:"token"`
-    Amount    float64   `json:"amount"`
-    Timestamp time.Time `json:"timestamp"`
+type TransactionRequest struct {
+    FromAddress string  `json:"from_address" binding:"required,eth_addr"`
+    ToAddress   string  `json:"to_address" binding:"required,eth_addr"`
+    Amount      float64 `json:"amount" binding:"required,gt=0"`
+    Currency    string  `json:"currency" binding:"required,oneof=ETH USDT"`
+    GasPrice    uint64  `json:"gas_price,omitempty"`
 }
-
-var (
-    wallets   = make(map[string]*Wallet)
-    walletsMu sync.RWMutex
-)
 
 func main() {
-    // Load configuration.
-    port := getEnv("PORT", "8080")
-    addr := ":" + port
-
-    // Setup HTTP server and routes.
-    mux := http.NewServeMux()
-    mux.HandleFunc("/health", healthHandler)
-    mux.HandleFunc("/wallets", walletsHandler)                     // POST create
-    mux.HandleFunc("/wallets/", walletSubrouter) // catch all subpaths
-
-    srv := &http.Server{
-        Addr:    addr,
-        Handler: loggingMiddleware(corsMiddleware(mux)),
+    // Load configuration from environment variables
+    dsn := os.Getenv("DATABASE_URL")
+    if dsn == "" {
+        dsn = "postgres://postgres:password@localhost:5432/magnum_opus?sslmode=disable"
     }
 
-    // Graceful shutdown handling.
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    dbpool, err := pgxpool.New(ctx, dsn)
+    if err != nil {
+        log.Fatalf("Unable to connect to database: %v", err)
+    }
+    defer dbpool.Close()
+
+    s := &Server{
+        router: gin.New(),
+        db:     dbpool,
+    }
+
+    s.setupMiddleware()
+    s.setupRoutes()
+
+    srv := &http.Server{
+        Addr:    ":8080",
+        Handler: s.router,
+    }
+
     go func() {
-        log.Printf("Server listening on %s", addr)
+        log.Println("🚀 Server listening on :8080")
         if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-            log.Fatalf("listen: %s\n", err)
+            log.Fatalf("listen: %s", err)
         }
     }()
 
+    // Graceful shutdown handling
     quit := make(chan os.Signal, 1)
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
     <-quit
     log.Println("Shutting down server...")
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
-    if err := srv.Shutdown(ctx); err != nil {
+
+    ctxShut, cancelShut := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancelShut()
+    if err := srv.Shutdown(ctxShut); err != nil {
         log.Fatalf("Server forced to shutdown: %v", err)
     }
     log.Println("Server exiting")
 }
 
-// healthHandler returns a simple OK status.
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusOK)
-    json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+func (s *Server) setupMiddleware() {
+    s.router.Use(gin.Logger())
+    s.router.Use(gin.Recovery())
+    // Register custom validator for Ethereum address format
+    if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
+        v.RegisterValidation("eth_addr", func(fl validator.FieldLevel) bool {
+            addr := fl.Field().String()
+            return len(addr) == 42 && strings.HasPrefix(addr, "0x")
+        })
+    }
 }
 
-// walletsHandler handles POST /wallets to create a new wallet.
-func walletsHandler(w http.ResponseWriter, r *http.Request) {
-    if r.Method != http.MethodPost {
-        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        return
+func (s *Server) setupRoutes() {
+    api := s.router.Group("/api/v1")
+    {
+        api.GET("/health", s.healthHandler)
+        api.GET("/wallet/:address", s.getWalletHandler)
+        api.POST("/tx/relay", s.relayTransactionHandler)
     }
-    wallet := newWallet()
-    walletsMu.Lock()
-    wallets[wallet.Address] = wallet
-    walletsMu.Unlock()
-
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusCreated)
-    json.NewEncoder(w).Encode(wallet)
 }
 
-// walletSubrouter dispatches sub‑paths for a specific wallet.
-func walletSubrouter(w http.ResponseWriter, r *http.Request) {
-    // Expected pattern: /wallets/{address}[/*]
-    path := r.URL.Path[len("/wallets/"):]
-    // Extract address (up to next slash or end).
-    var address, subPath string
-    if idx := indexOf(path, '/'); idx != -1 {
-        address = path[:idx]
-        subPath = path[idx:]
-    } else {
-        address = path
-        subPath = ""
-    }
+// healthHandler returns a simple health check response.
+func (s *Server) healthHandler(c *gin.Context) {
+    c.JSON(http.StatusOK, gin.H{"status": "ok", "timestamp": time.Now().UTC()})
+}
 
-    walletsMu.RLock()
-    wallet, exists := wallets[address]
-    walletsMu.RUnlock()
-    if !exists {
-        http.Error(w, "Wallet not found", http.StatusNotFound)
+// getWalletHandler fetches wallet information by Ethereum address.
+func (s *Server) getWalletHandler(c *gin.Context) {
+    address := c.Param("address")
+    if len(address) != 42 || !strings.HasPrefix(address, "0x") {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ethereum address"})
         return
     }
 
-    switch {
-    case subPath == "" && r.Method == http.MethodGet:
-        getWalletHandler(w, r, wallet)
-    case subPath == "/transfer" && r.Method == http.MethodPost:
-        transferHandler(w, r, wallet)
-    case subPath == "/transactions" && r.Method == http.MethodGet:
-        getTransactionsHandler(w, r, wallet)
-    default:
-        http.Error(w, "Not found", http.StatusNotFound)
-    }
-}
-
-func getWalletHandler(w http.ResponseWriter, r *http.Request, wallet *Wallet) {
-    wallet.Mutex.Lock()
-    defer wallet.Mutex.Unlock()
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(wallet)
-}
-
-func getTransactionsHandler(w http.ResponseWriter, r *http.Request, wallet *Wallet) {
-    wallet.Mutex.Lock()
-    defer wallet.Mutex.Unlock()
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(wallet.Transactions)
-}
-
-// transferRequest defines the expected JSON payload for a transfer.
-type transferRequest struct {
-    To    string  `json:"to"`
-    Token string  `json:"token"`
-    Amount float64 `json:"amount"`
-}
-
-func transferHandler(w http.ResponseWriter, r *http.Request, fromWallet *Wallet) {
-    var req transferRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
-        return
-    }
-    if req.Amount <= 0 {
-        http.Error(w, "Amount must be positive", http.StatusBadRequest)
-        return
-    }
-    if req.Token == "" {
-        http.Error(w, "Token field required", http.StatusBadRequest)
-        return
-    }
-
-    // Locate destination wallet.
-    walletsMu.RLock()
-    toWallet, exists := wallets[req.To]
-    walletsMu.RUnlock()
-    if !exists {
-        http.Error(w, "Destination wallet not found", http.StatusNotFound)
-        return
-    }
-
-    // Perform atomic balance update.
-    // Lock ordering: always lock lower address first to avoid deadlock.
-    first, second := orderLocks(fromWallet, toWallet)
-    first.Lock()
-    second.Lock()
-    defer second.Unlock()
-    defer first.Unlock()
-
-    // Ensure sender has sufficient balance.
-    bal, ok := fromWallet.Balance[req.Token]
-    if !ok || bal < req.Amount {
-        http.Error(w, "Insufficient balance", http.StatusBadRequest)
-        return
-    }
-
-    // Update balances.
-    fromWallet.Balance[req.Token] -= req.Amount
-    toWallet.Balance[req.Token] += req.Amount
-
-    // Record transaction.
-    tx := Transaction{
-        ID:        generateTxID(),
-        From:      fromWallet.Address,
-        To:        toWallet.Address,
-        Token:     req.Token,
-        Amount:    req.Amount,
-        Timestamp: time.Now().UTC(),
-    }
-    fromWallet.Transactions = append(fromWallet.Transactions, tx)
-    toWallet.Transactions = append(toWallet.Transactions, tx)
-
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusCreated)
-    json.NewEncoder(w).Encode(tx)
-}
-
-// orderLocks returns two mutex pointers ordered by wallet address to avoid deadlocks.
-func orderLocks(a, b *Wallet) (*sync.Mutex, *sync.Mutex) {
-    if a.Address < b.Address {
-        return &a.Mutex, &b.Mutex
-    }
-    return &b.Mutex, &a.Mutex
-}
-
-func newWallet() *Wallet {
-    addr := generateAddress()
-    return &Wallet{
-        Address: addr,
-        Balance: map[string]float64{"ETH": 0, "USDT": 0, "BTC": 0},
-    }
-}
-
-func generateAddress() string {
-    // Generate 20 random bytes (Ethereum‑like address length).
-    b := make([]byte, 20)
-    _, err := rand.Read(b)
+    var w Wallet
+    err := s.db.QueryRow(context.Background(),
+        `SELECT id, address, balance, currency, updated_at FROM wallets WHERE address=$1`,
+        address).Scan(&w.ID, &w.Address, &w.Balance, &w.Currency, &w.UpdatedAt)
     if err != nil {
-        // Fallback to pseudo‑random if crypto fails.
-        for i := range b {
-            n, _ := rand.Int(rand.Reader, big.NewInt(256))
-            b[i] = byte(n.Int64())
-        }
+        c.JSON(http.StatusNotFound, gin.H{"error": "wallet not found"})
+        return
     }
-    return "0x" + hex.EncodeToString(b)
+    c.JSON(http.StatusOK, w)
 }
 
-func generateTxID() string {
-    ts := strconv.FormatInt(time.Now().UnixNano(), 10)
-    rnd := make([]byte, 4)
-    rand.Read(rnd)
-    return "tx_" + ts + "_" + hex.EncodeToString(rnd)
-}
-
-func getEnv(key, fallback string) string {
-    if value, exists := os.LookupEnv(key); exists {
-        return value
+// relayTransactionHandler validates, processes, and records a simple token transfer.
+func (s *Server) relayTransactionHandler(c *gin.Context) {
+    var req TransactionRequest
+    if err := c.ShouldBindJSON(&req); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
     }
-    return fallback
-}
 
-// Simple CORS middleware allowing any origin (adjust for production).
-func corsMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("Access-Control-Allow-Origin", "*")
-        w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        if r.Method == http.MethodOptions {
-            w.WriteHeader(http.StatusNoContent)
-            return
-        }
-        next.ServeHTTP(w, r)
-    })
-}
-
-// loggingMiddleware logs each request with method, path and duration.
-func loggingMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        start := time.Now()
-        next.ServeHTTP(w, r)
-        log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start))
-    })
-}
-
-// indexOf returns the index of the first occurrence of sep in s, or -1.
-func indexOf(s string, sep byte) int {
-    for i := 0; i < len(s); i++ {
-        if s[i] == sep {
-            return i
-        }
+    // Verify sender balance
+    var senderBalance float64
+    err := s.db.QueryRow(context.Background(),
+        `SELECT balance FROM wallets WHERE address=$1 AND currency=$2`,
+        req.FromAddress, req.Currency).Scan(&senderBalance)
+    if err != nil {
+        c.JSON(http.StatusNotFound, gin.H{"error": "sender wallet not found"})
+        return
     }
-    return -1
+    if senderBalance < req.Amount {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient funds"})
+        return
+    }
+
+    // Simulate a transaction hash (in production replace with real signing & broadcasting)
+    txHash := fmt.Sprintf("0x%064x", rand.Uint64())
+
+    // Begin atomic DB transaction
+    tx, err := s.db.Begin(context.Background())
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start db transaction"})
+        return
+    }
+    defer tx.Rollback(context.Background())
+
+    // Debit sender
+    _, err = tx.Exec(context.Background(),
+        `UPDATE wallets SET balance = balance - $1 WHERE address=$2 AND currency=$3`,
+        req.Amount, req.FromAddress, req.Currency)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to debit sender"})
+        return
+    }
+
+    // Credit receiver (upsert)
+    _, err = tx.Exec(context.Background(),
+        `INSERT INTO wallets (address, balance, currency, updated_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (address, currency) DO UPDATE SET balance = wallets.balance + EXCLUDED.balance, updated_at = NOW()`,
+        req.ToAddress, req.Amount, req.Currency)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to credit receiver"})
+        return
+    }
+
+    // Record transaction metadata
+    _, err = tx.Exec(context.Background(),
+        `INSERT INTO transactions (hash, from_address, to_address, amount, currency, status, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+        txHash, req.FromAddress, req.ToAddress, req.Amount, req.Currency, "confirmed")
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record transaction"})
+        return
+    }
+
+    if err = tx.Commit(context.Background()); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to commit transaction"})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"tx_hash": txHash, "status": "submitted"})
 }

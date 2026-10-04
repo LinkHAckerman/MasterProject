@@ -1,1 +1,186 @@
-using System;\nusing System.Collections.Concurrent;\nusing System.Collections.Generic;\nusing System.Threading;\nusing System.Threading.Tasks;\n\nnamespace MagnumOpus.Core\n{\n    public enum TransactionStatus { Pending, Confirmed, Failed }\n\n    public record Transaction(string Id, string From, string To, decimal Amount, string Token, DateTime Timestamp, TransactionStatus Status = TransactionStatus.Pending);\n\n    public class TransactionProcessor\n    {\n        private readonly ConcurrentDictionary<string, Transaction> _mempool = new();\n        private readonly TimeSpan _confirmationDelay = TimeSpan.FromSeconds(5);\n        private readonly Random _rand = new();\n\n        public event Action<Transaction>? OnTransactionConfirmed;\n        public event Action<Transaction>? OnTransactionFailed;\n\n        public Task<string> SubmitAsync(string from, string to, decimal amount, string token)\n        {\n            if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))\n                throw new ArgumentException("Addresses must be provided.");\n\n            if (amount <= 0) throw new ArgumentException("Amount must be positive.");\n\n            var tx = new Transaction(\n                Id: Guid.NewGuid().ToString(\"N\"),\n                From: from,\n                To: to,\n                Amount: amount,\n                Token: token,\n                Timestamp: DateTime.UtcNow\n            );\n\n            _mempool[tx.Id] = tx;\n\n            // Simulate async mining/validation\n            _ = ProcessAsync(tx);\n\n            return Task.FromResult(tx.Id);\n        }\n\n        private async Task ProcessAsync(Transaction tx)\n        {\n            // Random network latency\n            await Task.Delay(_confirmationDelay + TimeSpan.FromMilliseconds(_rand.Next(0, 2000)));\n\n            // Simple deterministic success/failure based on hash parity\n            bool success = tx.Id[^1] % 2 == 0; // last hex char even\n\n            var updated = tx with { Status = success ? TransactionStatus.Confirmed : TransactionStatus.Failed };\n            _mempool[tx.Id] = updated;\n\n            if (success)\n                OnTransactionConfirmed?.Invoke(updated);\n            else\n                OnTransactionFailed?.Invoke(updated);\n        }\n\n        public IEnumerable<Transaction> GetPending()\n        {\n            foreach (var kvp in _mempool)\n            {\n                if (kvp.Value.Status == TransactionStatus.Pending)\n                    yield return kvp.Value;\n            }\n        }\n\n        public Transaction? Get(string id) => _mempool.TryGetValue(id, out var tx) ? tx : null;\n    }\n}\n
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Numerics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace MagnumOpus.Backend.Core
+{
+    public class TransactionProcessor
+    {
+        private readonly IBlockchainService _blockchainService;
+        private readonly IWalletService _walletService;
+        private readonly ILogger<TransactionProcessor> _logger;
+
+        public TransactionProcessor(
+            IBlockchainService blockchainService,
+            IWalletService walletService,
+            ILogger<TransactionProcessor> logger)
+        {
+            _blockchainService = blockchainService;
+            _walletService = walletService;
+            _logger = logger;
+        }
+
+        public async Task<TransactionResult> ProcessTransaction(TransactionRequest request)
+        {
+            try
+            {
+                // Validate transaction request
+                if (!ValidateTransactionRequest(request))
+                {
+                    return new TransactionResult
+                    {
+                        Success = false,
+                        ErrorMessage = "Invalid transaction request"
+                    };
+                }
+
+                // Get sender wallet
+                var senderWallet = await _walletService.GetWalletByAddress(request.FromAddress);
+                if (senderWallet == null)
+                {
+                    return new TransactionResult
+                    {
+                        Success = false,
+                        ErrorMessage = "Sender wallet not found"
+                    };
+                }
+
+                // Verify sender has sufficient balance
+                var senderBalance = await _blockchainService.GetBalance(request.FromAddress);
+                if (senderBalance < request.Amount)
+                {
+                    return new TransactionResult
+                    {
+                        Success = false,
+                        ErrorMessage = "Insufficient balance"
+                    };
+                }
+
+                // Create transaction
+                var transaction = new Transaction
+                {
+                    FromAddress = request.FromAddress,
+                    ToAddress = request.ToAddress,
+                    Amount = request.Amount,
+                    Nonce = await _blockchainService.GetNonce(request.FromAddress),
+                    GasPrice = request.GasPrice,
+                    GasLimit = request.GasLimit,
+                    Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                };
+
+                // Sign transaction
+                var signature = await _walletService.SignTransaction(senderWallet, transaction);
+                transaction.Signature = signature;
+
+                // Calculate transaction hash
+                transaction.Hash = CalculateTransactionHash(transaction);
+
+                // Submit transaction to blockchain
+                var txHash = await _blockchainService.SubmitTransaction(transaction);
+
+                // Log successful transaction
+                _logger.LogInformation("Transaction processed successfully: {TxHash}", txHash);
+
+                return new TransactionResult
+                {
+                    Success = true,
+                    TransactionHash = txHash,
+                    Transaction = transaction
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing transaction");
+                return new TransactionResult
+                {
+                    Success = false,
+                    ErrorMessage = ex.Message
+                };
+            }
+        }
+
+        private bool ValidateTransactionRequest(TransactionRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.FromAddress) ||
+                string.IsNullOrWhiteSpace(request.ToAddress))
+            {
+                return false;
+            }
+
+            if (request.Amount <= 0)
+            {
+                return false;
+            }
+
+            if (request.GasPrice <= 0 || request.GasLimit <= 0)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private string CalculateTransactionHash(Transaction transaction)
+        {
+            var transactionData = JsonSerializer.Serialize(transaction);
+            using var sha256 = SHA256.Create();
+            var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(transactionData));
+            return Convert.ToHexString(hashBytes).ToLower();
+        }
+    }
+
+    public class TransactionRequest
+    {
+        public string FromAddress { get; set; }
+        public string ToAddress { get; set; }
+        public decimal Amount { get; set; }
+        public decimal GasPrice { get; set; }
+        public long GasLimit { get; set; }
+    }
+
+    public class TransactionResult
+    {
+        public bool Success { get; set; }
+        public string ErrorMessage { get; set; }
+        public string TransactionHash { get; set; }
+        public Transaction Transaction { get; set; }
+    }
+
+    public class Transaction
+    {
+        public string FromAddress { get; set; }
+        public string ToAddress { get; set; }
+        public decimal Amount { get; set; }
+        public long Nonce { get; set; }
+        public decimal GasPrice { get; set; }
+        public long GasLimit { get; set; }
+        public long Timestamp { get; set; }
+        public string Signature { get; set; }
+        public string Hash { get; set; }
+    }
+
+    public interface IBlockchainService
+    {
+        Task<decimal> GetBalance(string address);
+        Task<long> GetNonce(string address);
+        Task<string> SubmitTransaction(Transaction transaction);
+    }
+
+    public interface IWalletService
+    {
+        Task<Wallet> GetWalletByAddress(string address);
+        Task<string> SignTransaction(Wallet wallet, Transaction transaction);
+    }
+
+    public class Wallet
+    {
+        public string Address { get; set; }
+        public string PrivateKey { get; set; }
+    }
+}
