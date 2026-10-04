@@ -1,186 +1,232 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading.Tasks;
-using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Threading.Tasks;
+using System.Numerics;
 
-namespace MagnumOpus.Backend.Core
+namespace MagnumOpus.Core
 {
+    /// <summary>
+    /// High-performance transaction processor for the Magnum Opus platform.
+    /// Handles validation, nonce management, gas estimation, and batch processing.
+    /// </summary>
     public class TransactionProcessor
     {
-        private readonly IBlockchainService _blockchainService;
-        private readonly IWalletService _walletService;
-        private readonly ILogger<TransactionProcessor> _logger;
+        private readonly ConcurrentDictionary<string, int> _nonceTracker = new ConcurrentDictionary<string, int>();
+        private readonly ConcurrentQueue<Transaction> _pendingQueue = new ConcurrentQueue<Transaction>();
+        private readonly object _lock = new object();
+        private readonly ILogger _logger;
 
-        public TransactionProcessor(
-            IBlockchainService blockchainService,
-            IWalletService walletService,
-            ILogger<TransactionProcessor> logger)
+        public TransactionProcessor(ILogger logger)
         {
-            _blockchainService = blockchainService;
-            _walletService = walletService;
-            _logger = logger;
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public async Task<TransactionResult> ProcessTransaction(TransactionRequest request)
+        /// <summary>
+        /// Validates a transaction against network rules and local state.
+        /// </summary>
+        public async Task<ValidationResult> ValidateAsync(Transaction tx)
         {
-            try
+            if (tx == null) return ValidationResult.Invalid("Transaction is null");
+
+            // 1. Check Nonce
+            int expectedNonce = _nonceTracker.TryGetValue(tx.From, out int currentNonce) ? currentNonce : 0;
+            if (tx.Nonce != expectedNonce)
             {
-                // Validate transaction request
-                if (!ValidateTransactionRequest(request))
-                {
-                    return new TransactionResult
-                    {
-                        Success = false,
-                        ErrorMessage = "Invalid transaction request"
-                    };
-                }
-
-                // Get sender wallet
-                var senderWallet = await _walletService.GetWalletByAddress(request.FromAddress);
-                if (senderWallet == null)
-                {
-                    return new TransactionResult
-                    {
-                        Success = false,
-                        ErrorMessage = "Sender wallet not found"
-                    };
-                }
-
-                // Verify sender has sufficient balance
-                var senderBalance = await _blockchainService.GetBalance(request.FromAddress);
-                if (senderBalance < request.Amount)
-                {
-                    return new TransactionResult
-                    {
-                        Success = false,
-                        ErrorMessage = "Insufficient balance"
-                    };
-                }
-
-                // Create transaction
-                var transaction = new Transaction
-                {
-                    FromAddress = request.FromAddress,
-                    ToAddress = request.ToAddress,
-                    Amount = request.Amount,
-                    Nonce = await _blockchainService.GetNonce(request.FromAddress),
-                    GasPrice = request.GasPrice,
-                    GasLimit = request.GasLimit,
-                    Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
-                };
-
-                // Sign transaction
-                var signature = await _walletService.SignTransaction(senderWallet, transaction);
-                transaction.Signature = signature;
-
-                // Calculate transaction hash
-                transaction.Hash = CalculateTransactionHash(transaction);
-
-                // Submit transaction to blockchain
-                var txHash = await _blockchainService.SubmitTransaction(transaction);
-
-                // Log successful transaction
-                _logger.LogInformation("Transaction processed successfully: {TxHash}", txHash);
-
-                return new TransactionResult
-                {
-                    Success = true,
-                    TransactionHash = txHash,
-                    Transaction = transaction
-                };
+                return ValidationResult.Invalid($"Nonce mismatch. Expected {expectedNonce}, got {tx.Nonce}");
             }
-            catch (Exception ex)
+
+            // 2. Check Balance (Mocked for now, would query state root in production)
+            decimal balance = await GetBalanceAsync(tx.From);
+            decimal requiredFunds = tx.Value + (tx.GasLimit * tx.GasPrice);
+            if (balance < requiredFunds)
             {
-                _logger.LogError(ex, "Error processing transaction");
-                return new TransactionResult
-                {
-                    Success = false,
-                    ErrorMessage = ex.Message
-                };
+                return ValidationResult.Invalid($"Insufficient funds. Required: {requiredFunds}, Available: {balance}");
             }
+
+            // 3. Check Gas Limit
+            if (tx.GasLimit < 21000)
+            {
+                return ValidationResult.Invalid("Gas limit below minimum for standard transfer (21000)");
+            }
+
+            return ValidationResult.Valid();
         }
 
-        private bool ValidateTransactionRequest(TransactionRequest request)
+        /// <summary>
+        /// Processes a batch of transactions, ordering by gas price (highest first) to maximize revenue.
+        /// </summary>
+        public async Task<List<ProcessedTransaction>> ProcessBatchAsync(List<Transaction> transactions)
         {
-            if (string.IsNullOrWhiteSpace(request.FromAddress) ||
-                string.IsNullOrWhiteSpace(request.ToAddress))
+            var results = new List<ProcessedTransaction>();
+            if (transactions == null || !transactions.Any()) return results;
+
+            // Sort by Gas Price descending (Priority Queue logic)
+            var sortedTx = transactions.OrderByDescending(t => t.GasPrice).ToList();
+
+            foreach (var tx in sortedTx)
             {
-                return false;
+                var validation = await ValidateAsync(tx);
+                if (!validation.IsValid)
+                {
+                    _logger.LogWarning("Transaction {TxHash} failed validation: {Reason}", tx.Hash, validation.Message);
+                    continue;
+                }
+
+                try
+                {
+                    // Simulate execution
+                    var receipt = await ExecuteTransactionAsync(tx);
+                    
+                    // Update Nonce
+                    _nonceTracker.AddOrUpdate(tx.From, 1, (key, value) => value + 1);
+
+                    results.Add(new ProcessedTransaction
+                    {
+                        Transaction = tx,
+                        Receipt = receipt,
+                        Status = "Success"
+                    });
+
+                    _logger.LogInformation("Transaction {TxHash} processed successfully. Gas Used: {GasUsed}", tx.Hash, receipt.GasUsed);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Exception processing transaction {TxHash}", tx.Hash);
+                    results.Add(new ProcessedTransaction
+                    {
+                        Transaction = tx,
+                        Status = "Failed",
+                        Error = ex.Message
+                    });
+                }
             }
 
-            if (request.Amount <= 0)
-            {
-                return false;
-            }
-
-            if (request.GasPrice <= 0 || request.GasLimit <= 0)
-            {
-                return false;
-            }
-
-            return true;
+            return results;
         }
 
-        private string CalculateTransactionHash(Transaction transaction)
+        private async Task<TransactionReceipt> ExecuteTransactionAsync(Transaction tx)
         {
-            var transactionData = JsonSerializer.Serialize(transaction);
-            using var sha256 = SHA256.Create();
-            var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(transactionData));
-            return Convert.ToHexString(hashBytes).ToLower();
+            // Simulate EVM execution time
+            await Task.Delay(50);
+
+            // Mock Gas Usage Calculation
+            long baseGas = 21000;
+            long dataGas = tx.Data.Length * 16; // Simplified data cost
+            long totalGasUsed = baseGas + dataGas;
+
+            return new TransactionReceipt
+            {
+                TxHash = tx.Hash,
+                BlockNumber = 18452000 + (new Random().Next(1000)),
+                GasUsed = totalGasUsed,
+                Status = true,
+                Logs = new List<LogEntry>()
+            };
+        }
+
+        private Task<decimal> GetBalanceAsync(string address)
+        {
+            // In a real system, this would query the State Trie or a database.
+            // For this demo, we return a mock balance.
+            return Task.FromResult(10000m);
+        }
+
+        /// <summary>
+        /// Estimates the gas required for a transaction based on data size and complexity.
+        /// </summary>
+        public long EstimateGas(Transaction tx)
+        {
+            long baseCost = 21000;
+            long dataCost = tx.Data.Length * 16;
+            long intrinsicCost = baseCost + dataCost;
+            
+            // Add buffer for execution logic (mocked)
+            return intrinsicCost + 5000;
         }
     }
 
-    public class TransactionRequest
-    {
-        public string FromAddress { get; set; }
-        public string ToAddress { get; set; }
-        public decimal Amount { get; set; }
-        public decimal GasPrice { get; set; }
-        public long GasLimit { get; set; }
-    }
-
-    public class TransactionResult
-    {
-        public bool Success { get; set; }
-        public string ErrorMessage { get; set; }
-        public string TransactionHash { get; set; }
-        public Transaction Transaction { get; set; }
-    }
+    // --- Data Models ---
 
     public class Transaction
     {
-        public string FromAddress { get; set; }
-        public string ToAddress { get; set; }
-        public decimal Amount { get; set; }
-        public long Nonce { get; set; }
+        public string Hash { get; set; }
+        public string From { get; set; }
+        public string To { get; set; }
+        public decimal Value { get; set; }
+        public int Nonce { get; set; }
         public decimal GasPrice { get; set; }
         public long GasLimit { get; set; }
+        public byte[] Data { get; set; } = Array.Empty<byte>();
         public long Timestamp { get; set; }
-        public string Signature { get; set; }
-        public string Hash { get; set; }
     }
 
-    public interface IBlockchainService
+    public class TransactionReceipt
     {
-        Task<decimal> GetBalance(string address);
-        Task<long> GetNonce(string address);
-        Task<string> SubmitTransaction(Transaction transaction);
+        public string TxHash { get; set; }
+        public long BlockNumber { get; set; }
+        public long GasUsed { get; set; }
+        public bool Status { get; set; }
+        public List<LogEntry> Logs { get; set; }
     }
 
-    public interface IWalletService
-    {
-        Task<Wallet> GetWalletByAddress(string address);
-        Task<string> SignTransaction(Wallet wallet, Transaction transaction);
-    }
-
-    public class Wallet
+    public class LogEntry
     {
         public string Address { get; set; }
-        public string PrivateKey { get; set; }
+        public List<string> Topics { get; set; }
+        public string Data { get; set; }
+    }
+
+    public class ProcessedTransaction
+    {
+        public Transaction Transaction { get; set; }
+        public TransactionReceipt Receipt { get; set; }
+        public string Status { get; set; }
+        public string Error { get; set; }
+    }
+
+    public class ValidationResult
+    {
+        public bool IsValid { get; private set; }
+        public string Message { get; private set; }
+
+        private ValidationResult(bool isValid, string message)
+        {
+            IsValid = isValid;
+            Message = message;
+        }
+
+        public static ValidationResult Valid() => new ValidationResult(true, "OK");
+        public static ValidationResult Invalid(string reason) => new ValidationResult(false, reason);
+    }
+
+    // --- Logging Interface (Mock) ---
+
+    public interface ILogger
+    {
+        void LogInformation(string message, params object[] args);
+        void LogWarning(string message, params object[] args);
+        void LogError(Exception ex, string message, params object[] args);
+    }
+
+    public class ConsoleLogger : ILogger
+    {
+        public void LogInformation(string message, params object[] args)
+        {
+            Console.WriteLine($"[INFO] {string.Format(message, args)}");
+        }
+
+        public void LogWarning(string message, params object[] args)
+        {
+            Console.WriteLine($"[WARN] {string.Format(message, args)}");
+        }
+
+        public void LogError(Exception ex, string message, params object[] args)
+        {
+            Console.WriteLine($"[ERROR] {string.Format(message, args)}: {ex.Message}");
+        }
     }
 }
