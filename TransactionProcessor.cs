@@ -1,87 +1,110 @@
-using System;\
-using System.Collections.Generic;\
-using System.Threading.Tasks;\
-using System.Threading;\
-using System.Security.Cryptography;\
-using System.Text;\
-using Microsoft.Extensions.Logging;\
-\
-namespace MagnumOpus.Backend\
-{\
-    public enum TransactionStatus { Pending, Confirmed, Failed }\
-\
-    public class Transaction\
-    {\
-        public string Id { get; set; }\
-        public string From { get; set; }\
-        public string To { get; set; }\
-        public decimal Amount { get; set; }\
-        public string Token { get; set; }\
-        public DateTime Timestamp { get; set; }\
-        public TransactionStatus Status { get; set; }\
-        public string Hash { get; set; }\
-    }\
-\
-    public interface ITransactionStore\
-    {\
-        Task SaveAsync(Transaction tx);\
-        Task<Transaction?> GetAsync(string id);\
-        Task UpdateStatusAsync(string id, TransactionStatus status);\
-    }\
-\
-    public class InMemoryTransactionStore : ITransactionStore\
-    {\
-        private readonly Dictionary<string, Transaction> _store = new();\
-        private readonly SemaphoreSlim _sem = new(1,1);\
-\
-        public async Task SaveAsync(Transaction tx)\
-        {\
-            await _sem.WaitAsync();\
-            try { _store[tx.Id] = tx; }\
-            finally { _sem.Release(); }\
-        }\
-\
-        public async Task<Transaction?> GetAsync(string id)\
-        {\
-            await _sem.WaitAsync();\
-            try { _store.TryGetValue(id, out var tx); return tx; }\
-            finally { _sem.Release(); }\
-        }\
-\
-        public async Task UpdateStatusAsync(string id, TransactionStatus status)\
-        {\
-            await _sem.WaitAsync();\
-            try { if(_store.TryGetValue(id, out var tx)) tx.Status = status; }\
-            finally { _sem.Release(); }\
-        }\
-    }\
-\
-    public class TransactionProcessor\
-    {\
-        private readonly ITransactionStore _store;\
-        private readonly ILogger<TransactionProcessor> _logger;\
-        private readonly TimeSpan _confirmationTimeout = TimeSpan.FromSeconds(30);\
-        private readonly Random _rnd = new();\
-\
-        public TransactionProcessor(ITransactionStore store, ILogger<TransactionProcessor> logger)\
-        {\
-            _store = store;\
-            _logger = logger;\
-        }\
-\
-        public async Task<string> SubmitAsync(string from, string to, decimal amount, string token)\
-        {\
-            var tx = new Transaction\
-            {\
-                Id = Guid.NewGuid().ToString(),\
-                From = from,\
-                To = to,\
-                Amount = amount,\
-                Token = token,\
-                Timestamp = DateTime.UtcNow,\
-                Status = TransactionStatus.Pending,\
-                Hash = ComputeHash(from, to, amount, token, DateTime.UtcNow)\
-            };\
-\
-            await _store.SaveAsync(tx);\
-            _logger.LogInformation("Transaction {Id} submitted\
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Nethereum.Signer;
+using Nethereum.Util;
+
+namespace MagnumOpus.Core
+{
+    public class Transaction
+    {
+        public string From { get; set; }
+        public string To { get; set; }
+        public decimal Amount { get; set; }
+        public ulong Nonce { get; set; }
+        public string Data { get; set; }
+        public string Signature { get; set; }
+    }
+
+    public class TransactionResult
+    {
+        public bool Success { get; set; }
+        public string TxHash { get; set; }
+        public string ErrorMessage { get; set; }
+    }
+
+    public class TransactionProcessor
+    {
+        private readonly ITransactionRepository _repo;
+        private readonly IBlockchainGateway _gateway;
+
+        public TransactionProcessor(ITransactionRepository repo, IBlockchainGateway gateway)
+        {
+            _repo = repo;
+            _gateway = gateway;
+        }
+
+        public async Task<TransactionResult> ProcessAsync(Transaction tx)
+        {
+            var validation = Validate(tx);
+            if (!validation.Success)
+                return validation;
+
+            if (!VerifySignature(tx))
+                return new TransactionResult { Success = false, ErrorMessage = "Invalid signature" };
+
+            var expectedNonce = await _repo.GetNextNonceAsync(tx.From);
+            if (tx.Nonce != expectedNonce)
+                return new TransactionResult { Success = false, ErrorMessage = $"Invalid nonce. Expected {expectedNonce}" };
+
+            var raw = $"{tx.From}|{tx.To}|{tx.Amount}|{tx.Nonce}|{tx.Data}";
+            var txHash = Sha256.ComputeHash(raw);
+
+            var broadcastResult = await _gateway.BroadcastTransactionAsync(txHash, tx);
+            if (!broadcastResult.Success)
+                return new TransactionResult { Success = false, ErrorMessage = broadcastResult.ErrorMessage };
+
+            await _repo.SaveTransactionAsync(txHash, tx);
+
+            return new TransactionResult { Success = true, TxHash = txHash };
+        }
+
+        private TransactionResult Validate(Transaction tx)
+        {
+            if (string.IsNullOrWhiteSpace(tx.From) ||
+                string.IsNullOrWhiteSpace(tx.To) ||
+                tx.Amount <= 0 ||
+                string.IsNullOrWhiteSpace(tx.Signature))
+            {
+                return new TransactionResult { Success = false, ErrorMessage = "Missing required fields" };
+            }
+            return new TransactionResult { Success = true };
+        }
+
+        private bool VerifySignature(Transaction tx)
+        {
+            try
+            {
+                var signer = new EthereumMessageSigner();
+                var message = $"{tx.From}{tx.To}{tx.Amount}{tx.Nonce}{tx.Data}";
+                var recovered = signer.EncodeUTF8AndEcRecover(message, tx.Signature);
+                return string.Equals(recovered, tx.From, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+
+    public interface ITransactionRepository
+    {
+        Task<ulong> GetNextNonceAsync(string address);
+        Task SaveTransactionAsync(string txHash, Transaction tx);
+    }
+
+    public interface IBlockchainGateway
+    {
+        Task<(bool Success, string ErrorMessage)> BroadcastTransactionAsync(string txHash, Transaction tx);
+    }
+
+    public static class Sha256
+    {
+        public static string ComputeHash(string input)
+        {
+            var keccak = new Sha3Keccack();
+            var hash = keccak.CalculateHash(input);
+            return "0x" + hash;
+        }
+    }
+}
