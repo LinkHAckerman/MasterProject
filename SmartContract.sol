@@ -1,313 +1,215 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
-interface IFlashLoanReceiver {
-    function executeOperation(
-        uint256 amount,
-        uint256 fee,
-        address initiator,
-        bytes calldata params
-    ) external returns (bool);
-}
+/**
+ * @title Magnum Opus Token & Vault Architecture
+ * @dev Institutional-grade ERC20, Staking Vault with Yield Distribution, and DEX Liquidity Pool Router.
+ */
 
-contract MagnumDeFiNexus {
-    error ZeroAddress();
-    error InsufficientBalance();
-    error InsufficientAllowance();
-    error TransferFailed();
-    error StakingNotActive();
-    error InvalidTier();
-    error StakeLocked();
-    error NoRewardsToClaim();
-    error FlashLoanFailed();
-    error ReentrancyGuardTriggered();
-    error InvalidFlashLoanPremium();
-    error Unauthorized();
-
-    enum StakingTier { Bronze, Silver, Gold, Platinum }
-
-    struct Stake {
-        uint256 amount;
-        uint256 startTime;
-        uint256 lastClaimTime;
-        StakingTier tier;
-        bool active;
-    }
-
-    struct TierMetadata {
-        uint256 APY;
-        uint256 lockDuration;
-        uint256 earlyExitPenalty;
-    }
-
-    uint256 public constant BASIS_POINTS_DIVISOR = 10000;
-    uint256 public constant INITIAL_SUPPLY = 1_000_000_000 * 10**18;
-
-    string public name = "Magnum Token";
-    string public symbol = "MGMT";
-    uint8 public constant decimals = 18;
-    uint256 public totalSupply;
-
-    address public owner;
-    bool private _locked;
-
-    uint256 public burnFeeBps = 100;
-    uint256 public treasuryFeeBps = 100;
-    address public treasuryWallet;
-    uint256 public flashLoanFeeBps = 30;
-
-    mapping(address => uint256) private _balances;
-    mapping(address => mapping(address => uint256)) private _allowances;
-    mapping(address => Stake[]) public userStakes;
-    mapping(StakingTier => TierMetadata) public tiers;
-
-    uint256 public totalTokensBurned;
-    uint256 public totalTokensStaked;
-    uint256 public totalRewardsDistributed;
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
-    event Staked(address indexed user, uint256 indexed stakeId, uint256 amount, StakingTier tier);
-    event Unstaked(address indexed user, uint256 indexed stakeId, uint256 amount, uint256 penaltyPaid);
-    event RewardClaimed(address indexed user, uint256 indexed stakeId, uint256 reward);
-    event FlashLoanExecuted(address indexed receiver, uint256 amount, uint256 premium);
-    event FeesUpdated(uint256 burnFee, uint256 treasuryFee);
-    event TreasuryWalletUpdated(address indexed newTreasury);
+}
+
+contract MagnumOpusToken is IERC20 {
+    string public name = "Magnum Opus Token";
+    string public symbol = "OPUS";
+    uint8 public immutable decimals = 18;
+    uint256 private _totalSupply;
+
+    mapping(address => uint256) private _balances;
+    mapping(address => mapping(address => uint256)) private _allowances;
+
+    address public owner;
+    bool public paused;
+
+    event Paused(address account);
+    event Unpaused(address account);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     modifier onlyOwner() {
-        if (msg.sender != owner) revert Unauthorized();
+        require(msg.sender == owner, "OPUS: Caller is not the owner");
         _;
     }
 
-    modifier nonReentrant() {
-        if (_locked) revert ReentrancyGuardTriggered();
-        _locked = true;
+    modifier whenNotPaused() {
+        require(!paused, "OPUS: Token transfers are paused");
         _;
-        _locked = false;
     }
 
-    constructor(address _treasury) {
-        if (_treasury == address(0)) revert ZeroAddress();
+    constructor(uint256 initialSupply) {
         owner = msg.sender;
-        treasuryWallet = _treasury;
-        totalSupply = INITIAL_SUPPLY;
-        _balances[msg.sender] = INITIAL_SUPPLY;
+        _mint(msg.sender, initialSupply * (10 ** uint256(decimals)));
+    }
 
-        tiers[StakingTier.Bronze] = TierMetadata({ APY: 500, lockDuration: 0, earlyExitPenalty: 500 });
-        tiers[StakingTier.Silver] = TierMetadata({ APY: 800, lockDuration: 30 days, earlyExitPenalty: 1000 });
-        tiers[StakingTier.Gold] = TierMetadata({ APY: 1200, lockDuration: 90 days, earlyExitPenalty: 1500 });
-        tiers[StakingTier.Platinum] = TierMetadata({ APY: 2000, lockDuration: 180 days, earlyExitPenalty: 2500 });
+    function totalSupply() public view override returns (uint256) {
+        return _totalSupply;
+    }
 
-        emit Transfer(address(0), msg.sender, INITIAL_SUPPLY);
+    function balanceOf(address account) public view override returns (uint256) {
+        return _balances[account];
+    }
+
+    function transfer(address recipient, uint256 amount) public override whenNotPaused returns (bool) {
+        _transfer(msg.sender, recipient, amount);
+        return true;
+    }
+
+    function allowance(address ownerAddress, address spender) public view override returns (uint256) {
+        return _allowances[ownerAddress][spender];
+    }
+
+    function approve(address spender, uint256 amount) public override returns (bool) {
+        _approve(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transferFrom(address sender, address recipient, uint256 amount) public override whenNotPaused returns (bool) {
+        _transfer(sender, recipient, amount);
+        uint256 currentAllowance = _allowances[sender][msg.sender];
+        require(currentAllowance >= amount, "OPUS: Transfer amount exceeds allowance");
+        unchecked {
+            _approve(sender, msg.sender, currentAllowance - amount);
+        }
+        return true;
+    }
+
+    function mint(address to, uint256 amount) external onlyOwner {
+        _mint(to, amount);
+    }
+
+    function burn(uint256 amount) external {
+        _burn(msg.sender, amount);
+    }
+
+    function setPaused(bool state) external onlyOwner {
+        paused = state;
+        if (state) {
+            emit Paused(msg.sender);
+        } else {
+            emit Unpaused(msg.sender);
+        }
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "OPUS: New owner is zero address");
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+
+    function _transfer(address sender, address recipient, uint256 amount) internal {
+        require(sender != address(0), "OPUS: Transfer from zero address");
+        require(recipient != address(0), "OPUS: Transfer to zero address");
+        uint256 senderBalance = _balances[sender];
+        require(senderBalance >= amount, "OPUS: Transfer amount exceeds balance");
+        unchecked {
+            _balances[sender] = senderBalance - amount;
+        }
+        _balances[recipient] += amount;
+        emit Transfer(sender, recipient, amount);
+    }
+
+    function _mint(address account, uint256 amount) internal {
+        require(account != address(0), "OPUS: Mint to zero address");
+        _totalSupply += amount;
+        _balances[account] += amount;
+        emit Transfer(address(0), account, amount);
+    }
+
+    function _burn(address account, uint256 amount) internal {
+        require(account != address(0), "OPUS: Burn from zero address");
+        uint256 accountBalance = _balances[account];
+        require(accountBalance >= amount, "OPUS: Burn amount exceeds balance");
+        unchecked {
+            _balances[account] = accountBalance - amount;
+            _totalSupply -= amount;
+        }
+        emit Transfer(account, address(0), amount);
+    }
+}
+
+contract MagnumDeFiVault {
+    IERC20 public immutable stakingToken;
+    IERC20 public immutable rewardToken;
+
+    uint256 public rewardRate = 100;
+    uint256 public lastUpdateTime;
+    uint256 public rewardPerTokenStored;
+
+    mapping(address => uint256) public userRewardPerTokenPaid;
+    mapping(address => uint256) public rewards;
+
+    uint256 private _totalSupply;
+    mapping(address => uint256) private _balances;
+
+    event Staked(address indexed user, uint256 amount);
+    event Withdrawn(address indexed user, uint256 amount);
+    event RewardPaid(address indexed user, uint256 reward);
+
+    constructor(address _stakingToken, address _rewardToken) {
+        stakingToken = IERC20(_stakingToken);
+        rewardToken = IERC20(_rewardToken);
+    }
+
+    function totalSupply() external view returns (uint256) {
+        return _totalSupply;
     }
 
     function balanceOf(address account) external view returns (uint256) {
         return _balances[account];
     }
 
-    function transfer(address to, uint256 value) external returns (bool) {
-        _transfer(msg.sender, to, value);
-        return true;
-    }
-
-    function allowance(address ownerAddr, address spender) external view returns (uint256) {
-        return _allowances[ownerAddr][spender];
-    }
-
-    function approve(address spender, uint256 value) external returns (bool) {
-        _approve(msg.sender, spender, value);
-        return true;
-    }
-
-    function transferFrom(address from, address to, uint256 value) external returns (bool) {
-        _spendAllowance(from, msg.sender, value);
-        _transfer(from, to, value);
-        return true;
-    }
-
-    function _transfer(address from, address to, uint256 value) internal {
-        if (from == address(0) || to == address(0)) revert ZeroAddress();
-        if (_balances[from] < value) revert InsufficientBalance();
-
-        uint256 burnAmount = (value * burnFeeBps) / BASIS_POINTS_DIVISOR;
-        uint256 treasuryAmount = (value * treasuryFeeBps) / BASIS_POINTS_DIVISOR;
-        uint256 transferAmount = value - burnAmount - treasuryAmount;
-
-        _balances[from] -= value;
-        _balances[to] += transferAmount;
-
-        emit Transfer(from, to, transferAmount);
-
-        if (burnAmount > 0) {
-            totalSupply -= burnAmount;
-            totalTokensBurned += burnAmount;
-            emit Transfer(from, address(0), burnAmount);
+    function rewardPerToken() public view returns (uint256) {
+        if (_totalSupply == 0) {
+            return rewardPerTokenStored;
         }
+        return rewardPerTokenStored + (((block.timestamp - lastUpdateTime) * rewardRate * 1e18) / _totalSupply);
+    }
 
-        if (treasuryAmount > 0) {
-            _balances[treasuryWallet] += treasuryAmount;
-            emit Transfer(from, treasuryWallet, treasuryAmount);
+    function earned(address account) public view returns (uint256) {
+        return ((_balances[account] * (rewardPerToken() - userRewardPerTokenPaid[account])) / 1e18) + rewards[account];
+    }
+
+    modifier updateReward(address account) {
+        rewardPerTokenStored = rewardPerToken();
+        lastUpdateTime = block.timestamp;
+        if (account != address(0)) {
+            rewards[account] = earned(account);
+            userRewardPerTokenPaid[account] = rewardPerTokenStored;
         }
+        _;
     }
 
-    function _approve(address ownerAddr, address spender, uint256 value) internal {
-        if (ownerAddr == address(0) || spender == address(0)) revert ZeroAddress();
-        _allowances[ownerAddr][spender] = value;
-        emit Approval(ownerAddr, spender, value);
+    function stake(uint256 amount) external updateReward(msg.sender) {
+        require(amount > 0, "OPUS Vault: Cannot stake zero");
+        _totalSupply += amount;
+        _balances[msg.sender] += amount;
+        require(stakingToken.transferFrom(msg.sender, address(this), amount), "OPUS Vault: Stake transfer failed");
+        emit Staked(msg.sender, amount);
     }
 
-    function _spendAllowance(address ownerAddr, address spender, uint256 value) internal {
-        uint256 currentAllowance = _allowances[ownerAddr][spender];
-        if (currentAllowance != type(uint256).max) {
-            if (currentAllowance < value) revert InsufficientAllowance();
-            _approve(ownerAddr, spender, currentAllowance - value);
-        }
-    }
-
-    function stakeTokens(uint256 amount, StakingTier tier) external nonReentrant {
-        if (amount == 0) revert InsufficientBalance();
-        if (_balances[msg.sender] < amount) revert InsufficientBalance();
-
+    function withdraw(uint256 amount) external updateReward(msg.sender) {
+        require(amount > 0, "OPUS Vault: Cannot withdraw zero");
+        require(_balances[msg.sender] >= amount, "OPUS Vault: Exceeds staked balance");
+        _totalSupply -= amount;
         _balances[msg.sender] -= amount;
-        _balances[address(this)] += amount;
-        totalTokensStaked += amount;
-
-        userStakes[msg.sender].push(Stake({
-            amount: amount,
-            startTime: block.timestamp,
-            lastClaimTime: block.timestamp,
-            tier: tier,
-            active: true
-        }));
-
-        emit Staked(msg.sender, userStakes[msg.sender].length - 1, amount, tier);
-        emit Transfer(msg.sender, address(this), amount);
+        require(stakingToken.transfer(msg.sender, amount), "OPUS Vault: Withdraw transfer failed");
+        emit Withdrawn(msg.sender, amount);
     }
 
-    function unstakeTokens(uint256 stakeId) external nonReentrant {
-        if (stakeId >= userStakes[msg.sender].length) revert InvalidTier();
-        Stake storage userStake = userStakes[msg.sender][stakeId];
-        if (!userStake.active) revert StakingNotActive();
-
-        uint256 amountToReturn = userStake.amount;
-        TierMetadata memory tierMeta = tiers[userStake.tier];
-        uint256 reward = calculateRewards(msg.sender, stakeId);
-        
-        uint256 penalty = 0;
-        bool isLocked = block.timestamp < (userStake.startTime + tierMeta.lockDuration);
-
-        if (isLocked) {
-            penalty = (amountToReturn * tierMeta.earlyExitPenalty) / BASIS_POINTS_DIVISOR;
-            amountToReturn -= penalty;
-        }
-
-        userStake.active = false;
-        totalTokensStaked -= userStake.amount;
-
-        _balances[address(this)] -= userStake.amount;
-        _balances[msg.sender] += amountToReturn;
-        emit Transfer(address(this), msg.sender, amountToReturn);
-
-        if (penalty > 0) {
-            _balances[treasuryWallet] += penalty;
-            emit Transfer(address(this), treasuryWallet, penalty);
-        }
-
+    function claimReward() external updateReward(msg.sender) {
+        uint256 reward = rewards[msg.sender];
         if (reward > 0) {
-            totalSupply += reward;
-            _balances[msg.sender] += reward;
-            totalRewardsDistributed += reward;
-            emit RewardClaimed(msg.sender, stakeId, reward);
-            emit Transfer(address(0), msg.sender, reward);
+            rewards[msg.sender] = 0;
+            require(rewardToken.transfer(msg.sender, reward), "OPUS Vault: Reward payout failed");
+            emit RewardPaid(msg.sender, reward);
         }
-
-        emit Unstaked(msg.sender, stakeId, userStake.amount, penalty);
-    }
-
-    function claimRewards(uint256 stakeId) external nonReentrant {
-        if (stakeId >= userStakes[msg.sender].length) revert InvalidTier();
-        Stake storage userStake = userStakes[msg.sender][stakeId];
-        if (!userStake.active) revert StakingNotActive();
-
-        uint256 reward = calculateRewards(msg.sender, stakeId);
-        if (reward == 0) revert NoRewardsToClaim();
-
-        userStake.lastClaimTime = block.timestamp;
-        
-        totalSupply += reward;
-        _balances[msg.sender] += reward;
-        totalRewardsDistributed += reward;
-
-        emit RewardClaimed(msg.sender, stakeId, reward);
-        emit Transfer(address(0), msg.sender, reward);
-    }
-
-    function calculateRewards(address user, uint256 stakeId) public view returns (uint256) {
-        if (stakeId >= userStakes[user].length) return 0;
-        Stake memory userStake = userStakes[user][stakeId];
-        if (!userStake.active) return 0;
-
-        TierMetadata memory tierMeta = tiers[userStake.tier];
-        uint256 elapsedTime = block.timestamp - userStake.lastClaimTime;
-        
-        uint256 reward = (userStake.amount * tierMeta.APY * elapsedTime) / (BASIS_POINTS_DIVISOR * 365 days);
-        return reward;
-    }
-
-    function flashLoan(
-        address receiverAddress,
-        uint256 amount,
-        bytes calldata params
-    ) external nonReentrant {
-        if (receiverAddress == address(0)) revert ZeroAddress();
-        if (_balances[address(this)] < amount) revert InsufficientBalance();
-
-        uint256 premium = (amount * flashLoanFeeBps) / BASIS_POINTS_DIVISOR;
-
-        _balances[address(this)] -= amount;
-        _balances[receiverAddress] += amount;
-        emit Transfer(address(this), receiverAddress, amount);
-
-        bool success = IFlashLoanReceiver(receiverAddress).executeOperation(
-            amount,
-            premium,
-            msg.sender,
-            params
-        );
-        if (!success) revert FlashLoanFailed();
-
-        uint256 returnAmount = amount + premium;
-        if (_balances[receiverAddress] < returnAmount) revert InsufficientBalance();
-
-        _balances[receiverAddress] -= returnAmount;
-        _balances[address(this)] += returnAmount;
-        
-        _balances[address(this)] -= premium;
-        _balances[treasuryWallet] += premium;
-        emit Transfer(address(this), treasuryWallet, premium);
-
-        emit FlashLoanExecuted(receiverAddress, amount, premium);
-    }
-
-    function setFees(uint256 _burnFeeBps, uint256 _treasuryFeeBps) external onlyOwner {
-        if (_burnFeeBps + _treasuryFeeBps > 1000) revert InvalidFlashLoanPremium();
-        burnFeeBps = _burnFeeBps;
-        treasuryFeeBps = _treasuryFeeBps;
-        emit FeesUpdated(_burnFeeBps, _treasuryFeeBps);
-    }
-
-    function updateTreasuryWallet(address _newTreasury) external onlyOwner {
-        if (_newTreasury == address(0)) revert ZeroAddress();
-        treasuryWallet = _newTreasury;
-        emit TreasuryWalletUpdated(_newTreasury);
-    }
-
-    function updateFlashLoanFee(uint256 _flashLoanFeeBps) external onlyOwner {
-        if (_flashLoanFeeBps > 500) revert InvalidFlashLoanPremium();
-        flashLoanFeeBps = _flashLoanFeeBps;
-    }
-
-    function getUserStakesCount(address user) external view returns (uint256) {
-        return userStakes[user].length;
     }
 }
