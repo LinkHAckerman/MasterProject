@@ -1,5 +1,5 @@
 """
-Shared logic for all AI agent scripts (Gemini, Groq, Mistral, OpenRouter, GitHub Models, ...).
+Shared logic for all AI agent scripts (Gemini, Groq, Mistral, OpenRouter, Cloudflare, ...).
 
 Each provider script only needs to define:
   - how to list/rank its own models
@@ -8,7 +8,8 @@ Each provider script only needs to define:
     out of that provider's response shape
 
 Everything else (state file, manifest truncation, prompt text, JSON
-extraction, retry loop, collision handling, README cooldown) lives here once.
+extraction, retry loop, collision handling, README cooldown, escaping
+repair) lives here once.
 """
 
 import os
@@ -155,6 +156,9 @@ Instructions:
 1. Choose ONE file from that list to drastically improve or create today.
 2. Respond with ONLY a strict JSON object: {{"filename": "...", "content": "...complete updated file content..."}}
 3. No markdown code fences. No commentary. Just the raw JSON object.
+4. Inside the "content" string, use real single-backslash JSON escapes
+   (\\n for newline, \\t for tab, \\" for a quote) - do NOT double-escape
+   them (never \\\\n or \\\\t).
 """
 
 
@@ -171,6 +175,50 @@ def extract_json(raw_text):
     decoder = json.JSONDecoder()
     action, _ = decoder.raw_decode(clean)
     return action
+
+
+def repair_double_escaped_content(content):
+    """
+    Some smaller/open models double-escape when writing code inside a JSON
+    string value - e.g. their raw output contains the four characters
+    \\\\n (two backslashes then n) where a single \\n was intended, so
+    after our one JSON-decode pass the content still contains literal
+    two-character sequences like backslash-n instead of a real newline.
+    The result is a file squashed onto one line full of stray backslashes.
+
+    Heuristically detect this (suspiciously few real newlines, but many
+    literal escape-looking sequences) and unescape once more. Uses plain
+    string replacement rather than codecs' unicode_escape, since that
+    codec operates byte-wise and can mangle non-ASCII text (e.g. comments
+    with accented characters) - these targeted replacements only touch
+    the specific sequences this failure mode actually produces.
+    """
+    real_newlines = content.count("\n")
+    literal_n = content.count("\\n")
+    literal_t = content.count("\\t")
+    literal_quote = content.count('\\"')
+
+    looks_double_escaped = (
+        real_newlines <= 1 and (literal_n + literal_t + literal_quote) >= 3
+    )
+
+    if not looks_double_escaped:
+        return content
+
+    repaired = (
+        content
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace('\\"', '"')
+        .replace("\\'", "'")
+    )
+
+    # Only trust the repair if it actually produced real structure -
+    # otherwise return the original untouched rather than risk mangling it.
+    if repaired.count("\n") > real_newlines:
+        return repaired
+    return content
 
 
 def call_with_retry(url, headers, payload, params=None, max_retries=3, base_delay=5):
@@ -269,7 +317,7 @@ def pick_unclaimed_file(model_names, call_fn, extract_text_fn, claimed_files, ma
         try:
             action = extract_json(raw_text)
             candidate_file = action["filename"]
-            candidate_content = action["content"]
+            candidate_content = repair_double_escaped_content(action["content"])
         except Exception as e:
             print(f"Attempt {pick_attempt}/{max_pick_attempts}: could not parse model output as JSON ({e}). Retrying.")
             continue
