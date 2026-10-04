@@ -159,6 +159,11 @@ Instructions:
 4. Inside the "content" string, use real single-backslash JSON escapes
    (\\n for newline, \\t for tab, \\" for a quote) - do NOT double-escape
    them (never \\\\n or \\\\t).
+5. If you are writing Go code (server.go) and need a regex pattern, file
+   path, or any string containing backslashes, use a Go raw string literal
+   (backticks, e.g. `{{regex pattern here}}`) instead of a double-quoted
+   string - double-quoted Go strings only support a small fixed set of
+   escape sequences and will fail to compile otherwise.
 """
 
 
