@@ -1,140 +1,194 @@
 package main
 
 import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
-	"os"
-	"os/signal"
-	"sync"
-	"syscall"
-	"time"
+    "crypto/sha256"
+    "encoding/hex"
+    "encoding/json"
+    "log"
+    "math/rand"
+    "net/http"
+    "os"
+    "os/signal"
+    "strconv"
+    "strings"
+    "sync"
+    "syscall"
+    "time"
 )
 
-type TransactionRequest struct {
-	From     string  `json:"from"`
-	To       string  `json:"to"`
-	Amount   float64 `json:"amount"`
-	Token    string  `json:"token"`
-	GasPrice uint64  `json:"gas_price"`
+// Wallet represents a simple wallet with an address and balances.
+type Wallet struct {
+    Address string            `json:"address"`
+    Balances map[string]float64 `json:"balances"` // token symbol -> amount
 }
 
-type TransactionResponse struct {
-	TxHash  string `json:"tx_hash"`
-	Status  string `json:"status"`
-	Message string `json:"message"`
+// Transaction represents a minimal transaction payload.
+type Transaction struct {
+    From   string  `json:"from"`
+    To     string  `json:"to"`
+    Token  string  `json:"token"`
+    Amount float64 `json:"amount"`
+    Nonce  uint64  `json:"nonce"`
+    Hash   string  `json:"hash,omitempty"`
 }
 
 var (
-	txStore = make(map[string]string) // txHash -> status
-	storeMu sync.RWMutex
+    wallets      = make(map[string]*Wallet)
+    walletsMutex sync.RWMutex
+    txNonce      uint64 = 0
+    nonceMutex   sync.Mutex
 )
 
 func main() {
-	http.HandleFunc("/relay", relayHandler)
-	http.HandleFunc("/status/", statusHandler) // expects /status/{txHash}
-	http.HandleFunc("/healthz", healthHandler)
+    // Seed random generator
+    rand.Seed(time.Now().UnixNano())
 
-	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: nil,
-	}
+    http.HandleFunc("/wallet/create", handleCreateWallet)
+    http.HandleFunc("/wallet/", handleWallet) // prefix for balance endpoint
+    http.HandleFunc("/transaction/relay", handleRelayTransaction)
 
-	go func() {
-		log.Println("🚀 Server listening on :8080")
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %s\n", err)
-		}
-	}()
+    srv := &http.Server{Addr: ":8080"}
 
-	// Graceful shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	log.Println("Shutting down server...")
+    // Graceful shutdown handling
+    go func() {
+        log.Println("Server listening on :8080")
+        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            log.Fatalf("listen: %s\n", err)
+        }
+    }()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
-	}
-	log.Println("Server exiting")
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+    log.Println("Shutting down server...")
+    if err := srv.Close(); err != nil {
+        log.Fatalf("Server Close: %v", err)
+    }
+    log.Println("Server stopped")
 }
 
-func relayHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req TransactionRequest
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
-		return
-	}
-	if req.From == "" || req.To == "" || req.Amount <= 0 || req.Token == "" {
-		http.Error(w, "Missing or invalid fields", http.StatusBadRequest)
-		return
-	}
+// handleCreateWallet creates a new mock wallet and returns its address.
+func handleCreateWallet(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+    addr := generateAddress()
+    wallet := &Wallet{Address: addr, Balances: map[string]float64{"ETH": 0, "USDT": 0}}
+    walletsMutex.Lock()
+    wallets[addr] = wallet
+    walletsMutex.Unlock()
 
-	// Simulate transaction processing
-	txHash := generateTxHash(req)
-	storeMu.Lock()
-	txStore[txHash] = "pending"
-	storeMu.Unlock()
-
-	go processTransaction(txHash)
-
-	resp := TransactionResponse{
-		TxHash:  txHash,
-		Status:  "pending",
-		Message: "Transaction received and is being processed",
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(wallet)
 }
 
-func statusHandler(w http.ResponseWriter, r *http.Request) {
-	// URL pattern: /status/{txHash}
-	txHash := r.URL.Path[len("/status/"):]
-	if txHash == "" {
-		http.Error(w, "TxHash required", http.StatusBadRequest)
-		return
-	}
-	storeMu.RLock()
-	status, ok := txStore[txHash]
-	storeMu.RUnlock()
-	if !ok {
-		http.Error(w, "Transaction not found", http.StatusNotFound)
-		return
-	}
-	resp := map[string]string{
-		"tx_hash": txHash,
-		"status":  status,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+// handleWallet routes sub‑paths for wallet operations (currently only balance).
+func handleWallet(w http.ResponseWriter, r *http.Request) {
+    // Expected pattern: /wallet/{address}/balance
+    parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/wallet/"), "/")
+    if len(parts) < 2 {
+        http.Error(w, "Invalid wallet endpoint", http.StatusBadRequest)
+        return
+    }
+    address := parts[0]
+    action := parts[1]
+
+    switch action {
+    case "balance":
+        handleGetBalance(w, r, address)
+    default:
+        http.Error(w, "Unsupported wallet action", http.StatusBadRequest)
+    }
 }
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+// handleGetBalance returns the balances of a wallet.
+func handleGetBalance(w http.ResponseWriter, r *http.Request, address string) {
+    if r.Method != http.MethodGet {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+    walletsMutex.RLock()
+    wallet, ok := wallets[address]
+    walletsMutex.RUnlock()
+    if !ok {
+        http.Error(w, "Wallet not found", http.StatusNotFound)
+        return
+    }
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(struct {
+        Address  string            `json:"address"`
+        Balances map[string]float64 `json:"balances"`
+    }{Address: wallet.Address, Balances: wallet.Balances})
 }
 
-func generateTxHash(req TransactionRequest) string {
-	data := req.From + req.To + req.Token + fmt.Sprintf("%f", req.Amount) + fmt.Sprintf("%d", req.GasPrice) + time.Now().String()
-	hash := sha256.Sum256([]byte(data))
-	return "0x" + hex.EncodeToString(hash[:])
+// handleRelayTransaction validates, updates balances, and returns a transaction hash.
+func handleRelayTransaction(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+    var tx Transaction
+    if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
+        http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+        return
+    }
+    // Basic validation
+    if tx.From == "" || tx.To == "" || tx.Token == "" || tx.Amount <= 0 {
+        http.Error(w, "Missing or invalid transaction fields", http.StatusBadRequest)
+        return
+    }
+    // Retrieve wallets
+    walletsMutex.RLock()
+    fromWallet, fromOk := wallets[tx.From]
+    toWallet, toOk := wallets[tx.To]
+    walletsMutex.RUnlock()
+    if !fromOk || !toOk {
+        http.Error(w, "One or both wallets not found", http.StatusNotFound)
+        return
+    }
+    // Check balance
+    walletsMutex.RLock()
+    balance, balOk := fromWallet.Balances[tx.Token]
+    walletsMutex.RUnlock()
+    if !balOk || balance < tx.Amount {
+        http.Error(w, "Insufficient balance", http.StatusBadRequest)
+        return
+    }
+    // Perform transfer atomically
+    walletsMutex.Lock()
+    fromWallet.Balances[tx.Token] -= tx.Amount
+    toWallet.Balances[tx.Token] += tx.Amount
+    walletsMutex.Unlock()
+
+    // Generate nonce and hash
+    nonceMutex.Lock()
+    txNonce++
+    tx.Nonce = txNonce
+    nonceMutex.Unlock()
+    tx.Hash = computeTxHash(tx)
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(tx)
 }
 
-func processTransaction(txHash string) {
-	// Simulate processing delay
-	time.Sleep(2 * time.Second)
-	storeMu.Lock()
-	txStore[txHash] = "confirmed"
-	storeMu.Unlock()
+// generateAddress creates a pseudo‑random 40‑character hex address prefixed with 0x.
+func generateAddress() string {
+    b := make([]byte, 20) // 20 bytes = 40 hex chars
+    _, err := rand.Read(b)
+    if err != nil {
+        // fallback to math/rand if crypto/rand fails (unlikely in this mock)
+        for i := range b {
+            b[i] = byte(rand.Intn(256))
+        }
+    }
+    return "0x" + hex.EncodeToString(b)
+}
+
+// computeTxHash creates a deterministic hash of the transaction fields.
+func computeTxHash(tx Transaction) string {
+    // Concatenate fields in a stable order
+    data := tx.From + tx.To + tx.Token + strconv.FormatFloat(tx.Amount, 'f', 8, 64) + strconv.FormatUint(tx.Nonce, 10)
+    sum := sha256.Sum256([]byte(data))
+    return "0x" + hex.EncodeToString(sum[:])
 }
