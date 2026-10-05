@@ -75,7 +75,8 @@ def call_fn(model):
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "responseSchema": RESPONSE_SCHEMA
+            "responseSchema": RESPONSE_SCHEMA,
+            "maxOutputTokens": 8000
             # temperature/top_p/top_k intentionally omitted: deprecated on 3.x Flash models
         }
     }
@@ -83,12 +84,44 @@ def call_fn(model):
 
 
 def extract_text_fn(response):
-    data = response.json()
-    if "candidates" in data and data["candidates"]:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    print("No candidates returned by Gemini. Full response:")
-    print(json.dumps(data, indent=2))
-    return None
+    """Defensive on purpose: a 200 response doesn't guarantee a normal
+    candidates[0].content.parts[0].text shape. Gemini can return a
+    candidate with no 'parts' at all when generation is cut off
+    (finishReason: MAX_TOKENS), safety-filtered, or otherwise produces no
+    visible text. Any missing-shape case here must return None rather than
+    raise, so try_generate's fallback to the next model actually runs
+    instead of the whole generation flow crashing on model #1."""
+    try:
+        data = response.json()
+    except ValueError:
+        print("Gemini response was not valid JSON:")
+        print(response.status_code, response.text[:500])
+        return None
+
+    candidates = data.get("candidates")
+    if not candidates:
+        print("No candidates returned by Gemini. Full response:")
+        print(json.dumps(data, indent=2))
+        return None
+
+    candidate = candidates[0]
+    finish_reason = candidate.get("finishReason")
+    parts = candidate.get("content", {}).get("parts")
+
+    if not parts:
+        print(f"Gemini candidate had no usable 'parts' (finishReason: {finish_reason}). "
+              f"Usually means the response was cut off, safety-filtered, or otherwise "
+              f"produced no visible text. Full candidate for diagnosis:")
+        print(json.dumps(candidate, indent=2))
+        return None
+
+    text = parts[0].get("text")
+    if not text:
+        print("Gemini candidate's first part had no 'text' field. Full part for diagnosis:")
+        print(json.dumps(parts[0], indent=2))
+        return None
+
+    return text
 
 
 try:
