@@ -20,7 +20,7 @@ contract MagnumOpusToken is ERC20, Ownable {
     mapping(address => uint256) private _stakedBalances;
     mapping(address => uint256) private _rewards;
 
-    // Event declarations
+    // Events
     event Staked(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount);
     event RewardPaid(address indexed user, uint256 amount);
@@ -42,14 +42,8 @@ contract MagnumOpusToken is ERC20, Ownable {
         _lastUpdateTime = block.timestamp;
     }
 
-    // Modifier to check if contract is paused
-    modifier whenNotPaused() {
-        require(!paused(), "Contract is paused");
-        _;
-    }
-
-    // Function to stake tokens
-    function stake(uint256 amount) external whenNotPaused {
+    // Staking functions
+    function stake(uint256 amount) external {
         require(amount > 0, "Amount must be greater than 0");
         require(balanceOf(msg.sender) >= amount, "Insufficient balance");
 
@@ -60,8 +54,7 @@ contract MagnumOpusToken is ERC20, Ownable {
         emit Staked(msg.sender, amount);
     }
 
-    // Function to withdraw staked tokens
-    function withdraw(uint256 amount) external whenNotPaused {
+    function withdraw(uint256 amount) external {
         require(amount > 0, "Amount must be greater than 0");
         require(_stakedBalances[msg.sender] >= amount, "Insufficient staked balance");
 
@@ -72,127 +65,52 @@ contract MagnumOpusToken is ERC20, Ownable {
         emit Withdrawn(msg.sender, amount);
     }
 
-    // Function to claim rewards
-    function claimRewards() external whenNotPaused {
+    function claimRewards() external {
         _updateRewards(msg.sender);
         uint256 reward = _rewards[msg.sender];
         _rewards[msg.sender] = 0;
 
         if (reward > 0) {
-            _mint(msg.sender, reward);
+            _transfer(address(this), msg.sender, reward);
             emit RewardPaid(msg.sender, reward);
         }
     }
 
-    // Function to update rewards for a user
-    function _updateRewards(address user) private {
-        uint256 currentTime = block.timestamp;
-        uint256 timeElapsed = currentTime.sub(_lastUpdateTime);
-
-        if (timeElapsed > 0) {
-            uint256 reward = _stakedBalances[user].mul(_stakingRewardRate).mul(timeElapsed);
-            _rewards[user] = _rewards[user].add(reward);
-            _lastUpdateTime = currentTime;
-        }
-    }
-
-    // Function to get staked balance of a user
+    // View functions
     function getStakedBalance(address user) external view returns (uint256) {
         return _stakedBalances[user];
     }
 
-    // Function to get pending rewards of a user
     function getPendingRewards(address user) external view returns (uint256) {
-        uint256 currentTime = block.timestamp;
-        uint256 timeElapsed = currentTime.sub(_lastUpdateTime);
+        uint256 stakedBalance = _stakedBalances[user];
+        uint256 timeElapsed = block.timestamp.sub(_lastUpdateTime);
+        return stakedBalance.mul(_stakingRewardRate).mul(timeElapsed).div(1 days);
+    }
 
-        if (timeElapsed > 0) {
-            return _stakedBalances[user].mul(_stakingRewardRate).mul(timeElapsed).add(_rewards[user]);
-        } else {
-            return _rewards[user];
+    // Internal functions
+    function _updateRewards(address user) internal {
+        uint256 stakedBalance = _stakedBalances[user];
+        if (stakedBalance > 0) {
+            uint256 timeElapsed = block.timestamp.sub(_lastUpdateTime);
+            uint256 reward = stakedBalance.mul(_stakingRewardRate).mul(timeElapsed).div(1 days);
+            _rewards[user] = _rewards[user].add(reward);
         }
+        _lastUpdateTime = block.timestamp;
     }
 
-    // Function to get total supply
-    function totalSupply() public view override returns (uint256) {
-        return _totalSupply;
+    // Override transfer function to prevent transfers of staked tokens
+    function transfer(address recipient, uint256 amount) public override returns (bool) {
+        require(_stakedBalances[msg.sender] == 0, "Cannot transfer staked tokens");
+        return super.transfer(recipient, amount);
     }
 
-    // Function to mint tokens
-    function _mint(address account, uint256 amount) internal override {
-        require(account != address(0), "ERC20: mint to the zero address");
+    // Admin functions
+    function setStakingRewardRate(uint256 newRate) external onlyOwner {
+        _stakingRewardRate = newRate;
+    }
 
+    function mintTokens(uint256 amount) external onlyOwner {
+        _mint(msg.sender, amount);
         _totalSupply = _totalSupply.add(amount);
-        super._mint(account, amount);
-    }
-
-    // Function to burn tokens
-    function _burn(address account, uint256 amount) internal override {
-        require(account != address(0), "ERC20: burn from the zero address");
-        require(balanceOf(account) >= amount, "ERC20: burn amount exceeds balance");
-
-        _totalSupply = _totalSupply.sub(amount);
-        super._burn(account, amount);
-    }
-
-    // Function to transfer tokens
-    function _transfer(
-        address sender,
-        address recipient,
-        uint256 amount
-    ) internal override {
-        require(sender != address(0), "ERC20: transfer from the zero address");
-        require(recipient != address(0), "ERC20: transfer to the zero address");
-
-        super._transfer(sender, recipient, amount);
-    }
-
-    // Function to transfer tokens from one address to another
-    function _transferFrom(
-        address sender,
-        address recipient,
-        address spender,
-        uint256 amount
-    ) internal override {
-        require(sender != address(0), "ERC20: transfer from the zero address");
-        require(recipient != address(0), "ERC20: transfer to the zero address");
-
-        super._transferFrom(sender, recipient, spender, amount);
-    }
-
-    // Function to approve tokens for spending
-    function _approve(
-        address owner,
-        address spender,
-        uint256 amount
-    ) internal override {
-        require(owner != address(0), "ERC20: approve from the zero address");
-        require(spender != address(0), "ERC20: approve to the zero address");
-
-        super._approve(owner, spender, amount);
-    }
-
-    // Function to increase allowance
-    function _increaseAllowance(
-        address owner,
-        address spender,
-        uint256 addedValue
-    ) internal override {
-        require(owner != address(0), "ERC20: increase allowance from the zero address");
-        require(spender != address(0), "ERC20: increase allowance to the zero address");
-
-        super._increaseAllowance(owner, spender, addedValue);
-    }
-
-    // Function to decrease allowance
-    function _decreaseAllowance(
-        address owner,
-        address spender,
-        uint256 subtractedValue
-    ) internal override {
-        require(owner != address(0), "ERC20: decrease allowance from the zero address");
-        require(spender != address(0), "ERC20: decrease allowance to the zero address");
-
-        super._decreaseAllowance(owner, spender, subtractedValue);
     }
 }

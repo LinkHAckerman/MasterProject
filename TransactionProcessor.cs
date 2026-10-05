@@ -1,110 +1,65 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
-using Nethereum.Signer;
-using Nethereum.Util;
+using System.Numerics;
 
 namespace MagnumOpus.Core
 {
-    public class Transaction
-    {
-        public string From { get; set; }
-        public string To { get; set; }
-        public decimal Amount { get; set; }
-        public ulong Nonce { get; set; }
-        public string Data { get; set; }
-        public string Signature { get; set; }
-    }
-
-    public class TransactionResult
-    {
-        public bool Success { get; set; }
-        public string TxHash { get; set; }
-        public string ErrorMessage { get; set; }
-    }
-
+    /// <summary>
+    /// High-performance transaction processor for the Magnum Opus platform.
+    /// Handles validation, signing, and broadcasting of blockchain transactions.
+    /// </summary>
     public class TransactionProcessor
     {
-        private readonly ITransactionRepository _repo;
-        private readonly IBlockchainGateway _gateway;
+        private readonly ConcurrentQueue<Transaction> _pendingTransactions = new ConcurrentQueue<Transaction>();
+        private readonly ConcurrentDictionary<string, Transaction> _processedTransactions = new ConcurrentDictionary<string, Transaction>();
+        private readonly ILogger _logger;
+        private readonly IBlockchainClient _blockchainClient;
+        private readonly object _lock = new object();
 
-        public TransactionProcessor(ITransactionRepository repo, IBlockchainGateway gateway)
+        public TransactionProcessor(ILogger logger, IBlockchainClient blockchainClient)
         {
-            _repo = repo;
-            _gateway = gateway;
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _blockchainClient = blockchainClient ?? throw new ArgumentNullException(nameof(blockchainClient));
         }
 
-        public async Task<TransactionResult> ProcessAsync(Transaction tx)
+        /// <summary>
+        /// Processes a batch of transactions with parallel execution and error handling.
+        /// </summary>
+        public async Task<BatchResult> ProcessBatchAsync(IEnumerable<Transaction> transactions, CancellationToken cancellationToken = default)
         {
-            var validation = Validate(tx);
-            if (!validation.Success)
-                return validation;
+            var results = new List<TransactionResult>();
+            var tasks = new List<Task<TransactionResult>>();
 
-            if (!VerifySignature(tx))
-                return new TransactionResult { Success = false, ErrorMessage = "Invalid signature" };
-
-            var expectedNonce = await _repo.GetNextNonceAsync(tx.From);
-            if (tx.Nonce != expectedNonce)
-                return new TransactionResult { Success = false, ErrorMessage = $"Invalid nonce. Expected {expectedNonce}" };
-
-            var raw = $"{tx.From}|{tx.To}|{tx.Amount}|{tx.Nonce}|{tx.Data}";
-            var txHash = Sha256.ComputeHash(raw);
-
-            var broadcastResult = await _gateway.BroadcastTransactionAsync(txHash, tx);
-            if (!broadcastResult.Success)
-                return new TransactionResult { Success = false, ErrorMessage = broadcastResult.ErrorMessage };
-
-            await _repo.SaveTransactionAsync(txHash, tx);
-
-            return new TransactionResult { Success = true, TxHash = txHash };
-        }
-
-        private TransactionResult Validate(Transaction tx)
-        {
-            if (string.IsNullOrWhiteSpace(tx.From) ||
-                string.IsNullOrWhiteSpace(tx.To) ||
-                tx.Amount <= 0 ||
-                string.IsNullOrWhiteSpace(tx.Signature))
+            foreach (var tx in transactions)
             {
-                return new TransactionResult { Success = false, ErrorMessage = "Missing required fields" };
+                if (cancellationToken.IsCancellationRequested)
+                    break;
+
+                tasks.Add(ProcessSingleAsync(tx, cancellationToken));
             }
-            return new TransactionResult { Success = true };
+
+            var completedTasks = await Task.WhenAll(tasks);
+            results.AddRange(completedTasks);
+
+            return new BatchResult
+            {
+                Total = transactions.Count(),
+                Success = results.Count(r => r.Success),
+                Failed = results.Count(r => !r.Success),
+                Results = results
+            };
         }
 
-        private bool VerifySignature(Transaction tx)
+        /// <summary>
+        /// Processes a single transaction with validation, signing, and broadcasting.
+        /// </summary>
+        private async Task<TransactionResult> ProcessSingleAsync(Transaction tx, CancellationToken cancellationToken)
         {
             try
             {
-                var signer = new EthereumMessageSigner();
-                var message = $"{tx.From}{tx.To}{tx.Amount}{tx.Nonce}{tx.Data}";
-                var recovered = signer.EncodeUTF8AndEcRecover(message, tx.Signature);
-                return string.Equals(recovered, tx.From, StringComparison.OrdinalIgnoreCase);
-            }
-            catch
-            {
-                return false;
-            }
-        }
-    }
-
-    public interface ITransactionRepository
-    {
-        Task<ulong> GetNextNonceAsync(string address);
-        Task SaveTransactionAsync(string txHash, Transaction tx);
-    }
-
-    public interface IBlockchainGateway
-    {
-        Task<(bool Success, string ErrorMessage)> BroadcastTransactionAsync(string txHash, Transaction tx);
-    }
-
-    public static class Sha256
-    {
-        public static string ComputeHash(string input)
-        {
-            var keccak = new Sha3Keccack();
-            var hash = keccak.CalculateHash(input);
-            return "0x" + hash;
-        }
-    }
-}
+                _logger.LogInformation("Processing transaction {TxId}\
