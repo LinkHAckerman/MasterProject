@@ -1,146 +1,144 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
-	"sync"
-	"time"
+    "context"
+    "crypto/sha256"
+    "encoding/hex"
+    "encoding/json"
+    "log"
+    "net/http"
+    "os"
+    "os/signal"
+    "strconv"
+    "sync"
+    "syscall"
+    "time"
 
-	"github.com/gin-gonic/gin"
+    "github.com/gorilla/mux"
 )
 
-type Wallet struct {
-	Address  string             `json:"address"`
-	Balances map[string]float64 `json:"balances"`
+type WalletStore struct {
+    mu sync.RWMutex
+    balances map[string]map[string]float64 // address -> currency -> balance
 }
 
-type Transaction struct {
-	From      string  `json:"from"`
-	To        string  `json:"to"`
-	Token     string  `json:"token"`
-	Amount    float64 `json:"amount"`
-	Timestamp int64   `json:"timestamp"`
-	TxHash    string  `json:"txHash"`
+func NewWalletStore() *WalletStore {
+    return &WalletStore{
+        balances: make(map[string]map[string]float64),
+    }
 }
 
-var (
-	wallets = make(map[string]*Wallet)
-	mu      sync.RWMutex
-)
+func (ws *WalletStore) GetBalance(address, currency string) float64 {
+    ws.mu.RLock()
+    defer ws.mu.RUnlock()
+    if curMap, ok := ws.balances[address]; ok {
+        if bal, ok := curMap[currency]; ok {
+            return bal
+        }
+    }
+    return 0
+}
+
+func (ws *WalletStore) AdjustBalance(address, currency string, delta float64) {
+    ws.mu.Lock()
+    defer ws.mu.Unlock()
+    if _, ok := ws.balances[address]; !ok {
+        ws.balances[address] = make(map[string]float64)
+    }
+    ws.balances[address][currency] += delta
+}
+
+type BalanceResponse struct {
+    Address  string  `json:"address"`
+    Currency string  `json:"currency"`
+    Balance  float64 `json:"balance"`
+}
+
+type TxRelayRequest struct {
+    From     string  `json:"from"`
+    To       string  `json:"to"`
+    Currency string  `json:"currency"`
+    Amount   float64 `json:"amount"`
+    Nonce    uint64  `json:"nonce"`
+}
+
+type TxRelayResponse struct {
+    TxHash string `json:"txHash"`
+    Status string `json:"status"`
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]string{"status":"ok"})
+}
+
+func balanceHandler(store *WalletStore) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        vars := mux.Vars(r)
+        address := vars["address"]
+        currency := r.URL.Query().Get("currency")
+        if currency == "" {
+            currency = "ETH"
+        }
+        bal := store.GetBalance(address, currency)
+        resp := BalanceResponse{Address: address, Currency: currency, Balance: bal}
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(resp)
+    }
+}
+
+func txRelayHandler(store *WalletStore) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        var req TxRelayRequest
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+            http.Error(w, "invalid JSON", http.StatusBadRequest)
+            return
+        }
+        if req.From == "" || req.To == "" || req.Amount <= 0 {
+            http.Error(w, "missing fields or non‑positive amount", http.StatusBadRequest)
+            return
+        }
+        if store.GetBalance(req.From, req.Currency) < req.Amount {
+            http.Error(w, "insufficient funds", http.StatusBadRequest)
+            return
+        }
+        store.AdjustBalance(req.From, req.Currency, -req.Amount)
+        store.AdjustBalance(req.To, req.Currency, req.Amount)
+        hashInput := req.From + req.To + req.Currency + strconv.FormatFloat(req.Amount, 'f', 8, 64) + strconv.FormatUint(req.Nonce, 10)
+        h := sha256.Sum256([]byte(hashInput))
+        txHash := "0x" + hex.EncodeToString(h[:])
+        resp := TxRelayResponse{TxHash: txHash, Status: "submitted"}
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(resp)
+    }
+}
 
 func main() {
-	r := gin.New()
-	r.Use(gin.Logger())
-	r.Use(gin.Recovery())
-
-	r.GET("/health", healthHandler)
-	r.POST("/wallet/create", createWalletHandler)
-	r.GET("/wallet/:address", getWalletHandler)
-	r.POST("/wallet/:address/transfer", transferHandler)
-
-	if err := r.Run(":8080"); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
-	}
-}
-
-// healthHandler returns a simple health status.
-func healthHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-}
-
-// createWalletHandler creates a new wallet with a zeroed balance map.
-func createWalletHandler(c *gin.Context) {
-	var req struct {
-		Address string `json:"address"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.Address == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid address"})
-		return
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if _, exists := wallets[req.Address]; exists {
-		c.JSON(http.StatusConflict, gin.H{"error": "wallet already exists"})
-		return
-	}
-
-	wallets[req.Address] = &Wallet{
-		Address:  req.Address,
-		Balances: map[string]float64{},
-	}
-
-	c.JSON(http.StatusCreated, wallets[req.Address])
-}
-
-// getWalletHandler returns the balances of the requested wallet.
-func getWalletHandler(c *gin.Context) {
-	address := c.Param("address")
-	mu.RLock()
-	wallet, exists := wallets[address]
-	mu.RUnlock()
-	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "wallet not found"})
-		return
-	}
-	c.JSON(http.StatusOK, wallet)
-}
-
-// transferHandler moves tokens from one wallet to another and returns a transaction receipt.
-func transferHandler(c *gin.Context) {
-	fromAddr := c.Param("address")
-	var req struct {
-		To     string  `json:"to"`
-		Token  string  `json:"token"`
-		Amount float64 `json:"amount"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.To == "" || req.Token == "" || req.Amount <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
-		return
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	fromWallet, ok := wallets[fromAddr]
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "source wallet not found"})
-		return
-	}
-	toWallet, ok := wallets[req.To]
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "destination wallet not found"})
-		return
-	}
-
-	if fromWallet.Balances[req.Token] < req.Amount {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient balance"})
-		return
-	}
-
-	// Perform transfer
-	fromWallet.Balances[req.Token] -= req.Amount
-	toWallet.Balances[req.Token] += req.Amount
-
-	// Build transaction receipt
-	tx := Transaction{
-		From:      fromAddr,
-		To:        req.To,
-		Token:     req.Token,
-		Amount:    req.Amount,
-		Timestamp: time.Now().Unix(),
-	}
-	tx.TxHash = computeTxHash(tx)
-
-	c.JSON(http.StatusOK, tx)
-}
-
-// computeTxHash creates a deterministic hash for a transaction.
-func computeTxHash(tx Transaction) string {
-	data := tx.From + tx.To + tx.Token + fmt.Sprintf("%f", tx.Amount) + fmt.Sprintf("%d", tx.Timestamp)
-	hash := sha256.Sum256([]byte(data))
-	return "0x" + hex.EncodeToString(hash[:])
+    port := os.Getenv("PORT")
+    if port == "" {
+        port = "8080"
+    }
+    store := NewWalletStore()
+    store.AdjustBalance("0xDEMOADDRESS", "ETH", 100.0)
+    r := mux.NewRouter()
+    r.HandleFunc("/health", healthHandler).Methods("GET")
+    r.HandleFunc("/wallet/{address}/balance", balanceHandler(store)).Methods("GET")
+    r.HandleFunc("/tx/relay", txRelayHandler(store)).Methods("POST")
+    srv := &http.Server{Addr: ":" + port, Handler: r}
+    go func() {
+        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            log.Fatalf("listen: %s\n", err)
+        }
+    }()
+    log.Printf("Server running on port %s", port)
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+    log.Println("Shutting down server...")
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    if err := srv.Shutdown(ctx); err != nil {
+        log.Fatalf("Server forced to shutdown: %v", err)
+    }
+    log.Println("Server exiting")
 }
