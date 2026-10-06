@@ -12,6 +12,14 @@ if not API_KEY:
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.6-flash"]
 
+# Models Google's own ListModels catalog still returns as supporting
+# generateContent, but that are actually retired in practice (confirmed by
+# a live 404 "no longer available to new users" response). The catalog
+# metadata and real availability have drifted apart here, so this is a
+# manual client-side patch rather than something the dynamic listing alone
+# can catch.
+KNOWN_RETIRED_MODELS = {"gemini-2.5-flash"}
+
 RESPONSE_SCHEMA = {
     "type": "OBJECT",
     "properties": {
@@ -37,6 +45,8 @@ def get_ranked_flash_models(api_key):
         if "flash" not in short_name:
             continue
         if any(x in short_name for x in ["lite", "image", "tts", "preview"]):
+            continue
+        if short_name in KNOWN_RETIRED_MODELS:
             continue
         match = re.match(r"gemini-(\d+)\.(\d+)-flash$", short_name)
         if not match:
@@ -76,7 +86,15 @@ def call_fn(model):
         "generationConfig": {
             "responseMimeType": "application/json",
             "responseSchema": RESPONSE_SCHEMA,
-            "maxOutputTokens": 8000
+            "maxOutputTokens": 16000,
+            # Gemini 3.x models think by default, and thinking tokens are
+            # drawn from the SAME maxOutputTokens budget as the visible
+            # answer - "minimal" leaves nearly all of that budget for the
+            # actual file content instead of silently eating it, which is
+            # what was causing repeated truncated/unterminated JSON output.
+            "thinkingConfig": {
+                "thinkingLevel": "minimal"
+            }
             # temperature/top_p/top_k intentionally omitted: deprecated on 3.x Flash models
         }
     }
