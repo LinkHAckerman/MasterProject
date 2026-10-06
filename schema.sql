@@ -1,173 +1,173 @@
--- Magnum Opus Database Schema
--- Comprehensive relational model for users, wallets, tokens, transactions, and DeFi data
+-- MAGNUM OPUS // Web3 & DeFi Nexus Engine - Core Database Schema
+-- Optimized for high-performance blockchain data storage and retrieval
 
--- Enable UUID generation (PostgreSQL specific)
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
--- =============================================================
--- USERS
--- =============================================================
+-- Users table with enhanced security and multi-chain support
 CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    email VARCHAR(255) NOT NULL UNIQUE,
+    user_id SERIAL PRIMARY KEY,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+    salt VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    is_verified BOOLEAN DEFAULT FALSE,
+    verification_token VARCHAR(255),
+    reset_token VARCHAR(255),
+    reset_token_expires_at TIMESTAMP WITH TIME ZONE,
+    profile_picture_url VARCHAR(255),
+    bio TEXT,
+    last_login_at TIMESTAMP WITH TIME ZONE,
+    failed_login_attempts INTEGER DEFAULT 0,
+    is_locked BOOLEAN DEFAULT FALSE,
+    lock_until TIMESTAMP WITH TIME ZONE,
+    two_factor_enabled BOOLEAN DEFAULT FALSE,
+    two_factor_secret VARCHAR(255),
+    recovery_codes TEXT[],
+    CONSTRAINT valid_email CHECK (email ~* '^[A-Za-z0-9._%-]+@[A-Za-z0-9.-]+[.][A-Za-z]+$')
 );
 
--- =============================================================
--- WALLETS
--- =============================================================
+-- Wallets table with multi-chain and hardware wallet support
 CREATE TABLE wallets (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    address VARCHAR(42) NOT NULL UNIQUE, -- 0x-prefixed Ethereum address
-    network VARCHAR(32) NOT NULL,        -- e.g., "Ethereum", "Polygon"
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+    wallet_id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    wallet_address VARCHAR(42) UNIQUE NOT NULL,
+    wallet_type VARCHAR(20) NOT NULL CHECK (wallet_type IN ('software', 'hardware', 'paper')),
+    chain_id VARCHAR(10) NOT NULL,
+    network_name VARCHAR(50) NOT NULL,
+    is_default BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    CONSTRAINT valid_wallet_address CHECK (wallet_address ~* '^0x[a-fA-F0-9]{40}$')
 );
 
--- Many‑to‑many relationship between users and wallets
-CREATE TABLE user_wallets (
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    wallet_id UUID NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
-    PRIMARY KEY (user_id, wallet_id),
-    added_at TIMESTAMP WITH TIME ZONE DEFAULT now()
-);
-
--- =============================================================
--- TOKENS
--- =============================================================
+-- Tokens table for tracking user's tokens across multiple chains
 CREATE TABLE tokens (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    symbol VARCHAR(10) NOT NULL,
-    name VARCHAR(64) NOT NULL,
-    decimals SMALLINT NOT NULL CHECK (decimals >= 0),
-    contract_address VARCHAR(42) NOT NULL,
-    network VARCHAR(32) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
-    UNIQUE (contract_address, network)
+    token_id SERIAL PRIMARY KEY,
+    wallet_id INTEGER NOT NULL,
+    token_address VARCHAR(42) NOT NULL,
+    token_symbol VARCHAR(10) NOT NULL,
+    token_name VARCHAR(50) NOT NULL,
+    token_decimals INTEGER NOT NULL,
+    token_balance DECIMAL(38, 18) NOT NULL DEFAULT 0,
+    is_native BOOLEAN DEFAULT FALSE,
+    chain_id VARCHAR(10) NOT NULL,
+    network_name VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+    CONSTRAINT valid_token_address CHECK (token_address ~* '^0x[a-fA-F0-9]{40}$')
 );
 
--- Token balances per wallet
-CREATE TABLE balances (
-    wallet_id UUID NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
-    token_id UUID NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
-    balance NUMERIC(78,0) NOT NULL DEFAULT 0,
-    PRIMARY KEY (wallet_id, token_id),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
-);
-
--- =============================================================
--- TRANSACTIONS
--- =============================================================
+-- Transactions table with enhanced indexing for performance
 CREATE TABLE transactions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tx_hash VARCHAR(66) NOT NULL UNIQUE, -- 0x-prefixed hash (32 bytes)
-    from_wallet UUID REFERENCES wallets(id) ON DELETE SET NULL,
-    to_wallet UUID REFERENCES wallets(id) ON DELETE SET NULL,
-    token_id UUID REFERENCES tokens(id) ON DELETE SET NULL,
-    amount NUMERIC(78,0) NOT NULL,
-    gas_price NUMERIC(78,0),
-    gas_used NUMERIC(78,0),
-    block_number BIGINT,
-    status VARCHAR(20) NOT NULL CHECK (status IN ('pending','confirmed','failed')),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
-    indexed_at TIMESTAMP WITH TIME ZONE
+    transaction_id SERIAL PRIMARY KEY,
+    wallet_id INTEGER NOT NULL,
+    transaction_hash VARCHAR(66) UNIQUE NOT NULL,
+    from_address VARCHAR(42) NOT NULL,
+    to_address VARCHAR(42) NOT NULL,
+    value DECIMAL(38, 18) NOT NULL,
+    gas_price DECIMAL(38, 18) NOT NULL,
+    gas_used INTEGER NOT NULL,
+    gas_limit INTEGER NOT NULL,
+    nonce INTEGER NOT NULL,
+    transaction_index INTEGER NOT NULL,
+    block_number INTEGER NOT NULL,
+    block_hash VARCHAR(66) NOT NULL,
+    transaction_type VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL CHECK (status IN ('pending', 'confirmed', 'failed')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+    CONSTRAINT valid_transaction_hash CHECK (transaction_hash ~* '^0x[a-fA-F0-9]{64}$'),
+    CONSTRAINT valid_from_address CHECK (from_address ~* '^0x[a-fA-F0-9]{40}$'),
+    CONSTRAINT valid_to_address CHECK (to_address ~* '^0x[a-fA-F0-9]{40}$')
 );
 
-CREATE INDEX idx_transactions_hash ON transactions(tx_hash);
-CREATE INDEX idx_transactions_created ON transactions(created_at);
-
--- Transaction events (e.g., logs, smart‑contract events)
-CREATE TABLE transaction_events (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    transaction_id UUID NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
-    event_type VARCHAR(30) NOT NULL,
-    data JSONB NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+-- Transaction logs for detailed transaction history
+CREATE TABLE transaction_logs (
+    log_id SERIAL PRIMARY KEY,
+    transaction_id INTEGER NOT NULL,
+    log_index INTEGER NOT NULL,
+    address VARCHAR(42) NOT NULL,
+    topics TEXT[] NOT NULL,
+    data BYTEA NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+    CONSTRAINT valid_address CHECK (address ~* '^0x[a-fA-F0-9]{40}$')
 );
 
--- =============================================================
--- ORDER BOOK (limit order aggregation)
--- =============================================================
-CREATE TABLE order_book (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    pair VARCHAR(20) NOT NULL,               -- e.g., "ETH/USDT"
-    side VARCHAR(4) NOT NULL CHECK (side IN ('bid','ask')),
-    price NUMERIC(38,18) NOT NULL,
-    amount NUMERIC(38,18) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+-- Smart contracts table for tracking deployed contracts
+CREATE TABLE smart_contracts (
+    contract_id SERIAL PRIMARY KEY,
+    wallet_id INTEGER NOT NULL,
+    contract_address VARCHAR(42) UNIQUE NOT NULL,
+    contract_name VARCHAR(50) NOT NULL,
+    contract_abi JSONB NOT NULL,
+    bytecode BYTEA NOT NULL,
+    deployed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    chain_id VARCHAR(10) NOT NULL,
+    network_name VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+    CONSTRAINT valid_contract_address CHECK (contract_address ~* '^0x[a-fA-F0-9]{40}$')
 );
 
-CREATE INDEX idx_orderbook_pair_side_price ON order_book(pair, side, price DESC);
-
--- =============================================================
--- NOTIFICATIONS
--- =============================================================
-CREATE TABLE notifications (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    type VARCHAR(30) NOT NULL,
-    message TEXT NOT NULL,
-    is_read BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+-- Smart contract events table for tracking contract events
+CREATE TABLE smart_contract_events (
+    event_id SERIAL PRIMARY KEY,
+    contract_id INTEGER NOT NULL,
+    transaction_id INTEGER NOT NULL,
+    event_name VARCHAR(50) NOT NULL,
+    event_data JSONB NOT NULL,
+    block_number INTEGER NOT NULL,
+    log_index INTEGER NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (contract_id) REFERENCES smart_contracts(contract_id) ON DELETE CASCADE,
+    FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_notifications_user ON notifications(user_id, is_read);
+-- Indexes for performance optimization
+CREATE INDEX idx_wallets_user_id ON wallets(user_id);
+CREATE INDEX idx_tokens_wallet_id ON tokens(wallet_id);
+CREATE INDEX idx_transactions_wallet_id ON transactions(wallet_id);
+CREATE INDEX idx_transactions_block_number ON transactions(block_number);
+CREATE INDEX idx_transaction_logs_transaction_id ON transaction_logs(transaction_id);
+CREATE INDEX idx_smart_contracts_wallet_id ON smart_contracts(wallet_id);
+CREATE INDEX idx_smart_contract_events_contract_id ON smart_contract_events(contract_id);
+CREATE INDEX idx_smart_contract_events_transaction_id ON smart_contract_events(transaction_id);
 
--- =============================================================
--- USER SETTINGS
--- =============================================================
-CREATE TABLE settings (
-    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    theme VARCHAR(10) NOT NULL DEFAULT 'dark',
-    currency VARCHAR(5) NOT NULL DEFAULT 'USD',
-    language VARCHAR(5) NOT NULL DEFAULT 'en',
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
-);
-
--- =============================================================
--- TRIGGERS & FUNCTIONS (optional helpers)
--- =============================================================
--- Auto‑update `updated_at` on row modification for `users`
-CREATE OR REPLACE FUNCTION trigger_set_timestamp()
+-- Triggers for automatic timestamp updates
+CREATE OR REPLACE FUNCTION update_timestamp()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = now();
+    NEW.updated_at = CURRENT_TIMESTAMP;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_users_updated
+CREATE TRIGGER update_user_timestamp
 BEFORE UPDATE ON users
-FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
+FOR EACH ROW
+EXECUTE FUNCTION update_timestamp();
 
--- Auto‑update `balances.updated_at` on balance change
-CREATE TRIGGER trg_balances_updated
-BEFORE UPDATE ON balances
-FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
+CREATE TRIGGER update_wallet_timestamp
+BEFORE UPDATE ON wallets
+FOR EACH ROW
+EXECUTE FUNCTION update_timestamp();
 
--- Auto‑update `settings.updated_at` on settings change
-CREATE TRIGGER trg_settings_updated
-BEFORE UPDATE ON settings
-FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
+CREATE TRIGGER update_token_timestamp
+BEFORE UPDATE ON tokens
+FOR EACH ROW
+EXECUTE FUNCTION update_timestamp();
 
--- =============================================================
--- VIEW: USER PORTFOLIO SUMMARY
--- =============================================================
-CREATE OR REPLACE VIEW user_portfolio AS
-SELECT
-    u.id AS user_id,
-    w.id AS wallet_id,
-    t.symbol,
-    t.name,
-    b.balance,
-    t.decimals,
-    (b.balance / POWER(10, t.decimals))::NUMERIC(38,18) AS token_amount,
-    -- price placeholder – to be joined with a price feed view/table
-    0::NUMERIC(38,18) AS token_price_usd,
-    (b.balance / POWER(10, t.decimals)) * 0::NUMERIC(38,18) AS token_value_usd
-FROM users u
-JOIN user_wallets uw ON uw.user_id = u.id
-JOIN wallets w ON w.id = uw.wallet_id
-JOIN balances b ON b.wallet_id = w.id
-JOIN tokens t ON t.id = b.token_id;
+CREATE TRIGGER update_transaction_timestamp
+BEFORE UPDATE ON transactions
+FOR EACH ROW
+EXECUTE FUNCTION update_timestamp();
+
+CREATE TRIGGER update_smart_contract_timestamp
+BEFORE UPDATE ON smart_contracts
+FOR EACH ROW
+EXECUTE FUNCTION update_timestamp();
