@@ -1,144 +1,162 @@
 package main
 
 import (
-    "context"
-    "crypto/sha256"
-    "encoding/hex"
-    "encoding/json"
-    "log"
-    "net/http"
-    "os"
-    "os/signal"
-    "strconv"
-    "sync"
-    "syscall"
-    "time"
+	"encoding/json"
+	"log"
+	"math/rand"
+	"net/http"
+	"sync"
+	"time"
 
-    "github.com/gorilla/mux"
+	"github.com/google/uuid"
 )
 
-type WalletStore struct {
-    mu sync.RWMutex
-    balances map[string]map[string]float64 // address -> currency -> balance
+// Transaction represents a simplified blockchain transaction.
+type Transaction struct {
+	ID        string    `json:"id"`
+	From      string    `json:"from"`
+	To        string    `json:"to"`
+	Amount    float64   `json:"amount"`
+	ChainID   string    `json:"chainId"`
+	Status    string    `json:"status"` // pending, confirmed, failed
+	Timestamp time.Time `json:"timestamp"`
 }
 
-func NewWalletStore() *WalletStore {
-    return &WalletStore{
-        balances: make(map[string]map[string]float64),
-    }
+// TransactionRequest is the payload accepted from clients.
+type TransactionRequest struct {
+	From    string  `json:"from"`
+	To      string  `json:"to"`
+	Amount  float64 `json:"amount"`
+	ChainID string  `json:"chainId"`
 }
 
-func (ws *WalletStore) GetBalance(address, currency string) float64 {
-    ws.mu.RLock()
-    defer ws.mu.RUnlock()
-    if curMap, ok := ws.balances[address]; ok {
-        if bal, ok := curMap[currency]; ok {
-            return bal
-        }
-    }
-    return 0
+// TransactionResponse is returned after a transaction is accepted.
+type TransactionResponse struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
 }
 
-func (ws *WalletStore) AdjustBalance(address, currency string, delta float64) {
-    ws.mu.Lock()
-    defer ws.mu.Unlock()
-    if _, ok := ws.balances[address]; !ok {
-        ws.balances[address] = make(map[string]float64)
-    }
-    ws.balances[address][currency] += delta
+// Server holds in‑memory transaction state.
+type Server struct {
+	mu  sync.RWMutex
+	txs map[string]*Transaction
 }
 
-type BalanceResponse struct {
-    Address  string  `json:"address"`
-    Currency string  `json:"currency"`
-    Balance  float64 `json:"balance"`
+func NewServer() *Server {
+	return &Server{txs: make(map[string]*Transaction)}
 }
 
-type TxRelayRequest struct {
-    From     string  `json:"from"`
-    To       string  `json:"to"`
-    Currency string  `json:"currency"`
-    Amount   float64 `json:"amount"`
-    Nonce    uint64  `json:"nonce"`
+// validateAddress performs a very light check on an address string.
+func validateAddress(addr string) bool {
+	// Simple regex: 0x followed by 40 hex chars.
+	const pattern = `^0x[0-9a-fA-F]{40}$`
+	matched, _ := regexp.MatchString(pattern, addr)
+	return matched
 }
 
-type TxRelayResponse struct {
-    TxHash string `json:"txHash"`
-    Status string `json:"status"`
+func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req TransactionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json payload", http.StatusBadRequest)
+		return
+	}
+
+	// Basic validation
+	if !validateAddress(req.From) || !validateAddress(req.To) {
+		http.Error(w, "invalid address format", http.StatusBadRequest)
+		return
+	}
+	if req.Amount <= 0 {
+		http.Error(w, "amount must be positive", http.StatusBadRequest)
+		return
+	}
+	if req.ChainID == "" {
+		http.Error(w, "chainId required", http.StatusBadRequest)
+		return
+	}
+
+	tx := &Transaction{
+		ID:        uuid.NewString(),
+		From:      req.From,
+		To:        req.To,
+		Amount:    req.Amount,
+		ChainID:   req.ChainID,
+		Status:    "pending",
+		Timestamp: time.Now().UTC(),
+	}
+
+	// Store transaction
+	s.mu.Lock()
+	s.txs[tx.ID] = tx
+	s.mu.Unlock()
+
+	// Simulate async processing
+	go s.processTransaction(tx.ID)
+
+	resp := TransactionResponse{ID: tx.ID, Status: tx.Status}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(map[string]string{"status":"ok"})
+func (s *Server) processTransaction(id string) {
+	// Random processing time between 1‑3 seconds
+	delay := time.Duration(1+rand.Intn(3)) * time.Second
+	time.Sleep(delay)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tx, ok := s.txs[id]; ok {
+		// In a real implementation we would verify signatures, nonce, etc.
+		// Here we simply mark as confirmed.
+		tx.Status = "confirmed"
+	}
 }
 
-func balanceHandler(store *WalletStore) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        vars := mux.Vars(r)
-        address := vars["address"]
-        currency := r.URL.Query().Get("currency")
-        if currency == "" {
-            currency = "ETH"
-        }
-        bal := store.GetBalance(address, currency)
-        resp := BalanceResponse{Address: address, Currency: currency, Balance: bal}
-        w.Header().Set("Content-Type", "application/json")
-        json.NewEncoder(w).Encode(resp)
-    }
+func (s *Server) handleGetTx(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Path[len("/tx/"):]
+	if id == "" {
+		http.Error(w, "transaction id required", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.RLock()
+	tx, ok := s.txs[id]
+	s.mu.RUnlock()
+	if !ok {
+		http.Error(w, "transaction not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tx)
 }
 
-func txRelayHandler(store *WalletStore) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        var req TxRelayRequest
-        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-            http.Error(w, "invalid JSON", http.StatusBadRequest)
-            return
-        }
-        if req.From == "" || req.To == "" || req.Amount <= 0 {
-            http.Error(w, "missing fields or non‑positive amount", http.StatusBadRequest)
-            return
-        }
-        if store.GetBalance(req.From, req.Currency) < req.Amount {
-            http.Error(w, "insufficient funds", http.StatusBadRequest)
-            return
-        }
-        store.AdjustBalance(req.From, req.Currency, -req.Amount)
-        store.AdjustBalance(req.To, req.Currency, req.Amount)
-        hashInput := req.From + req.To + req.Currency + strconv.FormatFloat(req.Amount, 'f', 8, 64) + strconv.FormatUint(req.Nonce, 10)
-        h := sha256.Sum256([]byte(hashInput))
-        txHash := "0x" + hex.EncodeToString(h[:])
-        resp := TxRelayResponse{TxHash: txHash, Status: "submitted"}
-        w.Header().Set("Content-Type", "application/json")
-        json.NewEncoder(w).Encode(resp)
-    }
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
 
 func main() {
-    port := os.Getenv("PORT")
-    if port == "" {
-        port = "8080"
-    }
-    store := NewWalletStore()
-    store.AdjustBalance("0xDEMOADDRESS", "ETH", 100.0)
-    r := mux.NewRouter()
-    r.HandleFunc("/health", healthHandler).Methods("GET")
-    r.HandleFunc("/wallet/{address}/balance", balanceHandler(store)).Methods("GET")
-    r.HandleFunc("/tx/relay", txRelayHandler(store)).Methods("POST")
-    srv := &http.Server{Addr: ":" + port, Handler: r}
-    go func() {
-        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-            log.Fatalf("listen: %s\n", err)
-        }
-    }()
-    log.Printf("Server running on port %s", port)
-    quit := make(chan os.Signal, 1)
-    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-    <-quit
-    log.Println("Shutting down server...")
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
-    if err := srv.Shutdown(ctx); err != nil {
-        log.Fatalf("Server forced to shutdown: %v", err)
-    }
-    log.Println("Server exiting")
+	rand.Seed(time.Now().UnixNano())
+	server := NewServer()
+
+	http.HandleFunc("/relay", server.handleRelay)
+	http.HandleFunc("/tx/", server.handleGetTx) // expects /tx/{id}
+	http.HandleFunc("/health", server.handleHealth)
+
+	addr := ":8080"
+	log.Printf("Magnum Opus transaction relay listening on %s", addr)
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		log.Fatalf("server failed: %v", err)
+	}
 }

@@ -1,1 +1,1 @@
-{"modified_files": ["TransactionProcessor.cs", "SmartContract.sol", "OnChainProgram.rs", "server.go"]}
+{"modified_files": ["SmartContract.sol", "server.go", "TransactionProcessor.cs", "schema.sql"]}
