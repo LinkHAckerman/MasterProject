@@ -1,70 +1,77 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
-/**
- * @title MagnumToken
- * @dev ERC20 token with permit, pausable, role based access control and upgradeability.
- */
-contract MagnumToken is Initializable, ERC20Upgradeable, ERC20PermitUpgradeable, AccessControlUpgradeable, PausableUpgradeable, UUPSUpgradeable {
-    // Roles
-    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-    bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
+contract MagnumOpusToken is ERC20, Ownable {
+    using SafeMath for uint256;
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() initializer {}
+    uint256 private constant INITIAL_SUPPLY = 1_000_000_000 * 10**18;
+    uint256 private constant MAX_SUPPLY = 10_000_000_000 * 10**18;
+    uint256 private constant TOKEN_DECIMALS = 18;
 
-    function initialize(string memory name_, string memory symbol_, uint256 initialSupply, address admin) public initializer {
-        __ERC20_init(name_, symbol_);
-        __ERC20Permit_init(name_);
-        __AccessControl_init();
-        __Pausable_init();
-        __UUPSUpgradeable_init();
+    address public stakingContract;
+    address public liquidityPool;
 
-        // Grant admin role to provided address
-        _setupRole(DEFAULT_ADMIN_ROLE, admin);
-        _setupRole(MINTER_ROLE, admin);
-        _setupRole(PAUSER_ROLE, admin);
-        _setupRole(UPGRADER_ROLE, admin);
+    event TokenStaked(address indexed user, uint256 amount);
+    event TokenUnstaked(address indexed user, uint256 amount);
+    event LiquidityAdded(address indexed user, uint256 amount);
+    event LiquidityRemoved(address indexed user, uint256 amount);
 
-        // Mint initial supply to admin
-        _mint(admin, initialSupply);
+    constructor() ERC20("MagnumOpusToken", "MOT") {
+        _mint(msg.sender, INITIAL_SUPPLY);
     }
 
-    // ---------- ERC20 overrides ----------
-    function _beforeTokenTransfer(address from, address to, uint256 amount) internal override whenNotPaused {
-        super._beforeTokenTransfer(from, to, amount);
+    modifier onlyStakingContract() {
+        require(msg.sender == stakingContract, "Only staking contract can call this function");
+        _;
     }
 
-    // ---------- Access control ----------
-    function mint(address to, uint256 amount) external onlyRole(MINTER_ROLE) {
+    modifier onlyLiquidityPool() {
+        require(msg.sender == liquidityPool, "Only liquidity pool can call this function");
+        _;
+    }
+
+    function setStakingContract(address _stakingContract) external onlyOwner {
+        stakingContract = _stakingContract;
+    }
+
+    function setLiquidityPool(address _liquidityPool) external onlyOwner {
+        liquidityPool = _liquidityPool;
+    }
+
+    function stake(uint256 amount) external onlyStakingContract {
+        _burn(msg.sender, amount);
+        emit TokenStaked(msg.sender, amount);
+    }
+
+    function unstake(uint256 amount) external onlyStakingContract {
+        _mint(msg.sender, amount);
+        emit TokenUnstaked(msg.sender, amount);
+    }
+
+    function addLiquidity(uint256 amount) external onlyLiquidityPool {
+        _burn(msg.sender, amount);
+        emit LiquidityAdded(msg.sender, amount);
+    }
+
+    function removeLiquidity(uint256 amount) external onlyLiquidityPool {
+        _mint(msg.sender, amount);
+        emit LiquidityRemoved(msg.sender, amount);
+    }
+
+    function mint(address to, uint256 amount) external onlyOwner {
+        require(totalSupply().add(amount) <= MAX_SUPPLY, "Exceeds maximum supply");
         _mint(to, amount);
     }
 
-    function pause() external onlyRole(PAUSER_ROLE) {
-        _pause();
+    function burn(address from, uint256 amount) external onlyOwner {
+        _burn(from, amount);
     }
 
-    function unpause() external onlyRole(PAUSER_ROLE) {
-        _unpause();
-    }
-
-    // ---------- Upgradeability ----------
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {}
-
-    // ---------- Helper functions ----------
-    /**
-     * @dev Returns the number of decimals used.
-     * Overridden to keep compatibility with ERC20Upgradeable default (18).
-     */
-    function decimals() public view virtual override returns (uint8) {
-        return 18;
+    function decimals() public pure override returns (uint8) {
+        return TOKEN_DECIMALS;
     }
 }

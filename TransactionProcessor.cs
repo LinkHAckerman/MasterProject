@@ -1,77 +1,101 @@
 using System;
 using System.Collections.Generic;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
+using System.Numerics;
+using System.Security.Cryptography;
+using System.Text.Json;
 
-namespace MagnumOpus.Backend
+namespace MagnumOpus
 {
-    public record Transaction(string Id, string From, string To, decimal Amount, string Token, DateTime Timestamp);
-
-    public interface ITransactionRepository
+    public class Transaction
     {
-        Task AddAsync(Transaction tx);
-        Task<IReadOnlyCollection<Transaction>> GetRecentAsync(int count);
+        public string TxId { get; set; }
+        public string FromAddress { get; set; }
+        public string ToAddress { get; set; }
+        public BigInteger Amount { get; set; }
+        public byte[] Signature { get; set; }
+        public DateTime Timestamp { get; set; }
     }
 
-    public interface IBlockchainGateway
+    public class Ledger
     {
-        Task<string> BroadcastAsync(Transaction tx);
-        Task<bool> VerifyAsync(string txHash);
+        private readonly Dictionary<string, BigInteger> _balances = new();
+
+        public BigInteger GetBalance(string address) => _balances.TryGetValue(address, out var bal) ? bal : BigInteger.Zero;
+
+        public void Credit(string address, BigInteger amount)
+        {
+            if (!_balances.ContainsKey(address))
+                _balances[address] = BigInteger.Zero;
+            _balances[address] += amount;
+        }
+
+        public void Debit(string address, BigInteger amount)
+        {
+            if (!_balances.ContainsKey(address))
+                throw new InvalidOperationException($"Insufficient funds for {address}");
+            if (_balances[address] < amount)
+                throw new InvalidOperationException($"Insufficient funds for {address}");
+            _balances[address] -= amount;
+        }
     }
 
     public class TransactionProcessor
     {
-        private readonly ITransactionRepository _repo;
-        private readonly IBlockchainGateway _gateway;
-        private readonly ILogger<TransactionProcessor> _logger;
+        private readonly Ledger _ledger;
+        private readonly Dictionary<string, ECDsa> _publicKeys = new();
 
-        public TransactionProcessor(ITransactionRepository repo, IBlockchainGateway gateway, ILogger<TransactionProcessor> logger)
+        public TransactionProcessor(Ledger ledger)
         {
-            _repo = repo ?? throw new ArgumentNullException(nameof(repo));
-            _gateway = gateway ?? throw new ArgumentNullException(nameof(gateway));
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _ledger = ledger;
         }
 
-        public async Task<string> ProcessAsync(Transaction tx)
+        public void RegisterPublicKey(string address, ECDsa publicKey)
         {
-            if (tx == null) throw new ArgumentNullException(nameof(tx));
-            Validate(tx);
+            _publicKeys[address] = publicKey;
+        }
 
-            _logger.LogInformation("Processing transaction {TxId} from {From} to {To} amount {Amount} {Token}", tx.Id, tx.From, tx.To, tx.Amount, tx.Token);
+        public bool ProcessTransaction(Transaction tx)
+        {
+            if (!VerifySignature(tx))
+                return false;
 
-            // Persist locally first
-            await _repo.AddAsync(tx);
-
-            // Broadcast to blockchain
-            var txHash = await _gateway.BroadcastAsync(tx);
-            _logger.LogInformation("Broadcasted transaction {TxId} with hash {Hash}", tx.Id, txHash);
-
-            // Verify inclusion (simple retry)
-            const int maxAttempts = 3;
-            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            try
             {
-                var verified = await _gateway.VerifyAsync(txHash);
-                if (verified)
-                {
-                    _logger.LogInformation("Transaction {TxId} verified on attempt {Attempt}", tx.Id, attempt);
-                    return txHash;
-                }
-
-                _logger.LogWarning("Verification failed for {TxId} attempt {Attempt}", tx.Id, attempt);
-                await Task.Delay(TimeSpan.FromSeconds(2));
+                _ledger.Debit(tx.FromAddress, tx.Amount);
+                _ledger.Credit(tx.ToAddress, tx.Amount);
+                LogTransaction(tx);
+                return true;
             }
-
-            _logger.LogError("Transaction {TxId} could not be verified after {MaxAttempts} attempts", tx.Id, maxAttempts);
-            throw new InvalidOperationException($"Transaction {tx.Id} verification failed.");
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Transaction {tx.TxId} failed: {ex.Message}");
+                return false;
+            }
         }
 
-        private static void Validate(Transaction tx)
+        private bool VerifySignature(Transaction tx)
         {
-            if (string.IsNullOrWhiteSpace(tx.Id)) throw new ArgumentException("Transaction Id is required.");
-            if (string.IsNullOrWhiteSpace(tx.From)) throw new ArgumentException("Sender address is required.");
-            if (string.IsNullOrWhiteSpace(tx.To)) throw new ArgumentException("Recipient address is required.");
-            if (tx.Amount <= 0) throw new ArgumentException("Amount must be positive.");
-            if (string.IsNullOrWhiteSpace(tx.Token)) throw new ArgumentException("Token symbol is required.");
+            if (!_publicKeys.TryGetValue(tx.FromAddress, out var pubKey))
+                return false;
+
+            var data = $"{tx.TxId}{tx.FromAddress}{tx.ToAddress}{tx.Amount}{tx.Timestamp:O}";
+            var hash = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(data));
+            return pubKey.VerifyHash(hash, tx.Signature);
+        }
+
+        private void LogTransaction(Transaction tx)
+        {
+            var log = new
+            {
+                tx.TxId,
+                tx.FromAddress,
+                tx.ToAddress,
+                Amount = tx.Amount.ToString(),
+                Timestamp = tx.Timestamp,
+                Status = "Success"
+            };
+            var json = JsonSerializer.Serialize(log);
+            Console.WriteLine(json);
         }
     }
 }
