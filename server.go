@@ -1,152 +1,211 @@
 package main
 
 import (
-	"context"
-	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
-	"os"
-	"os/signal"
+	"sync"
 	"time"
-
-	"github.com/dgrijalva/jwt-go"
-	"github.com/gin-gonic/gin"
+	"github.com/gorilla/mux"
 )
 
-// JWT secret (in production use env vars or secret manager)
-var jwtSecret = []byte("SuperSecretKey123!")
+// Wallet represents a blockchain wallet
+// with its associated metadata
+// and transaction history
 
-// Simple in‑memory mock wallet store
-type walletInfo struct {
-	Address string  `json:"address"`
+type Wallet struct {
+	Address     string    `json:"address"`
+	Balance     float64   `json:"balance"`
+	ChainID     string    `json:"chainId"`
+	NetworkName string    `json:"networkName"`
+	Tokens      []Token   `json:"tokens"`
+	TxHistory   []Tx      `json:"txHistory"`
+}
+
+// Token represents a cryptocurrency token
+// with its associated metadata
+
+type Token struct {
+	Symbol  string  `json:"symbol"`
+	Name    string  `json:"name"`
 	Balance float64 `json:"balance"`
+	Price   float64 `json:"price"`
 }
 
-var mockWallets = map[string]walletInfo{
-	"0x1111111111111111111111111111111111111111": {Address: "0x1111111111111111111111111111111111111111", Balance: 12.34},
-	"0x2222222222222222222222222222222222222222": {Address: "0x2222222222222222222222222222222222222222", Balance: 56.78},
+// Tx represents a blockchain transaction
+// with its associated metadata
+
+type Tx struct {
+	Hash        string    `json:"hash"`
+	From        string    `json:"from"`
+	To          string    `json:"to"`
+	Value       float64   `json:"value"`
+	GasPrice    float64   `json:"gasPrice"`
+	GasUsed     float64   `json:"gasUsed"`
+	Timestamp   time.Time `json:"timestamp"`
+	Status      string    `json:"status"`
 }
 
-// JWT claims structure
-type Claims struct {
-	User string `json:"user"`
-	jwt.StandardClaims
+// WalletService represents the wallet service
+// with its associated wallets and mutex
+
+type WalletService struct {
+	wallets map[string]Wallet
+	mu      sync.Mutex
 }
 
-// Middleware to protect routes
-func authMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		tokenString := c.GetHeader("Authorization")
-		if tokenString == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing token"})
-			return
-		}
-		// Expect format "Bearer <token>"
-		if len(tokenString) > 7 && tokenString[:7] == "Bearer " {
-			tokenString = tokenString[7:]
-		}
-		claims := &Claims{}
-		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-			return jwtSecret, nil
-		})
-		if err != nil || !token.Valid {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
-			return
-		}
-		c.Set("user", claims.User)
-		c.Next()
+// NewWalletService creates a new WalletService
+
+func NewWalletService() *WalletService {
+	return &WalletService{
+		wallets: make(map[string]Wallet),
 	}
 }
 
-// Handler: Get wallet balance
-func getBalanceHandler(c *gin.Context) {
-	address := c.Param("address")
-	// Basic address validation – must start with 0x and be 42 chars long
-	if len(address) != 42 || address[:2] != "0x" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid address format"})
-		return
-	}
-	wallet, ok := mockWallets[address]
+// GetWalletHandler handles the GET /wallets/{address} endpoint
+
+func (ws *WalletService) GetWalletHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	address := vars["address"]
+
+	ws.mu.Lock()
+	wallet, ok := ws.wallets[address]
+	ws.mu.Unlock()
+
 	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "wallet not found"})
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Wallet not found"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"address": wallet.Address, "balance": wallet.Balance})
+
+	json.NewEncoder(w).Encode(wallet)
 }
 
-// Handler: Relay a transaction (mock implementation)
-func relayTxHandler(c *gin.Context) {
-	var payload struct {
-		From   string  `json:"from"`
-		To     string  `json:"to"`
-		Amount float64 `json:"amount"`
-	}
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+// CreateWalletHandler handles the POST /wallets endpoint
+
+func (ws *WalletService) CreateWalletHandler(w http.ResponseWriter, r *http.Request) {
+	var wallet Wallet
+	err := json.NewDecoder(r.Body).Decode(&wallet)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request payload"})
 		return
 	}
-	// Very light validation
-	if payload.Amount <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "amount must be positive"})
-		return
-	}
-	// Simulate transaction hash generation using a simple timestamp hash
-	hash := generateMockTxHash(payload.From, payload.To, payload.Amount)
-	c.JSON(http.StatusOK, gin.H{"txHash": hash, "status": "submitted"})
+
+	ws.mu.Lock()
+	ws.wallets[wallet.Address] = wallet
+	ws.mu.Unlock()
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(wallet)
 }
 
-func generateMockTxHash(from, to string, amount float64) string {
-	stamp := time.Now().UnixNano()
-	raw := from + to + fmt.Sprintf("%f", amount) + fmt.Sprintf("%d", stamp)
-	h := sha256.Sum256([]byte(raw))
-	return "0x" + fmt.Sprintf("%x", h[:])
+// UpdateWalletHandler handles the PUT /wallets/{address} endpoint
+
+func (ws *WalletService) UpdateWalletHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	address := vars["address"]
+
+	var wallet Wallet
+	err := json.NewDecoder(r.Body).Decode(&wallet)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request payload"})
+		return
+	}
+
+	ws.mu.Lock()
+	ws.wallets[address] = wallet
+	ws.mu.Unlock()
+
+	json.NewEncoder(w).Encode(wallet)
 }
+
+// DeleteWalletHandler handles the DELETE /wallets/{address} endpoint
+
+func (ws *WalletService) DeleteWalletHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	address := vars["address"]
+
+	ws.mu.Lock()
+	delete(ws.wallets, address)
+	ws.mu.Unlock()
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// GetWalletTxHistoryHandler handles the GET /wallets/{address}/tx-history endpoint
+
+func (ws *WalletService) GetWalletTxHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	address := vars["address"]
+
+	ws.mu.Lock()
+	wallet, ok := ws.wallets[address]
+	ws.mu.Unlock()
+
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Wallet not found"})
+		return
+	}
+
+	json.NewEncoder(w).Encode(wallet.TxHistory)
+}
+
+// AddWalletTxHandler handles the POST /wallets/{address}/tx-history endpoint
+
+func (ws *WalletService) AddWalletTxHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	address := vars["address"]
+
+	var tx Tx
+	err := json.NewDecoder(r.Body).Decode(&tx)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request payload"})
+		return
+	}
+
+	ws.mu.Lock()
+	wallet, ok := ws.wallets[address]
+	if !ok {
+		ws.mu.Unlock()
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Wallet not found"})
+		return
+	}
+
+	wallet.TxHistory = append(wallet.TxHistory, tx)
+	ws.wallets[address] = wallet
+	ws.mu.Unlock()
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(tx)
+}
+
+// main is the entry point of the application
 
 func main() {
-	router := gin.Default()
+	r := mux.NewRouter()
 
-	// Public endpoint to obtain a demo JWT (in real world use proper auth)
-	router.POST("/login", func(c *gin.Context) {
-		var login struct {
-			User string `json:"user"`
-			Pass string `json:"pass"`
-		}
-		if err := c.ShouldBindJSON(&login); err != nil || login.User == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid login payload"})
-			return
-		}
-		// Issue token valid for 1 hour
-		exp := time.Now().Add(time.Hour)
-		claims := Claims{User: login.User, StandardClaims: jwt.StandardClaims{ExpiresAt: exp.Unix()}}
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		tokenString, _ := token.SignedString(jwtSecret)
-		c.JSON(http.StatusOK, gin.H{"token": tokenString})
-	})
+	walletService := NewWalletService()
 
-	api := router.Group("/api")
-	api.Use(authMiddleware())
-	api.GET("/wallet/:address/balance", getBalanceHandler)
-	api.POST("/tx/relay", relayTxHandler)
+	r.HandleFunc("/wallets/{address}", walletService.GetWalletHandler).Methods("GET")
+	r.HandleFunc("/wallets", walletService.CreateWalletHandler).Methods("POST")
+	r.HandleFunc("/wallets/{address}", walletService.UpdateWalletHandler).Methods("PUT")
+	r.HandleFunc("/wallets/{address}", walletService.DeleteWalletHandler).Methods("DELETE")
+	r.HandleFunc("/wallets/{address}/tx-history", walletService.GetWalletTxHistoryHandler).Methods("GET")
+	r.HandleFunc("/wallets/{address}/tx-history", walletService.AddWalletTxHandler).Methods("POST")
 
-	// Graceful shutdown handling
 	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: router,
+		Handler:      r,
+		Addr:         "127.0.0.1:8000",
+		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  15 * time.Second,
 	}
 
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			panic("server error: " + err.Error())
-		}
-	}()
-
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt)
-	<-quit
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		panic("server forced to shutdown: " + err.Error())
-	}
+	fmt.Println("Server is running on port 8000")
+	log.Fatal(srv.ListenAndServe())
 }
