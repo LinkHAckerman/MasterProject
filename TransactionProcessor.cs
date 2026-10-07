@@ -1,223 +1,278 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net.WebSockets;
-"using System.Security.Cryptography;
+using System.Threading.Tasks;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
+using System.Text.Json.Serialization;
 
 namespace MagnumOpus.Backend.Core
 {
-    public enum TransactionStatus
-    {
-        Pending,
-        Processing,
-        Validated,
-        Committed,
-        Reverted
-    }
-
-    public class Transaction
-    {
-        public string TxHash { get; set; }
-        public string SenderAddress { get; set; }
-        public string ReceiverAddress { get; set; }
-        public decimal Amount { get; set; }
-        public decimal GasLimit { get; set; }
-        public decimal GasPriceGwei { get; set; }
-        public int Nonce { get; set; }
-        public byte[] Signature { get; set; }
-        public string Payload { get; set; }
-        public DateTime Timestamp { get; set; }
-        public TransactionStatus Status { get; set; }
-        public string BlockHash { get; set; }
-        public long BlockHeight { get; set; }
-
-        public Transaction()
-        {
-            Timestamp = DateTime.UtcNow;
-            Status = TransactionStatus.Pending;
-            TxHash = string.Empty;
-            Payload = string.Empty;
-        }
-    }
-
-    public class TransactionPool
-    {
-        private readonly ConcurrentDictionary<string, Transaction> _pendingPool = new ConcurrentDictionary<string, Transaction>();
-        private readonly SortedSet<(decimal GasPrice, string TxHash)> _feePriorityQueue = 
-            new SortedSet<(decimal GasPrice, string TxHash)>(Comparer<(decimal GasPrice, string TxHash)>.Create((x, y) => {
-                int compare = y.GasPrice.CompareTo(x.GasPrice);
-                return compare != 0 ? compare : string.Compare(x.TxHash, y.TxHash, StringComparison.Ordinal);
-            }));
-        
-        private readonly object _lockObj = new object();
-
-        public bool AddTransaction(Transaction tx)
-        {
-            if (string.IsNullOrWhiteSpace(tx.TxHash)) return false;
-            
-            if (_pendingPool.TryAdd(tx.TxHash, tx))
-            {
-                lock (_lockObj)
-                {
-                    _feePriorityQueue.Add((tx.GasPriceGwei, tx.TxHash));
-                }
-                return true;
-            }
-            return false;
-        }
-
-        public List<Transaction> GetTopTransactions(int count)
-        {
-            var selected = new List<Transaction>();
-            lock (_lockObj)
-            {
-                var taken = _feePriorityQueue.Take(count).ToList();
-                foreach (var item in taken)
-                {
-                    if (_pendingPool.TryGetValue(item.TxHash, out var tx))
-                    {
-                        selected.Add(tx);
-                    }
-                }
-            }
-            return selected;
-        }
-
-        public void RemoveTransactions(IEnumerable<string> hashes)
-        {
-            lock (_lockObj)
-            {
-                foreach (var hash in hashes)
-                {
-                    if (_pendingPool.TryRemove(hash, out var tx))
-                    {
-                        _feePriorityQueue.Remove((tx.GasPriceGwei, hash));
-                    }
-                }
-            }
-        }
-
-        public int Count => _pendingPool.Count;
-    }
-
     public class TransactionProcessor
     {
-        private readonly TransactionPool _pool = new TransactionPool();
-        private readonly ConcurrentDictionary<string, Transaction> _ledger = new ConcurrentDictionary<string, Transaction>();
-        private readonly CancellationTokenSource _cts = new CancellationTokenSource();
-        private long _currentBlockHeight = 10002042L;
-        private string _lastBlockHash = "0x7fd7da7c44d18721bf7b38dcdb802613b194fbe05e6089d891b9204cdcf00c41";
+        private readonly Dictionary<string, Wallet> _wallets = new Dictionary<string, Wallet>();
+        private readonly Dictionary<string, Token> _tokens = new Dictionary<string, Token>();
+        private readonly List<Transaction> _pendingTransactions = new List<Transaction>();
+        private readonly List<Block> _blockchain = new List<Block>();
+        private readonly object _lock = new object();
 
-        public event Action<string, List<Transaction>> BlockMinted;
-        public event Action<Transaction> TransactionAdded;
-
-        public void Start() 
+        public class Wallet
         {
-            Task.Run(() => ProcessingLoopAsync(_cts.Token));
+            public string Address { get; set; }
+            public Dictionary<string, decimal> Balances { get; set; } = new Dictionary<string, decimal>();
+            public string PublicKey { get; set; }
+            public string PrivateKey { get; set; }
         }
 
-        public void Stop()
+        public class Token
         {
-            _cts.Cancel();
+            public string Symbol { get; set; }
+            public string Name { get; set; }
+            public decimal TotalSupply { get; set; }
+            public int Decimals { get; set; }
         }
 
-        public Transaction SubmitTransaction(string sender, string receiver, decimal amount, decimal gasPrice, int nonce, string payload = "")
+        public class Transaction
         {
-            var tx = new Transaction
+            public string From { get; set; }
+            public string To { get; set; }
+            public string TokenSymbol { get; set; }
+            public decimal Amount { get; set; }
+            public string Signature { get; set; }
+            public string Hash { get; set; }
+            public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+            public bool IsValid { get; set; } = false;
+        }
+
+        public class Block
+        {
+            public int Index { get; set; }
+            public string PreviousHash { get; set; }
+            public string Hash { get; set; }
+            public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+            public List<Transaction> Transactions { get; set; } = new List<Transaction>();
+            public int Nonce { get; set; } = 0;
+        }
+
+        public TransactionProcessor()
+        {
+            // Initialize with some test wallets and tokens
+            InitializeTestData();
+        }
+
+        private void InitializeTestData()
+        {
+            // Add test tokens
+            _tokens.Add("ETH", new Token { Symbol = "ETH", Name = "Ethereum", TotalSupply = 100000000, Decimals = 18 });
+            _tokens.Add("USDT", new Token { Symbol = "USDT", Name = "Tether", TotalSupply = 10000000000, Decimals = 6 });
+            _tokens.Add("MAGNUM", new Token { Symbol = "MAGNUM", Name = "Magnum Opus", TotalSupply = 1000000000, Decimals = 18 });
+
+            // Add test wallets
+            var wallet1 = new Wallet { Address = "0x1234567890abcdef", PublicKey = "publicKey1", PrivateKey = "privateKey1" };
+            wallet1.Balances.Add("ETH", 100.0m);
+            wallet1.Balances.Add("USDT", 10000.0m);
+            wallet1.Balances.Add("MAGNUM", 1000.0m);
+            _wallets.Add(wallet1.Address, wallet1);
+
+            var wallet2 = new Wallet { Address = "0xabcdef1234567890", PublicKey = "publicKey2", PrivateKey = "privateKey2" };
+            wallet2.Balances.Add("ETH", 50.0m);
+            wallet2.Balances.Add("USDT", 5000.0m);
+            wallet2.Balances.Add("MAGNUM", 500.0m);
+            _wallets.Add(wallet2.Address, wallet2);
+        }
+
+        public async Task<string> CreateTransaction(string from, string to, string tokenSymbol, decimal amount, string privateKey)
+        {
+            if (!_wallets.ContainsKey(from) || !_wallets.ContainsKey(to))
             {
-                SenderAddress = sender,
-                ReceiverAddress = receiver,
+                throw new Exception("Invalid wallet address");
+            }
+
+            if (!_tokens.ContainsKey(tokenSymbol))
+            {
+                throw new Exception("Invalid token symbol");
+            }
+
+            var wallet = _wallets[from];
+            if (!wallet.Balances.ContainsKey(tokenSymbol) || wallet.Balances[tokenSymbol] < amount)
+            {
+                throw new Exception("Insufficient balance");
+            }
+
+            var transaction = new Transaction
+            {
+                From = from,
+                To = to,
+                TokenSymbol = tokenSymbol,
                 Amount = amount,
-                GasLimit = 21000,
-                GasPriceGwei = gasPrice,
-                Nonce = nonce,
-                Payload = payload,
                 Timestamp = DateTime.UtcNow
             };
 
-            tx.TxHash = ComputeTransactionHash(tx);
-            tx.Signature = GenerateMockSignature(tx);
+            // Sign the transaction
+            transaction.Signature = SignTransaction(transaction, privateKey);
+            transaction.Hash = ComputeTransactionHash(transaction);
+            transaction.IsValid = VerifyTransaction(transaction);
 
-            if (_pool.AddTransaction(tx))
+            if (!transaction.IsValid)
             {
-                TransactionAdded?.Invoke(tx);
-                return tx;
+                throw new Exception("Invalid transaction");
             }
-            return null;
+
+            lock (_lock)
+            {
+                _pendingTransactions.Add(transaction);
+            }
+
+            return transaction.Hash;
         }
 
-        private string ComputeTransactionHash(Transaction tx)
+        private string SignTransaction(Transaction transaction, string privateKey)
         {
-            string raw = $"{tx.SenderAddress}:{tx.ReceiverAddress}:{tx.Amount}:{tx.GasPriceGwei}:{tx.Nonce}:{tx.Payload}:{tx.Timestamp.Ticks}";
-            using (var sha = SHA256.Create())
+            // In a real implementation, this would use proper cryptographic signing
+            // For this example, we'll use a simple hash-based signature
+            var transactionData = $"{transaction.From}{transaction.To}{transaction.TokenSymbol}{transaction.Amount}{transaction.Timestamp}";
+            using (var sha256 = SHA256.Create())
             {
-                byte[] bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
-                return "0x" + BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
+                var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(transactionData + privateKey));
+                return Convert.ToBase64String(hashBytes);
             }
         }
 
-        private byte[] GenerateMockSignature(Transaction tx)
+        private string ComputeTransactionHash(Transaction transaction)
         {
-            byte[] hashBytes = Encoding.UTF8.GetBytes(tx.TxHash);
-            byte[] mockKey = Encoding.UTF8.GetBytes("magnum-opus-private-key-spec");
-            using (var hmac = new HMACSHA256(mockKey))
+            var transactionData = $"{transaction.From}{transaction.To}{transaction.TokenSymbol}{transaction.Amount}{transaction.Timestamp}{transaction.Signature}";
+            using (var sha256 = SHA256.Create())
             {
-                return hmac.ComputeHash(hashBytes);
+                var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(transactionData));
+                return Convert.ToBase64String(hashBytes);
             }
         }
 
-        private async Task ProcessingLoopAsync(CancellationToken token)
+        private bool VerifyTransaction(Transaction transaction)
         {
-            while (!token.IsCancellationRequested)
+            // Verify the signature
+            var expectedSignature = SignTransaction(transaction, _wallets[transaction.From].PrivateKey);
+            if (transaction.Signature != expectedSignature)
             {
-                try
+                return false;
+            }
+
+            // Verify the hash
+            var expectedHash = ComputeTransactionHash(transaction);
+            if (transaction.Hash != expectedHash)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        public async Task<string> MineBlock()
+        {
+            List<Transaction> transactionsToMine;
+            lock (_lock)
+            {
+                transactionsToMine = _pendingTransactions.Take(10).ToList();
+                _pendingTransactions.RemoveRange(0, transactionsToMine.Count);
+            }
+
+            var block = new Block
+            {
+                Index = _blockchain.Count,
+                PreviousHash = _blockchain.Count > 0 ? _blockchain.Last().Hash : "0",
+                Transactions = transactionsToMine
+            };
+
+            // Mine the block
+            block.Hash = MineBlockHash(block);
+
+            // Process the transactions
+            foreach (var transaction in block.Transactions)
+            {
+                ProcessTransaction(transaction);
+            }
+
+            lock (_lock)
+            {
+                _blockchain.Add(block);
+            }
+
+            return block.Hash;
+        }
+
+        private string MineBlockHash(Block block)
+        {
+            var blockData = $"{block.Index}{block.PreviousHash}{block.Timestamp}{string.Join("", block.Transactions.Select(t => t.Hash))}";
+            using (var sha256 = SHA256.Create())
+            {
+                while (true)
                 {
-                    await Task.Delay(3000, token);
-                    ProcessNextBlock();
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[Engine Error]: {ex.Message}");
+                    var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(blockData + block.Nonce));
+                    var hash = Convert.ToBase64String(hashBytes);
+                    if (hash.StartsWith("0000")) // Simple proof-of-work
+                    {
+                        return hash;
+                    }
+                    block.Nonce++;
                 }
             }
         }
 
-        private void ProcessNextBlock()
+        private void ProcessTransaction(Transaction transaction)
         {
-            int txBatchSize = 10;
-            var txs = _pool.GetTopTransactions(txBatchSize);
-            if (txs.Count == 0) return;
-
-            _currentBlockHeight++;
-            string rawBlockData = $"{_lastBlockHash}:{_currentBlockHeight}:{DateTime.UtcNow.Ticks}";
-            using (var sha = SHA256.Create())
+            if (!_wallets.ContainsKey(transaction.From) || !_wallets.ContainsKey(transaction.To))
             {
-                byte[] bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(rawBlockData));
-                _lastBlockHash = "0x" + BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
+                throw new Exception("Invalid wallet address");
             }
 
-            foreach (var tx in txs)
+            if (!_tokens.ContainsKey(transaction.TokenSymbol))
             {
-                tx.Status = TransactionStatus.Committed;
-                tx.BlockHash = _lastBlockHash;
-                tx.BlockHeight = _currentBlockHeight;
-                _ledger[tx.TxHash] = tx;
+                throw new Exception("Invalid token symbol");
             }
 
-            _pool.RemoveTransactions(txs.Select(x => x.TxHash));
-            BlockMinted?.Invoke(_lastBlockHash, txs);
+            var fromWallet = _wallets[transaction.From];
+            var toWallet = _wallets[transaction.To];
+
+            if (!fromWallet.Balances.ContainsKey(transaction.TokenSymbol) || fromWallet.Balances[transaction.TokenSymbol] < transaction.Amount)
+            {
+                throw new Exception("Insufficient balance");
+            }
+
+            fromWallet.Balances[transaction.TokenSymbol] -= transaction.Amount;
+            if (!toWallet.Balances.ContainsKey(transaction.TokenSymbol))
+            {
+                toWallet.Balances[transaction.TokenSymbol] = 0;
+            }
+            toWallet.Balances[transaction.TokenSymbol] += transaction.Amount;
         }
 
-        public List<Transaction> GetTransactionHistory() => _ledger.Values.OrderByDescending(t => t.Timestamp).ToList();
-        public Transaction GetTransaction(string hash) => _ledger.TryGetValue(hash, out var tx) ? tx : null;
+        public async Task<List<Transaction>> GetPendingTransactions()
+        {
+            lock (_lock)
+            {
+                return _pendingTransactions.ToList();
+            }
+        }
+
+        public async Task<List<Block>> GetBlockchain()
+        {
+            lock (_lock)
+            {
+                return _blockchain.ToList();
+            }
+        }
+
+        public async Task<Wallet> GetWallet(string address)
+        {
+            lock (_lock)
+            {
+                if (_wallets.ContainsKey(address))
+                {
+                    return _wallets[address];
+                }
+                return null;
+            }
+        }
     }
 }
