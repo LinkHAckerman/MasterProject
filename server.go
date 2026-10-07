@@ -1,211 +1,159 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
-	"sync"
-	"time"
-	"github.com/gorilla/mux"
+    "crypto/sha256"
+    "encoding/json"
+    "fmt"
+    "log"
+    "net/http"
+    "regexp"
+    "strings"
+    "sync"
 )
 
-// Wallet represents a blockchain wallet
-// with its associated metadata
-// and transaction history
-
-type Wallet struct {
-	Address     string    `json:"address"`
-	Balance     float64   `json:"balance"`
-	ChainID     string    `json:"chainId"`
-	NetworkName string    `json:"networkName"`
-	Tokens      []Token   `json:"tokens"`
-	TxHistory   []Tx      `json:"txHistory"`
+type BalanceResponse struct {
+    Address  string  `json:"address"`
+    Balance  float64 `json:"balance"`
+    Currency string  `json:"currency"`
 }
 
-// Token represents a cryptocurrency token
-// with its associated metadata
-
-type Token struct {
-	Symbol  string  `json:"symbol"`
-	Name    string  `json:"name"`
-	Balance float64 `json:"balance"`
-	Price   float64 `json:"price"`
+type TxRequest struct {
+    From     string  `json:"from"`
+    To       string  `json:"to"`
+    Amount   float64 `json:"amount"`
+    Currency string  `json:"currency"`
 }
 
-// Tx represents a blockchain transaction
-// with its associated metadata
-
-type Tx struct {
-	Hash        string    `json:"hash"`
-	From        string    `json:"from"`
-	To          string    `json:"to"`
-	Value       float64   `json:"value"`
-	GasPrice    float64   `json:"gasPrice"`
-	GasUsed     float64   `json:"gasUsed"`
-	Timestamp   time.Time `json:"timestamp"`
-	Status      string    `json:"status"`
+type TxResponse struct {
+    TxHash  string `json:"txHash"`
+    Status  string `json:"status"`
+    Message string `json:"message,omitempty"`
 }
 
-// WalletService represents the wallet service
-// with its associated wallets and mutex
-
-type WalletService struct {
-	wallets map[string]Wallet
-	mu      sync.Mutex
-}
-
-// NewWalletService creates a new WalletService
-
-func NewWalletService() *WalletService {
-	return &WalletService{
-		wallets: make(map[string]Wallet),
-	}
-}
-
-// GetWalletHandler handles the GET /wallets/{address} endpoint
-
-func (ws *WalletService) GetWalletHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	address := vars["address"]
-
-	ws.mu.Lock()
-	wallet, ok := ws.wallets[address]
-	ws.mu.Unlock()
-
-	if !ok {
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Wallet not found"})
-		return
-	}
-
-	json.NewEncoder(w).Encode(wallet)
-}
-
-// CreateWalletHandler handles the POST /wallets endpoint
-
-func (ws *WalletService) CreateWalletHandler(w http.ResponseWriter, r *http.Request) {
-	var wallet Wallet
-	err := json.NewDecoder(r.Body).Decode(&wallet)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request payload"})
-		return
-	}
-
-	ws.mu.Lock()
-	ws.wallets[wallet.Address] = wallet
-	ws.mu.Unlock()
-
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(wallet)
-}
-
-// UpdateWalletHandler handles the PUT /wallets/{address} endpoint
-
-func (ws *WalletService) UpdateWalletHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	address := vars["address"]
-
-	var wallet Wallet
-	err := json.NewDecoder(r.Body).Decode(&wallet)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request payload"})
-		return
-	}
-
-	ws.mu.Lock()
-	ws.wallets[address] = wallet
-	ws.mu.Unlock()
-
-	json.NewEncoder(w).Encode(wallet)
-}
-
-// DeleteWalletHandler handles the DELETE /wallets/{address} endpoint
-
-func (ws *WalletService) DeleteWalletHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	address := vars["address"]
-
-	ws.mu.Lock()
-	delete(ws.wallets, address)
-	ws.mu.Unlock()
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// GetWalletTxHistoryHandler handles the GET /wallets/{address}/tx-history endpoint
-
-func (ws *WalletService) GetWalletTxHistoryHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	address := vars["address"]
-
-	ws.mu.Lock()
-	wallet, ok := ws.wallets[address]
-	ws.mu.Unlock()
-
-	if !ok {
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Wallet not found"})
-		return
-	}
-
-	json.NewEncoder(w).Encode(wallet.TxHistory)
-}
-
-// AddWalletTxHandler handles the POST /wallets/{address}/tx-history endpoint
-
-func (ws *WalletService) AddWalletTxHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	address := vars["address"]
-
-	var tx Tx
-	err := json.NewDecoder(r.Body).Decode(&tx)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request payload"})
-		return
-	}
-
-	ws.mu.Lock()
-	wallet, ok := ws.wallets[address]
-	if !ok {
-		ws.mu.Unlock()
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Wallet not found"})
-		return
-	}
-
-	wallet.TxHistory = append(wallet.TxHistory, tx)
-	ws.wallets[address] = wallet
-	ws.mu.Unlock()
-
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(tx)
-}
-
-// main is the entry point of the application
+var (
+    balances = map[string]float64{
+        "0x1111111111111111111111111111111111111111": 1000.0,
+    }
+    mu sync.RWMutex
+    ethAddressRegex = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+)
 
 func main() {
-	r := mux.NewRouter()
+    http.HandleFunc("/healthz", healthHandler)
+    http.HandleFunc("/wallet/", walletHandler)
+    http.HandleFunc("/transaction", transactionHandler)
 
-	walletService := NewWalletService()
+    log.Println("Server starting on :8080")
+    if err := http.ListenAndServe(":8080", nil); err != nil {
+        log.Fatalf("Server failed: %v", err)
+    }
+}
 
-	r.HandleFunc("/wallets/{address}", walletService.GetWalletHandler).Methods("GET")
-	r.HandleFunc("/wallets", walletService.CreateWalletHandler).Methods("POST")
-	r.HandleFunc("/wallets/{address}", walletService.UpdateWalletHandler).Methods("PUT")
-	r.HandleFunc("/wallets/{address}", walletService.DeleteWalletHandler).Methods("DELETE")
-	r.HandleFunc("/wallets/{address}/tx-history", walletService.GetWalletTxHistoryHandler).Methods("GET")
-	r.HandleFunc("/wallets/{address}/tx-history", walletService.AddWalletTxHandler).Methods("POST")
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte("{\"status\":\"ok\"}"))
+}
 
-	srv := &http.Server{
-		Handler:      r,
-		Addr:         "127.0.0.1:8000",
-		WriteTimeout: 15 * time.Second,
-		ReadTimeout:  15 * time.Second,
-	}
+func walletHandler(w http.ResponseWriter, r *http.Request) {
+    // Expected path: /wallet/{address}/balance
+    parts := splitPath(r.URL.Path)
+    if len(parts) != 3 || parts[2] != "balance" {
+        http.Error(w, "invalid endpoint", http.StatusBadRequest)
+        return
+    }
+    address := parts[1]
+    if !ethAddressRegex.MatchString(address) {
+        http.Error(w, "invalid address format", http.StatusBadRequest)
+        return
+    }
 
-	fmt.Println("Server is running on port 8000")
-	log.Fatal(srv.ListenAndServe())
+    mu.RLock()
+    bal, ok := balances[address]
+    mu.RUnlock()
+    if !ok {
+        bal = 0.0
+    }
+
+    resp := BalanceResponse{
+        Address:  address,
+        Balance:  bal,
+        Currency: "ETH",
+    }
+    writeJSON(w, resp)
+}
+
+func transactionHandler(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+    var tx TxRequest
+    if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
+        http.Error(w, "invalid json", http.StatusBadRequest)
+        return
+    }
+    if !ethAddressRegex.MatchString(tx.From) || !ethAddressRegex.MatchString(tx.To) {
+        http.Error(w, "invalid address", http.StatusBadRequest)
+        return
+    }
+    if tx.Amount <= 0 {
+        http.Error(w, "amount must be positive", http.StatusBadRequest)
+        return
+    }
+
+    // Simple atomic balance transfer
+    mu.Lock()
+    defer mu.Unlock()
+    fromBal, ok := balances[tx.From]
+    if !ok || fromBal < tx.Amount {
+        resp := TxResponse{
+            TxHash:  "",
+            Status:  "failed",
+            Message: "insufficient funds",
+        }
+        writeJSON(w, resp)
+        return
+    }
+    balances[tx.From] = fromBal - tx.Amount
+    balances[tx.To] = balances[tx.To] + tx.Amount
+
+    // Mock tx hash
+    txHash := mockTxHash(tx)
+
+    resp := TxResponse{
+        TxHash: txHash,
+        Status: "success",
+    }
+    writeJSON(w, resp)
+}
+
+// helper functions
+
+func splitPath(p string) []string {
+    // remove leading and trailing slashes then split
+    if len(p) == 0 {
+        return []string{}
+    }
+    if p[0] == '/' {
+        p = p[1:]
+    }
+    if len(p) > 0 && p[len(p)-1] == '/' {
+        p = p[:len(p)-1]
+    }
+    if p == "" {
+        return []string{}
+    }
+    return strings.Split(p, "/")
+}
+
+func writeJSON(w http.ResponseWriter, v interface{}) {
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(v)
+}
+
+func mockTxHash(tx TxRequest) string {
+    // deterministic mock hash using simple concatenation and sha256 from std lib
+    data := tx.From + tx.To + fmt.Sprintf("%f", tx.Amount) + tx.Currency
+    sum := sha256.Sum256([]byte(data))
+    return "0x" + fmt.Sprintf("%x", sum[:])
 }

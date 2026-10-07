@@ -89,22 +89,30 @@
             swapBtn: document.getElementById('execute-swap-btn'),
             chartCanvas: document.getElementById('price-chart-canvas'),
             notificationContainer: document.getElementById('notification-container'),
-            portfolioTable: document.getElementById('portfolio-table-body'),
             themeToggle: document.getElementById('theme-toggle'),
             currencySelect: document.getElementById('currency-select'),
-            languageSelect: document.getElementById('language-select')
+            languageSelect: document.getElementById('language-select'),
+            portfolioTable: document.getElementById('portfolio-table-body'),
+            tokenSearch: document.getElementById('token-search-input'),
+            tokenList: document.getElementById('token-list'),
+            modal: document.getElementById('modal'),
+            modalContent: document.getElementById('modal-content'),
+            closeModal: document.getElementById('close-modal')
         };
     }
 
     function setupEventListeners() {
         DOM.connectBtn.addEventListener('click', connectWallet);
-        DOM.pairSelect.addEventListener('change', updateSelectedPair);
+        DOM.pairSelect.addEventListener('change', changeMarketPair);
+        DOM.swapBtn.addEventListener('click', executeSwap);
         DOM.swapFromAmount.addEventListener('input', calculateSwap);
         DOM.swapToAmount.addEventListener('input', calculateSwap);
-        DOM.swapBtn.addEventListener('click', executeSwap);
         DOM.themeToggle.addEventListener('change', toggleTheme);
-        DOM.currencySelect.addEventListener('change', updateCurrency);
-        DOM.languageSelect.addEventListener('change', updateLanguage);
+        DOM.currencySelect.addEventListener('change', changeCurrency);
+        DOM.languageSelect.addEventListener('change', changeLanguage);
+        DOM.tokenSearch.addEventListener('input', searchTokens);
+        DOM.closeModal.addEventListener('click', closeModal);
+        window.addEventListener('click', outsideClick);
     }
 
     function initializeChart() {
@@ -162,16 +170,16 @@
     function handleWebSocketMessage(data) {
         switch(data.type) {
             case 'price_update':
-                updateMarketData(data.payload);
+                updateMarketData(data);
                 break;
             case 'orderbook_update':
-                updateOrderBook(data.payload);
+                updateOrderBook(data);
                 break;
             case 'transaction_update':
-                addTransaction(data.payload);
+                updateTransactions(data);
                 break;
             case 'wallet_update':
-                updateWallet(data.payload);
+                updateWallet(data);
                 break;
         }
     }
@@ -188,10 +196,10 @@
             state.market.chartData.labels.shift();
             state.market.chartData.prices.shift();
         }
-
         state.market.chartData.labels.push(new Date().toLocaleTimeString());
         state.market.chartData.prices.push(data.price);
 
+        priceChart.update();
         updateUI();
     }
 
@@ -201,8 +209,8 @@
         updateUI();
     }
 
-    function addTransaction(tx) {
-        state.transactions.unshift(tx);
+    function updateTransactions(data) {
+        state.transactions.unshift(data.transaction);
         if (state.transactions.length > 20) {
             state.transactions.pop();
         }
@@ -213,85 +221,6 @@
         state.wallet.balanceEth = data.balanceEth;
         state.wallet.balanceUsdt = data.balanceUsdt;
         state.wallet.tokens = data.tokens;
-        updateUI();
-    }
-
-    function updateSelectedPair() {
-        state.market.selectedPair = DOM.pairSelect.value;
-        // In a real app, we would fetch new data for the selected pair
-        updateUI();
-    }
-
-    function calculateSwap() {
-        // Simplified swap calculation
-        const fromAmount = parseFloat(DOM.swapFromAmount.value) || 0;
-        const toAmount = fromAmount * (state.market.price * 0.997); // 0.3% slippage
-        DOM.swapToAmount.value = toAmount.toFixed(6);
-    }
-
-    function executeSwap() {
-        const fromAmount = parseFloat(DOM.swapFromAmount.value);
-        const toAmount = parseFloat(DOM.swapToAmount.value);
-
-        if (fromAmount > 0 && toAmount > 0) {
-            // Simulate swap transaction
-            const tx = {
-                id: Date.now().toString(),
-                type: 'swap',
-                from: {
-                    amount: fromAmount,
-                    currency: 'ETH'
-                },
-                to: {
-                    amount: toAmount,
-                    currency: 'USDT'
-                },
-                status: 'pending',
-                timestamp: new Date().toISOString()
-            };
-
-            addTransaction(tx);
-            addNotification('Swap initiated', 'Your swap transaction has been submitted.');
-
-            // Simulate transaction confirmation
-            setTimeout(() => {
-                tx.status = 'confirmed';
-                updateUI();
-                addNotification('Swap confirmed', 'Your swap transaction has been confirmed.');
-            }, 5000);
-        }
-    }
-
-    function toggleTheme() {
-        state.settings.theme = DOM.themeToggle.checked ? 'dark' : 'light';
-        document.documentElement.setAttribute('data-theme', state.settings.theme);
-    }
-
-    function updateCurrency() {
-        state.settings.currency = DOM.currencySelect.value;
-        // In a real app, we would update all currency displays
-        updateUI();
-    }
-
-    function updateLanguage() {
-        state.settings.language = DOM.languageSelect.value;
-        // In a real app, we would update all language displays
-        updateUI();
-    }
-
-    function addNotification(title, message) {
-        const notification = {
-            id: Date.now().toString(),
-            title,
-            message,
-            timestamp: new Date().toISOString()
-        };
-
-        state.notifications.unshift(notification);
-        if (state.notifications.length > 5) {
-            state.notifications.pop();
-        }
-
         updateUI();
     }
 
@@ -324,11 +253,6 @@
 
         // Update notifications
         updateNotificationsUI();
-
-        // Update chart
-        if (priceChart) {
-            priceChart.update();
-        }
     }
 
     function updateOrderBookUI() {
@@ -341,93 +265,82 @@
             const bidElement = document.createElement('div');
             bidElement.className = 'orderbook-entry';
             bidElement.innerHTML = `
-                <span class="orderbook-price" style="color: #10b981;">${bid.price.toFixed(2)}</span>
+                <span class="orderbook-price" style="color: #10b981">$${bid.price.toFixed(2)}</span>
                 <span class="orderbook-amount">${bid.amount.toFixed(4)}</span>
-                <span class="orderbook-total">${(bid.price * bid.amount).toFixed(2)}</span>
+                <span class="orderbook-total">$${(bid.price * bid.amount).toFixed(2)}</span>
             `;
             DOM.orderBookBids.appendChild(bidElement);
         });
 
         // Add asks
-        state.orderBook.asks.slice(0, 10).reverse().forEach(ask => {
+        state.orderBook.asks.slice(0, 10).forEach(ask => {
             const askElement = document.createElement('div');
             askElement.className = 'orderbook-entry';
             askElement.innerHTML = `
-                <span class="orderbook-price" style="color: #f43f5e;">${ask.price.toFixed(2)}</span>
+                <span class="orderbook-price" style="color: #f43f5e">$${ask.price.toFixed(2)}</span>
                 <span class="orderbook-amount">${ask.amount.toFixed(4)}</span>
-                <span class="orderbook-total">${(ask.price * ask.amount).toFixed(2)}</span>
+                <span class="orderbook-total">$${(ask.price * ask.amount).toFixed(2)}</span>
             `;
             DOM.orderBookAsks.appendChild(askElement);
         });
     }
 
     function updateTransactionHistoryUI() {
-        // Clear existing transactions
         DOM.txList.innerHTML = '';
 
-        // Add transactions
         state.transactions.slice(0, 10).forEach(tx => {
             const txElement = document.createElement('div');
             txElement.className = 'transaction-item';
             txElement.innerHTML = `
                 <div class="transaction-icon">
-                    <i class="fas fa-exchange-alt"></i>
+                    <i class="fas ${tx.type === 'buy' ? 'fa-arrow-down' : 'fa-arrow-up'} ${tx.type === 'buy' ? 'text-emerald-500' : 'text-rose-500'}"></i>
                 </div>
                 <div class="transaction-details">
-                    <div class="transaction-type">${tx.type}</div>
-                    <div class="transaction-amount">
-                        ${tx.from.amount.toFixed(4)} ${tx.from.currency} → ${tx.to.amount.toFixed(4)} ${tx.to.currency}
-                    </div>
+                    <div class="transaction-type">${tx.type === 'buy' ? 'Buy' : 'Sell'} ${tx.amount.toFixed(4)} ${tx.pair.split('/')[0]}</div>
                     <div class="transaction-time">${new Date(tx.timestamp).toLocaleTimeString()}</div>
                 </div>
-                <div class="transaction-status ${tx.status}">${tx.status}</div>
+                <div class="transaction-amount">${tx.type === 'buy' ? '+' : '-'}${tx.amount.toFixed(4)} ${tx.pair.split('/')[0]}</div>
             `;
             DOM.txList.appendChild(txElement);
         });
     }
 
     function updatePortfolioUI() {
-        // Clear existing portfolio items
         DOM.portfolioTable.innerHTML = '';
 
-        // Add portfolio items
-        state.portfolio.forEach(item => {
+        state.portfolio.forEach(asset => {
             const row = document.createElement('tr');
             row.innerHTML = `
-                <td>
-                    <div class="portfolio-token">
-                        <div class="token-icon">${item.symbol.substring(0, 1)}</div>
-                        <div class="token-details">
-                            <div class="token-symbol">${item.symbol}</div>
-                            <div class="token-name">${item.name}</div>
-                        </div>
+                <td class="portfolio-asset">
+                    <div class="asset-icon">${asset.symbol.substring(0, 1)}</div>
+                    <div class="asset-details">
+                        <div class="asset-symbol">${asset.symbol}</div>
+                        <div class="asset-name">${asset.name}</div>
                     </div>
                 </td>
-                <td>${item.balance.toFixed(4)}</td>
-                <td>$${item.price.toFixed(2)}</td>
-                <td>$${item.value.toFixed(2)}</td>
-                <td>
-                    <div class="allocation-bar">
-                        <div class="allocation-fill" style="width: ${item.allocation}%;"></div>
-                    </div>
-                </td>
-                <td>${item.allocation.toFixed(1)}%</td>
+                <td class="portfolio-balance">${asset.balance.toFixed(4)}</td>
+                <td class="portfolio-price">$${asset.price.toFixed(2)}</td>
+                <td class="portfolio-value">$${asset.value.toFixed(2)}</td>
+                <td class="portfolio-allocation">${asset.allocation.toFixed(1)}%</td>
             `;
             DOM.portfolioTable.appendChild(row);
         });
     }
 
     function updateNotificationsUI() {
-        // Clear existing notifications
         DOM.notificationContainer.innerHTML = '';
 
-        // Add notifications
-        state.notifications.forEach(notification => {
+        state.notifications.slice(0, 3).forEach(notification => {
             const notificationElement = document.createElement('div');
-            notificationElement.className = 'notification-item';
+            notificationElement.className = `notification ${notification.type}`;
             notificationElement.innerHTML = `
-                <div class="notification-title">${notification.title}</div>
-                <div class="notification-message">${notification.message}</div>
+                <div class="notification-icon">
+                    <i class="fas ${notification.icon}"></i>
+                </div>
+                <div class="notification-content">
+                    <div class="notification-title">${notification.title}</div>
+                    <div class="notification-message">${notification.message}</div>
+                </div>
                 <div class="notification-time">${new Date(notification.timestamp).toLocaleTimeString()}</div>
             `;
             DOM.notificationContainer.appendChild(notificationElement);
@@ -436,61 +349,148 @@
 
     function connectWallet() {
         if (state.wallet.connected) {
-            // Disconnect wallet
             state.wallet.connected = false;
             state.wallet.address = null;
+            updateUI();
+            addNotification('Wallet disconnected', 'Your wallet has been disconnected successfully.', 'info', 'fa-wallet');
         } else {
             // Simulate wallet connection
-            state.wallet.connected = true;
-            state.wallet.address = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e';
-            addNotification('Wallet connected', 'Your wallet has been successfully connected.');
+            setTimeout(() => {
+                state.wallet.connected = true;
+                state.wallet.address = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e';
+                updateUI();
+                addNotification('Wallet connected', 'Your wallet has been connected successfully.', 'success', 'fa-wallet');
+            }, 1000);
         }
-        updateUI();
     }
 
-    function setupWeb3Listeners() {
-        // In a real app, we would set up actual Web3 listeners here
-        // For now, we'll simulate some data updates
-        setInterval(() => {
-            // Simulate price updates
-            const change = (Math.random() - 0.5) * 10;
-            state.market.price += change;
-            state.market.change24h = (change / state.market.price) * 100;
-            state.market.volume24h += Math.abs(change) * 100000;
-            state.market.high24h = Math.max(state.market.high24h, state.market.price);
-            state.market.low24h = Math.min(state.market.low24h, state.market.price);
+    function changeMarketPair() {
+        state.market.selectedPair = DOM.pairSelect.value;
+        // In a real implementation, we would fetch new market data for the selected pair
+        addNotification('Market pair changed', `Now viewing ${state.market.selectedPair} market data.`, 'info', 'fa-chart-line');
+    }
 
-            // Update chart data
-            if (state.market.chartData.labels.length >= 60) {
-                state.market.chartData.labels.shift();
-                state.market.chartData.prices.shift();
+    function executeSwap() {
+        const fromAmount = parseFloat(DOM.swapFromAmount.value);
+        const toAmount = parseFloat(DOM.swapToAmount.value);
+
+        if (isNaN(fromAmount) || fromAmount <= 0) {
+            addNotification('Invalid amount', 'Please enter a valid amount to swap.', 'error', 'fa-exclamation-triangle');
+            return;
+        }
+
+        // Simulate swap execution
+        setTimeout(() => {
+            // Update wallet balances
+            state.wallet.balanceEth -= fromAmount;
+            state.wallet.balanceUsdt += toAmount;
+
+            // Add transaction to history
+            const transaction = {
+                type: 'sell',
+                pair: state.market.selectedPair,
+                amount: fromAmount,
+                price: state.market.price,
+                timestamp: Date.now()
+            };
+            state.transactions.unshift(transaction);
+            if (state.transactions.length > 20) {
+                state.transactions.pop();
             }
 
-            state.market.chartData.labels.push(new Date().toLocaleTimeString());
-            state.market.chartData.prices.push(state.market.price);
-
-            // Simulate order book updates
-            state.orderBook.bids = Array.from({length: 10}, (_, i) => ({
-                price: state.market.price - (i * 0.5),
-                amount: Math.random() * 10
-            }));
-
-            state.orderBook.asks = Array.from({length: 10}, (_, i) => ({
-                price: state.market.price + (i * 0.5),
-                amount: Math.random() * 10
-            }));
-
+            // Update UI
             updateUI();
-        }, 5000);
+            addNotification('Swap executed', `Successfully swapped ${fromAmount.toFixed(4)} ETH for ${toAmount.toFixed(2)} USDT.`, 'success', 'fa-exchange-alt');
+        }, 1500);
     }
 
-    // Initialize the application when the DOM is loaded
+    function calculateSwap() {
+        const fromAmount = parseFloat(DOM.swapFromAmount.value);
+        if (!isNaN(fromAmount) && fromAmount > 0) {
+            const toAmount = fromAmount * state.market.price;
+            DOM.swapToAmount.value = toAmount.toFixed(2);
+        }
+    }
+
+    function toggleTheme() {
+        state.settings.theme = DOM.themeToggle.checked ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', state.settings.theme);
+        addNotification('Theme changed', `Switched to ${state.settings.theme} mode.`, 'info', 'fa-moon');
+    }
+
+    function changeCurrency() {
+        state.settings.currency = DOM.currencySelect.value;
+        addNotification('Currency changed', `Currency set to ${state.settings.currency}.`, 'info', 'fa-dollar-sign');
+    }
+
+    function changeLanguage() {
+        state.settings.language = DOM.languageSelect.value;
+        addNotification('Language changed', `Language set to ${state.settings.language}.`, 'info', 'fa-language');
+    }
+
+    function searchTokens() {
+        const searchTerm = DOM.tokenSearch.value.toLowerCase();
+        const filteredTokens = state.wallet.tokens.filter(token =>
+            token.name.toLowerCase().includes(searchTerm) ||
+            token.symbol.toLowerCase().includes(searchTerm)
+        );
+
+        DOM.tokenList.innerHTML = '';
+
+        filteredTokens.forEach(token => {
+            const tokenElement = document.createElement('div');
+            tokenElement.className = 'token-item';
+            tokenElement.innerHTML = `
+                <div class="token-icon">${token.symbol.substring(0, 1)}</div>
+                <div class="token-details">
+                    <div class="token-symbol">${token.symbol}</div>
+                    <div class="token-name">${token.name}</div>
+                </div>
+                <div class="token-balance">${token.balance.toFixed(4)}</div>
+            `;
+            DOM.tokenList.appendChild(tokenElement);
+        });
+    }
+
+    function addNotification(title, message, type, icon) {
+        const notification = {
+            title,
+            message,
+            type,
+            icon,
+            timestamp: Date.now()
+        };
+        state.notifications.unshift(notification);
+        if (state.notifications.length > 5) {
+            state.notifications.pop();
+        }
+        updateNotificationsUI();
+    }
+
+    function showModal(content) {
+        DOM.modalContent.innerHTML = content;
+        DOM.modal.style.display = 'block';
+    }
+
+    function closeModal() {
+        DOM.modal.style.display = 'none';
+    }
+
+    function outsideClick(e) {
+        if (e.target === DOM.modal) {
+            closeModal();
+        }
+    }
+
+    // Initialize the application when the DOM is fully loaded
     document.addEventListener('DOMContentLoaded', init);
 
     // Expose functions to global scope for debugging
     window.MagnumOpus = {
         state,
         updateUI,
-        addNotification
+        addNotification,
+        showModal,
+        closeModal
     };
 })();
