@@ -86,15 +86,16 @@ def call_fn(model):
         "generationConfig": {
             "responseMimeType": "application/json",
             "responseSchema": RESPONSE_SCHEMA,
-            "maxOutputTokens": 16000,
-            # Gemini 3.x models think by default, and thinking tokens are
-            # drawn from the SAME maxOutputTokens budget as the visible
-            # answer - "minimal" leaves nearly all of that budget for the
-            # actual file content instead of silently eating it, which is
-            # what was causing repeated truncated/unterminated JSON output.
-            "thinkingConfig": {
-                "thinkingLevel": "minimal"
-            }
+            "maxOutputTokens": 24000
+            # Deliberately NOT setting thinkingConfig/thinkingLevel: Gemini
+            # 3.x sub-versions (3.5/3.6/3.7/3.8-flash) each accept a
+            # different, undocumented set of valid thinking-level values -
+            # 3.6-flash accepted "minimal", 3.7/3.8-flash rejected it with
+            # a 400. Rather than chase which exact value each fast-shipping
+            # sub-version supports, a much larger maxOutputTokens sidesteps
+            # the problem entirely: whatever any given model spends on
+            # internal reasoning, there's still plenty of budget left over
+            # for the actual visible JSON/file content.
             # temperature/top_p/top_k intentionally omitted: deprecated on 3.x Flash models
         }
     }
