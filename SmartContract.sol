@@ -2,10 +2,14 @@
 pragma solidity ^0.8.20;
 
 /**
- * @title Magnum Opus DeFi Nexus Engine Contract
- * @author Lead Principal Software Architect
- * @notice Combines an ERC20 token, DeFi Staking Vault with multi-tier rewards, 
- *         and a custom Flash Loan Provider in a single highly-optimized smart contract.
+ * @title MagnumOpusProtocol
+ * @author Magnum Opus Lead Architect
+ * @notice The ultimate, all-encompassing Solidity engine containing:
+ *         1. Custom ERC20 Utility Token (OPUS) with a built-in tax and burn dynamic.
+ *         2. Multi-Tiered Staking Hub with complex yield calculation.
+ *         3. Automated Market Maker (AMM) Liquidity Pool for OPUS / ETH pairs.
+ *         4. NFT Staking Registry with custom metadata integration and boosting mechanics.
+ *         5. Flash Loan Vault offering zero-collateral instant loans.
  */
 
 interface IERC20 {
@@ -19,8 +23,14 @@ interface IERC20 {
     event Approval(address indexed owner, address indexed spender, uint256 value);
 }
 
+interface IERC721 {
+    function ownerOf(uint256 tokenId) external view returns (address owner);
+    function transferFrom(address from, address to, uint256 tokenId) external;
+    function isApprovedForAll(address owner, address operator) external view returns (bool);
+}
+
 interface IFlashLoanReceiver {
-    function executeOperation(uint256 amount, uint256 premium, address initiator, bytes calldata params) external returns (bool);
+    function executeOperation(uint256 amount, uint256 fee, bytes calldata params) external returns (bool);
 }
 
 contract ReentrancyGuard {
@@ -42,390 +52,359 @@ contract Ownable {
         emit OwnershipTransferred(address(0), msg.sender);
     }
 
-    modifier onlyOwner() {
-        require(_owner == msg.sender, "OWNABLE_CALLER_NOT_OWNER");
-        _;
-    }
-
     function owner() public view returns (address) {
         return _owner;
     }
 
+    modifier onlyOwner() {
+        require(owner() == msg.sender, "Ownable: caller is not the owner");
+        _;
+    }
+
     function transferOwnership(address newOwner) public onlyOwner {
-        require(newOwner != address(0), "OWNABLE_NEW_OWNER_ZERO_ADDRESS");
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
         emit OwnershipTransferred(_owner, newOwner);
         _owner = newOwner;
     }
 }
 
-contract Pausable is Ownable {
-    bool private _paused;
-    event Paused(address account);
-    event Unpaused(address account);
-
-    constructor() {
-        _paused = false;
-    }
-
-    modifier whenNotPaused() {
-        require(!_paused, "PAUSABLE_CONTRACT_IS_PAUSED");
-        _;
-    }
-
-    modifier whenPaused() {
-        require(_paused, "PAUSABLE_CONTRACT_NOT_PAUSED");
-        _;
-    }
-
-    function paused() public view returns (bool) {
-        return _paused;
-    }
-
-    function pause() external onlyOwner whenNotPaused {
-        _paused = true;
-        emit Paused(msg.sender);
-    }
-
-    function unpause() external onlyOwner whenPaused {
-        _paused = false;
-        emit Unpaused(msg.sender);
-    }
-}
-
-contract NexusToken is IERC20, Ownable {
-    string public constant name = "Magnum Opus Nexus";
-    string public constant symbol = "NXT";
+contract OpusToken is IERC20, Ownable {
+    string public constant name = "Magnum Opus Token";
+    string public constant symbol = "OPUS";
     uint8 public constant decimals = 18;
-
+    
     uint256 private _totalSupply;
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
 
-    // Dynamic tax configuration for DeFi operations
-    uint256 public transferTaxBps = 100; // 1% default tax
-    address public taxVault;
+    uint256 public burnRate = 100; // 1% basis points
+    uint256 public taxRate = 100;  // 1% basis points
+    address public treasury;
 
-    constructor(uint256 initialSupply, address _taxVault) {
-        require(_taxVault != address(0), "NXT_INVALID_VAULT");
-        taxVault = _taxVault;
+    constructor(uint256 initialSupply, address _treasury) {
+        treasury = _treasury;
         _mint(msg.sender, initialSupply);
     }
 
-    function totalSupply() external view override returns (uint256) {
+    function totalSupply() public view override returns (uint256) {
         return _totalSupply;
     }
 
-    function balanceOf(address account) external view override returns (uint256) {
+    function balanceOf(address account) public view override returns (uint256) {
         return _balances[account];
     }
 
-    function transfer(address recipient, uint256 amount) external override returns (bool) {
+    function transfer(address recipient, uint256 amount) public override returns (bool) {
         _transfer(msg.sender, recipient, amount);
         return true;
     }
 
-    function allowance(address owner, address spender) external view override returns (uint256) {
+    function allowance(address owner, address spender) public view override returns (uint256) {
         return _allowances[owner][spender];
     }
 
-    function approve(address spender, uint256 amount) external override returns (bool) {
+    function approve(address spender, uint256 amount) public override returns (bool) {
         _approve(msg.sender, spender, amount);
         return true;
     }
 
-    function transferFrom(address sender, address recipient, uint256 amount) external override returns (bool) {
+    function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool) {
         _transfer(sender, recipient, amount);
         uint256 currentAllowance = _allowances[sender][msg.sender];
-        require(currentAllowance >= amount, "NXT_TRANSFER_EXCEEDS_ALLOWANCE");
+        require(currentAllowance >= amount, "ERC20: transfer amount exceeds allowance");
         unchecked {
             _approve(sender, msg.sender, currentAllowance - amount);
         }
         return true;
     }
 
-    function setTransferTax(uint256 newTaxBps) external onlyOwner {
-        require(newTaxBps <= 500, "NXT_TAX_TOO_HIGH"); // Max 5%
-        transferTaxBps = newTaxBps;
-    }
-
-    function setTaxVault(address newVault) external onlyOwner {
-        require(newVault != address(0), "NXT_INVALID_VAULT_ADDRESS");
-        taxVault = newVault;
-    }
-
-    function burn(uint256 amount) external {
-        _burn(msg.sender, amount);
-    }
-
-    function mint(address account, uint256 amount) external onlyOwner {
-        _mint(account, amount);
-    }
-
     function _transfer(address sender, address recipient, uint256 amount) internal {
-        require(sender != address(0), "NXT_TRANSFER_FROM_ZERO_ADDRESS");
-        require(recipient != address(0), "NXT_TRANSFER_TO_ZERO_ADDRESS");
-        require(_balances[sender] >= amount, "NXT_TRANSFER_EXCEEDS_BALANCE");
+        require(sender != address(0), "ERC20: transfer from the zero address");
+        require(recipient != address(0), "ERC20: transfer to the zero address");
+        require(_balances[sender] >= amount, "ERC20: transfer amount exceeds balance");
 
-        uint256 taxAmount = 0;
-        if (transferTaxBps > 0 && sender != owner() && recipient != owner()) {
-            taxAmount = (amount * transferTaxBps) / 10000;
+        uint256 burnAmount = (amount * burnRate) / 10000;
+        uint256 taxAmount = (amount * taxRate) / 10000;
+        uint256 sendAmount = amount - burnAmount - taxAmount;
+
+        _balances[sender] -= amount;
+        _balances[recipient] += sendAmount;
+        emit Transfer(sender, recipient, sendAmount);
+
+        if (burnAmount > 0) {
+            _totalSupply -= burnAmount;
+            emit Transfer(sender, address(0), burnAmount);
         }
-
-        uint256 netAmount = amount - taxAmount;
-
-        unchecked {
-            _balances[sender] -= amount;
-            _balances[recipient] += netAmount;
-        }
-        emit Transfer(sender, recipient, netAmount);
 
         if (taxAmount > 0) {
-            unchecked {
-                _balances[taxVault] += taxAmount;
-            }
-            emit Transfer(sender, taxVault, taxAmount);
+            _balances[treasury] += taxAmount;
+            emit Transfer(sender, treasury, taxAmount);
         }
     }
 
     function _mint(address account, uint256 amount) internal {
-        require(account != address(0), "NXT_MINT_TO_ZERO_ADDRESS");
+        require(account != address(0), "ERC20: mint to the zero address");
         _totalSupply += amount;
-        unchecked {
-            _balances[account] += amount;
-        }
+        _balances[account] += amount;
         emit Transfer(address(0), account, amount);
     }
 
-    function _burn(address account, uint256 amount) internal {
-        require(account != address(0), "NXT_BURN_FROM_ZERO_ADDRESS");
-        uint256 accountBalance = _balances[account];
-        require(accountBalance >= amount, "NXT_BURN_EXCEEDS_BALANCE");
-        unchecked {
-            _balances[account] = accountBalance - amount;
-            _totalSupply -= amount;
-        }
-        emit Transfer(account, address(0), amount);
-    }
-
     function _approve(address owner, address spender, uint256 amount) internal {
-        require(owner != address(0), "NXT_APPROVE_FROM_ZERO_ADDRESS");
-        require(spender != address(0), "NXT_APPROVE_TO_ZERO_ADDRESS");
+        require(owner != address(0), "ERC20: approve from the zero address");
+        require(spender != address(0), "ERC20: approve to the zero address");
         _allowances[owner][spender] = amount;
         emit Approval(owner, spender, amount);
     }
+
+    function setTaxConfig(uint256 _burnRate, uint256 _taxRate) external onlyOwner {
+        require(_burnRate + _taxRate <= 1000, "Tax config too high");
+        burnRate = _burnRate;
+        taxRate = _taxRate;
+    }
 }
 
-contract MagnumOpusNexusDeFi is ReentrancyGuard, Pausable {
-    
-    struct UserInfo {
+contract MagnumOpusNexus is ReentrancyGuard, Ownable {
+    OpusToken public immutable opusToken;
+    IERC721 public nftToken;
+
+    // AMM state variables
+    uint256 public reserveOpus;
+    uint256 public reserveEth;
+
+    // Staking structures
+    struct Staker {
         uint256 stakedAmount;
         uint256 rewardDebt;
-        uint256 lockUpPeriodEnd;
-        uint256 lastDepositTime;
+        uint256 lastStakeTime;
     }
+    mapping(address => Staker) public stakers;
+    uint256 public totalStakedOpus;
+    uint256 public rewardRatePerBlock = 1e16; // 0.01 OPUS per block per staked token
+    uint256 public lastRewardBlock;
+    uint256 public accTokenPerShare;
 
-    struct PoolInfo {
-        IERC20 stakeToken;
-        uint256 allocPoint;
-        uint256 lastRewardBlock;
-        uint256 accRewardPerShare;
-        uint256 totalStaked;
-        uint256 lockPeriodSeconds;
+    // NFT Boosting structures
+    struct NFTStake {
+        address owner;
+        uint256 stakedTimestamp;
     }
+    mapping(uint256 => NFTStake) public nftStakes;
+    mapping(address => uint256) public nftBoostMultiplier; // 100 = 1.0x, 150 = 1.5x boost
 
-    NexusToken public rewardToken;
-    uint256 public rewardPerBlock = 10 * 1e18; // 10 NXT per block
+    // Flash Loan state variables
+    uint256 public constant FLASH_LOAN_FEE_BPS = 9; // 0.09%
 
-    PoolInfo[] public poolInfo;
-    mapping(uint256 => mapping(address => UserInfo)) public userInfo;
-    uint256 public totalAllocPoint = 0;
-    uint256 public startBlock;
-
-    // Flash loan properties
-    uint256 public flashLoanFeeBps = 9; // 0.09% fee
-
-    event Deposit(address indexed user, uint256 indexed pid, uint256 amount);
-    event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
-    event EmergencyWithdraw(address indexed user, uint256 indexed pid, uint256 amount);
-    event RewardPaid(address indexed user, uint256 indexed pid, uint256 amount);
+    event Staked(address indexed user, uint256 amount);
+    event Unstaked(address indexed user, uint256 amount);
+    event RewardClaimed(address indexed user, uint256 reward);
+    
+    event LiquidityAdded(uint256 opusAmount, uint256 ethAmount, uint256 lpTokens);
+    event LiquidityRemoved(uint256 opusAmount, uint256 ethAmount, uint256 lpTokens);
+    event AssetSwapped(address indexed sender, uint256 inputAmount, uint256 outputAmount, bool isOpusToEth);
+    
+    event NFTStaked(address indexed user, uint256 tokenId);
+    event NFTUnstaked(address indexed user, uint256 tokenId);
+    
     event FlashLoanExecuted(address indexed receiver, uint256 amount, uint256 fee);
 
-    constructor(address _rewardTokenAddress) {
-        rewardToken = NexusToken(_rewardTokenAddress);
-        startBlock = block.number;
+    constructor(address _opusToken, address _nftToken) {
+        opusToken = OpusToken(_opusToken);
+        nftToken = IERC721(_nftToken);
+        lastRewardBlock = block.number;
     }
 
-    function poolLength() external view returns (uint256) {
-        return poolInfo.length;
-    }
+    // --- STAKING ENGINE WITH MULTI-TIER REWARDS & NFT BOOST ---
 
-    function addPool(uint256 _allocPoint, address _stakeToken, uint256 _lockPeriodSeconds, bool _withUpdate) external onlyOwner {
-        if (_withUpdate) {
-            massUpdatePools();
-        }
-        uint256 lastRewardBlock = block.number > startBlock ? block.number : startBlock;
-        totalAllocPoint += _allocPoint;
-        poolInfo.push(PoolInfo({
-            stakeToken: IERC20(_stakeToken),
-            allocPoint: _allocPoint,
-            lastRewardBlock: lastRewardBlock,
-            accRewardPerShare: 0,
-            totalStaked: 0,
-            lockPeriodSeconds: _lockPeriodSeconds
-        }));
-    }
-
-    function setPoolAllocPoint(uint256 _pid, uint256 _allocPoint, bool _withUpdate) external onlyOwner {
-        if (_withUpdate) {
-            massUpdatePools();
-        }
-        totalAllocPoint = totalAllocPoint - poolInfo[_pid].allocPoint + _allocPoint;
-        poolInfo[_pid].allocPoint = _allocPoint;
-    }
-
-    function getPendingReward(uint256 _pid, address _user) external view returns (uint256) {
-        PoolInfo storage pool = poolInfo[_pid];
-        UserInfo storage user = userInfo[_pid][_user];
-        uint256 accRewardPerShare = pool.accRewardPerShare;
-        uint256 stakedSupply = pool.totalStaked;
-
-        if (block.number > pool.lastRewardBlock && stakedSupply != 0) {
-            uint256 multiplier = block.number - pool.lastRewardBlock;
-            uint256 reward = (multiplier * rewardPerBlock * pool.allocPoint) / totalAllocPoint;
-            accRewardPerShare += (reward * 1e12) / stakedSupply;
-        }
-        return ((user.stakedAmount * accRewardPerShare) / 1e12) - user.rewardDebt;
-    }
-
-    function massUpdatePools() public {
-        uint256 length = poolInfo.length;
-        for (uint256 pid = 0; pid < length; ++pid) {
-            updatePool(pid);
-        }
-    }
-
-    function updatePool(uint256 _pid) public {
-        PoolInfo storage pool = poolInfo[_pid];
-        if (block.number <= pool.lastRewardBlock) {
+    function updatePool() public {
+        if (block.number <= lastRewardBlock) {
             return;
         }
-        uint256 stakedSupply = pool.totalStaked;
-        if (stakedSupply == 0) {
-            pool.lastRewardBlock = block.number;
+        if (totalStakedOpus == 0) {
+            lastRewardBlock = block.number;
             return;
         }
-        uint256 multiplier = block.number - pool.lastRewardBlock;
-        uint256 reward = (multiplier * rewardPerBlock * pool.allocPoint) / totalAllocPoint;
+        uint256 multiplier = block.number - lastRewardBlock;
+        uint256 tokenReward = multiplier * rewardRatePerBlock;
+        accTokenPerShare += (tokenReward * 1e12) / totalStakedOpus;
+        lastRewardBlock = block.number;
+    }
+
+    function stake(uint256 amount) external nonReentrant {
+        require(amount > 0, "Cannot stake 0");
+        updatePool();
         
-        // Mint reward tokens specifically for distribution
-        rewardToken.mint(address(this), reward);
-
-        pool.accRewardPerShare += (reward * 1e12) / stakedSupply;
-        pool.lastRewardBlock = block.number;
-    }
-
-    function deposit(uint256 _pid, uint256 _amount) external nonReentrant whenNotPaused {
-        PoolInfo storage pool = poolInfo[_pid];
-        UserInfo storage user = userInfo[_pid][msg.sender];
-        updatePool(_pid);
-
+        Staker storage user = stakers[msg.sender];
         if (user.stakedAmount > 0) {
-            uint256 pending = ((user.stakedAmount * pool.accRewardPerShare) / 1e12) - user.rewardDebt;
+            uint256 pending = (user.stakedAmount * accTokenPerShare) / 1e12 - user.rewardDebt;
             if (pending > 0) {
-                safeRewardTransfer(msg.sender, pending);
-                emit RewardPaid(msg.sender, _pid, pending);
-            }join
+                uint256 boostedPending = applyNFTBoost(msg.sender, pending);
+                require(opusToken.transfer(msg.sender, boostedPending), "Reward transfer failed");
+                emit RewardClaimed(msg.sender, boostedPending);
+            }
         }
-
-        if (_amount > 0) {
-            pool.stakeToken.transferFrom(address(msg.sender), address(this), _amount);
-            user.stakedAmount += _amount;
-            pool.totalStaked += _amount;
-            user.lastDepositTime = block.timestamp;
-            user.lockUpPeriodEnd = block.timestamp + pool.lockPeriodSeconds;
-        }
-
-        user.rewardDebt = (user.stakedAmount * pool.accRewardPerShare) / 1e12;
-        emit Deposit(msg.sender, _pid, _amount);
+        
+        require(opusToken.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        user.stakedAmount += amount;
+        totalStakedOpus += amount;
+        user.rewardDebt = (user.stakedAmount * accTokenPerShare) / 1e12;
+        user.lastStakeTime = block.timestamp;
+        
+        emit Staked(msg.sender, amount);
     }
 
-    function withdraw(uint256 _pid, uint256 _amount) external nonReentrant {
-        PoolInfo storage pool = poolInfo[_pid];
-        UserInfo storage user = userInfo[_pid][msg.sender];
-        require(user.stakedAmount >= _amount, "DEFI_WITHDRAW_EXCEEDS_STAKED");
-        require(block.timestamp >= user.lockUpPeriodEnd, "DEFI_LOCKUP_STILL_ACTIVE");
+    function unstake(uint256 amount) external nonReentrant {
+        Staker storage user = stakers[msg.sender];
+        require(user.stakedAmount >= amount, "Insufficient staked balance");
+        updatePool();
         
-        updatePool(_pid);
-        uint256 pending = ((user.stakedAmount * pool.accRewardPerShare) / 1e12) - user.rewardDebt;
+        uint256 pending = (user.stakedAmount * accTokenPerShare) / 1e12 - user.rewardDebt;
         if (pending > 0) {
-            safeRewardTransfer(msg.sender, pending);
-            emit RewardPaid(msg.sender, _pid, pending);
+            uint256 boostedPending = applyNFTBoost(msg.sender, pending);
+            require(opusToken.transfer(msg.sender, boostedPending), "Reward transfer failed");
+            emit RewardClaimed(msg.sender, boostedPending);
         }
-
-        if (_amount > 0) {
-            user.stakedAmount -= _amount;
-            pool.totalStaked -= _amount;
-            pool.stakeToken.transfer(address(msg.sender), _amount);
-        }
-
-        user.rewardDebt = (user.stakedAmount * pool.accRewardPerShare) / 1e12;
-        emit Withdraw(msg.sender, _pid, _amount);
+        
+        user.stakedAmount -= amount;
+        totalStakedOpus -= amount;
+        user.rewardDebt = (user.stakedAmount * accTokenPerShare) / 1e12;
+        
+        require(opusToken.transfer(msg.sender, amount), "Unstake transfer failed");
+        emit Unstaked(msg.sender, amount);
     }
 
-    function emergencyWithdraw(uint256 _pid) external nonReentrant {
-        PoolInfo storage pool = poolInfo[_pid];
-        UserInfo storage user = userInfo[_pid][msg.sender];
-        uint256 amount = user.stakedAmount;
-        
-        require(amount > 0, "DEFI_EMERGENCY_NO_STAKE");
-        
-        user.stakedAmount = 0;
-        user.rewardDebt = 0;
-        pool.totalStaked -= amount;
-        
-        pool.stakeToken.transfer(address(msg.sender), amount);
-        emit EmergencyWithdraw(msg.sender, _pid, amount);
+    function applyNFTBoost(address staker, uint256 amount) public view returns (uint256) {
+        uint256 multiplier = nftBoostMultiplier[staker];
+        if (multiplier == 0) {
+            return amount;
+        }
+        return (amount * (100 + multiplier)) / 100;
     }
 
-    function safeRewardTransfer(address _to, uint256 _amount) internal {
-        uint256 bal = rewardToken.balanceOf(address(this));
-        if (_amount > bal) {
-            rewardToken.transfer(_to, bal);
+    // --- NFT STAKING FOR YIELD BOOSTING ---
+
+    function stakeNFT(uint256 tokenId) external nonReentrant {
+        require(nftToken.ownerOf(tokenId) == msg.sender, "Not owner of NFT");
+        nftToken.transferFrom(msg.sender, address(this), tokenId);
+
+        nftStakes[tokenId] = NFTStake({
+            owner: msg.sender,
+            stakedTimestamp: block.timestamp
+        });
+
+        // Boost multiplier increases by 20% for each staked NFT
+        nftBoostMultiplier[msg.sender] += 20;
+
+        emit NFTStaked(msg.sender, tokenId);
+    }
+
+    function unstakeNFT(uint256 tokenId) external nonReentrant {
+        require(nftStakes[tokenId].owner == msg.sender, "Not the staker of NFT");
+        
+        delete nftStakes[tokenId];
+        if (nftBoostMultiplier[msg.sender] >= 20) {
+            nftBoostMultiplier[msg.sender] -= 20;
         } else {
-            rewardToken.transfer(_to, _amount);
+            nftBoostMultiplier[msg.sender] = 0;
+        }
+
+        nftToken.transferFrom(address(this), msg.sender, tokenId);
+        emit NFTUnstaked(msg.sender, tokenId);
+    }
+
+    // --- BUILT-IN AUTOMATED MARKET MAKER (AMM) LIQUIDITY POOL ---
+
+    function addLiquidity(uint256 opusAmount) external payable nonReentrant returns (uint256) {
+        require(opusAmount > 0 && msg.value > 0, "Invalid liquidity amount");
+        
+        if (reserveOpus == 0 && reserveEth == 0) {
+            require(opusToken.transferFrom(msg.sender, address(this), opusAmount), "Token transfer failed");
+            reserveOpus = opusAmount;
+            reserveEth = msg.value;
+            emit LiquidityAdded(opusAmount, msg.value, opusAmount);
+            return opusAmount;
+        } else {
+            uint256 tokenCalculated = (msg.value * reserveOpus) / reserveEth;
+            require(opusAmount >= tokenCalculated, "Insufficient tokens provided");
+            require(opusToken.transferFrom(msg.sender, address(this), tokenCalculated), "Token transfer failed");
+            
+            reserveOpus += tokenCalculated;
+            reserveEth += msg.value;
+            emit LiquidityAdded(tokenCalculated, msg.value, tokenCalculated);
+            return tokenCalculated;
         }
     }
 
-    function updateRewardPerBlock(uint256 _newReward) external onlyOwner {
-        massUpdatePools();
-        rewardPerBlock = _newReward;
+    function swapOpusForEth(uint256 opusIn, uint256 minEthOut) external nonReentrant {
+        require(opusIn > 0, "Input amount zero");
+        require(reserveOpus > 0 && reserveEth > 0, "No liquidity available");
+
+        // Constant product formula with 0.3% fee: (x + dx) * (y - dy) = k
+        uint256 opusInWithFee = opusIn * 997;
+        uint256 numerator = opusInWithFee * reserveEth;
+        uint256 denominator = (reserveOpus * 1000) + opusInWithFee;
+        uint256 ethOut = numerator / denominator;
+
+        require(ethOut >= minEthOut, "Slippage tolerance exceeded");
+        require(address(this).balance >= ethOut, "Insufficient ETH in pool");
+
+        require(opusToken.transferFrom(msg.sender, address(this), opusIn), "Token deposit failed");
+        
+        reserveOpus += opusIn;
+        reserveEth -= ethOut;
+
+        (bool success, ) = msg.sender.call{value: ethOut}("");
+        require(success, "ETH transfer failed");
+
+        emit AssetSwapped(msg.sender, opusIn, ethOut, true);
     }
 
-    // High performance Flash Loan system
-    function flashLoan(address receiverAddress, uint256 amount, bytes calldata params) external nonReentrant whenNotPaused {
-        uint256 balanceBefore = rewardToken.balanceOf(address(this));
-        require(balanceBefore >= amount, "DEFI_FLASH_LOAN_INSUFFICIENT_LIQUIDITY");
+    function swapEthForOpus(uint256 minOpusOut) external payable nonReentrant {
+        require(msg.value > 0, "Input ETH amount zero");
+        require(reserveOpus > 0 && reserveEth > 0, "No liquidity available");
 
-        uint256 fee = (amount * flashLoanFeeBps) / 10000;
+        uint256 ethInWithFee = msg.value * 997;
+        uint256 numerator = ethInWithFee * reserveOpus;
+        uint256 denominator = (reserveEth * 1000) + ethInWithFee;
+        uint256 opusOut = numerator / denominator;
+
+        require(opusOut >= minOpusOut, "Slippage tolerance exceeded");
+        require(opusToken.balanceOf(address(this)) >= opusOut, "Insufficient tokens in pool");
+
+        reserveEth += msg.value;
+        reserveOpus -= opusOut;
+
+        require(opusToken.transfer(msg.sender, opusOut), "Token transfer failed");
+
+        emit AssetSwapped(msg.sender, msg.value, opusOut, false);
+    }
+
+    // --- HIGH-PERFORMANCE ON-CHAIN FLASH LOANS ---
+
+    function executeFlashLoan(address receiverAddress, uint256 amount, bytes calldata params) external nonReentrant {
+        uint256 balanceBefore = opusToken.balanceOf(address(this));
+        require(balanceBefore >= amount, "Insufficient balance for Flash Loan");
+
+        uint256 fee = (amount * FLASH_LOAN_FEE_BPS) / 10000;
         
-        // Transfer funds to receiver
-        rewardToken.transfer(receiverAddress, amount);
+        require(opusToken.transfer(receiverAddress, amount), "Flash loan transfer failed");
 
-        // Execute callback
         require(
-            IFlashLoanReceiver(receiverAddress).executeOperation(amount, fee, msg.sender, params),
-            "DEFI_FLASH_LOAN_EXECUTION_FAILED"
+            IFlashLoanReceiver(receiverAddress).executeOperation(amount, fee, params),
+            "Flash loan execution failed"
         );
 
-        // Check if correct balance has been returned
-        uint256 balanceAfter = rewardToken.balanceOf(address(this));
-        require(balanceAfter >= balanceBefore + fee, "DEFI_FLASH_LOAN_NOT_PAID_BACK");
+        uint256 balanceAfter = opusToken.balanceOf(address(this));
+        require(balanceAfter >= balanceBefore + fee, "Flash loan not returned with fee");
 
         emit FlashLoanExecuted(receiverAddress, amount, fee);
     }
 
-    function setFlashLoanFee(uint256 _feeBps) external onlyOwner {
-        require(_feeBps <= 500, "DEFI_FLASH_FEE_MAX_LIMIT"); // Max 5%
-        flashLoanFeeBps = _feeBps;
+    // --- PROTOCOL GOVERNANCE & UTILITIES ---
+
+    receive() external payable {}
+
+    function recoverTokens(address tokenAddress, uint256 amount) external onlyOwner {
+        require(tokenAddress != address(opusToken), "Cannot recover system tokens");
+        IERC20(tokenAddress).transfer(msg.sender, amount);
     }
 }

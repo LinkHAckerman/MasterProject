@@ -1,126 +1,14 @@
--- Magnum Opus Database Schema
--- Supports users, wallets, token balances, transactions, orderbook, notifications
-
-CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";
-
--- Users table
-CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    email VARCHAR(255) NOT NULL UNIQUE,
-    password_hash VARCHAR(255) NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Wallets table
-CREATE TABLE IF NOT EXISTS wallets (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    address VARCHAR(42) NOT NULL UNIQUE,
-    network VARCHAR(30) NOT NULL,
-    label VARCHAR(100),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Token balances per wallet
-CREATE TABLE IF NOT EXISTS token_balances (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    wallet_id UUID NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
-    token_address VARCHAR(42) NOT NULL,
-    token_symbol VARCHAR(10) NOT NULL,
-    balance NUMERIC(38,18) NOT NULL DEFAULT 0,
-    last_updated TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (wallet_id, token_address)
-);
-
--- Transactions table
-CREATE TABLE IF NOT EXISTS transactions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    wallet_id UUID NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
-    tx_hash VARCHAR(66) NOT NULL UNIQUE,
-    block_number BIGINT,
-    from_address VARCHAR(42) NOT NULL,
-    to_address VARCHAR(42) NOT NULL,
-    token_address VARCHAR(42),
-    amount NUMERIC(38,18) NOT NULL,
-    gas_used BIGINT,
-    gas_price NUMERIC(38,18),
-    status VARCHAR(20) NOT NULL CHECK (status IN ('pending','confirmed','failed')),
-    timestamp TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Orders (limit/market) table
-CREATE TABLE IF NOT EXISTS orders (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    pair VARCHAR(20) NOT NULL,
-    side VARCHAR(4) NOT NULL CHECK (side IN ('buy','sell')),
-    price NUMERIC(38,18) NOT NULL,
-    amount NUMERIC(38,18) NOT NULL,
-    filled_amount NUMERIC(38,18) NOT NULL DEFAULT 0,
-    status VARCHAR(20) NOT NULL CHECK (status IN ('open','partially_filled','filled','cancelled')),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Notifications table
-CREATE TABLE IF NOT EXISTS notifications (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    type VARCHAR(30) NOT NULL,
-    message TEXT NOT NULL,
-    is_read BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Indexes for fast look‑ups
-CREATE INDEX IF NOT EXISTS idx_wallets_user_id ON wallets(user_id);
-CREATE INDEX IF NOT EXISTS idx_token_balances_wallet_id ON token_balances(wallet_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_wallet_id ON transactions(wallet_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp);
-CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
-CREATE INDEX IF NOT EXISTS idx_orders_pair_status ON orders(pair, status);
-CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read);
-
--- Trigger to update updated_at on orders
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = now();
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS trg_orders_updated_at ON orders;
-CREATE TRIGGER trg_orders_updated_at
-BEFORE UPDATE ON orders
-FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
--- Trigger to refresh token_balances on transaction insert (simplified)
-CREATE OR REPLACE FUNCTION sync_token_balance()
-RETURNS TRIGGER AS $$
-DECLARE
-    bal_id UUID;
-BEGIN
-    SELECT id INTO bal_id FROM token_balances
-    WHERE wallet_id = NEW.wallet_id AND token_address = COALESCE(NEW.token_address, '' );
-
-    IF bal_id IS NULL THEN
-        INSERT INTO token_balances (wallet_id, token_address, token_symbol, balance)
-        VALUES (NEW.wallet_id, COALESCE(NEW.token_address, ''), '' , NEW.amount);
-    ELSE
-        UPDATE token_balances
-        SET balance = balance + NEW.amount,
-            last_updated = now()
-        WHERE id = bal_id;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS trg_transactions_sync_balance ON transactions;
-CREATE TRIGGER trg_transactions_sync_balance
-AFTER INSERT ON transactions
-FOR EACH ROW EXECUTE FUNCTION sync_token_balance();
+CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), wallet_address BYTEA NOT NULL UNIQUE, email VARCHAR(255) UNIQUE, username VARCHAR(100) UNIQUE, created_at TIMESTAMPTZ DEFAULT NOW(), last_login TIMESTAMPTZ, is_active BOOLEAN DEFAULT TRUE, metadata JSONB DEFAULT '{}');
+CREATE TABLE IF NOT EXISTS wallets (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID REFERENCES users(id) ON DELETE CASCADE, chain_id VARCHAR(64) NOT NULL, public_key TEXT NOT NULL, encrypted_private_key TEXT, label VARCHAR(100), is_primary BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(user_id, chain_id));
+CREATE TABLE IF NOT EXISTS transactions (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE, tx_hash BYTEA UNIQUE, chain_id VARCHAR(64) NOT NULL, block_number BIGINT, from_address TEXT NOT NULL, to_address TEXT, value NUMERIC(78, 0), gas_price NUMERIC(78, 0), gas_used BIGINT, status VARCHAR(50) DEFAULT 'pending', type VARCHAR(50) DEFAULT 'transfer', status_meta JSONB DEFAULT '{}', timestamp TIMESTAMPTZ DEFAULT NOW(), decoded_logs JSONB DEFAULT '{}');
+CREATE TABLE IF NOT EXISTS tokens (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), contract_address BYTEA NOT NULL, symbol VARCHAR(32) NOT NULL, name VARCHAR(255) NOT NULL, decimals INTEGER NOT NULL DEFAULT 18, chain_id VARCHAR(64) NOT NULL, logo_uri TEXT, is_verified BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(contract_address, chain_id));
+CREATE TABLE IF NOT EXISTS nfts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), contract_address BYTEA NOT NULL, token_id VARCHAR(128) NOT NULL, owner_address TEXT NOT NULL, name VARCHAR(255), media_uri TEXT, chain_id VARCHAR(64) NOT NULL, metadata JSONB DEFAULT '{}', created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(contract_address, token_id, chain_id));
+CREATE TABLE IF NOT EXISTS defi_positions (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE, token_id UUID REFERENCES tokens(id) ON DELETE SET NULL, pool_address BYTEA, amount NUMERIC(78, 0), reward_token_address BYTEA, apr NUMERIC(10, 4), status VARCHAR(50) DEFAULT 'active', created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS blocks (block_number BIGINT PRIMARY KEY, chain_id VARCHAR(64) NOT NULL, hash BYTEA NOT NULL, parent_hash BYTEA, timestamp TIMESTAMPTZ NOT NULL, tx_count INTEGER DEFAULT 0, difficulty VARCHAR(128), created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(chain_id, block_number));
+CREATE TABLE IF NOT EXISTS indexer_events (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), event_type VARCHAR(100) NOT NULL, tx_id UUID REFERENCES transactions(id) ON DELETE CASCADE, address TEXT NOT NULL, data JSONB DEFAULT '{}', block_number BIGINT, created_at TIMESTAMPTZ DEFAULT NOW());
+CREATE INDEX IF NOT EXISTS idx_txs_wallet_chain ON transactions(wallet_id, chain_id);
+CREATE INDEX IF NOT EXISTS idx_txs_hash ON transactions(tx_hash);
+CREATE INDEX IF NOT EXISTS idx_nfts_owner_chain ON nfts(owner_address, chain_id);
+CREATE INDEX IF NOT EXISTS idx_tokens_chain ON tokens(chain_id, symbol);
+CREATE INDEX IF NOT EXISTS idx_defi_wallet ON defi_positions(wallet_id);
+CREATE INDEX IF NOT EXISTS idx_users_address ON users(wallet_address);
