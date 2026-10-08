@@ -3,189 +3,168 @@ package main
 import (
     "context"
     "encoding/json"
-    "fmt"
     "log"
     "net/http"
     "os"
     "os/signal"
-    "strconv"
     "sync"
     "syscall"
     "time"
-
-    "github.com/gorilla/mux"
 )
 
-type Wallet struct {
-    Address  string  `json:"address"`
-    Balance  float64 `json:"balance"`
-    Currency string  `json:"currency"`
-}
-
 type Transaction struct {
-    From      string  `json:"from"`
-    To        string  `json:"to"`
-    Amount    float64 `json:"amount"`
-    Currency  string  `json:"currency"`
-    Nonce     uint64  `json:"nonce"`
-    Signature string  `json:"signature"`
+    From    string `json:"from"`
+    To      string `json:"to"`
+    Value   string `json:"value"` // in wei as hex string
+    Data    string `json:"data,omitempty"`
+    Nonce   uint64 `json:"nonce,omitempty"`
+    Gas     uint64 `json:"gas,omitempty"`
+    GasPrice string `json:"gasPrice,omitempty"`
 }
 
-type Store struct {
+type Wallet struct {
+    Address string `json:"address"`
+    Balance string `json:"balance"` // in wei
+    Nonce   uint64 `json:"nonce"`
+}
+
+type Server struct {
     mu      sync.RWMutex
     wallets map[string]*Wallet
-    nonces  map[string]uint64
+    txPool  []Transaction
 }
 
-func NewStore() *Store {
-    return &Store{
+func NewServer() *Server {
+    return &Server{
         wallets: make(map[string]*Wallet),
-        nonces:  make(map[string]uint64),
+        txPool:  make([]Transaction, 0),
     }
 }
 
-func (s *Store) GetBalance(address string) (float64, bool) {
+// health handler
+func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte(`{"status":"ok"}`))
+}
+
+// get wallet info
+func (s *Server) walletHandler(w http.ResponseWriter, r *http.Request) {
+    address := r.URL.Path[len("/wallet/"):]
+    s.mu.RLock()
+    wallet, ok := s.wallets[address]
+    s.mu.RUnlock()
+    if !ok {
+        http.Error(w, "wallet not found", http.StatusNotFound)
+        return
+    }
+    json.NewEncoder(w).Encode(wallet)
+}
+
+// relay transaction
+func (s *Server) relayHandler(w http.ResponseWriter, r *http.Request) {
+    var tx Transaction
+    if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
+        http.Error(w, "invalid json", http.StatusBadRequest)
+        return
+    }
+    // basic validation
+    if tx.From == "" || tx.To == "" || tx.Value == "" {
+        http.Error(w, "missing required fields", http.StatusBadRequest)
+        return
+    }
+    s.mu.Lock()
+    s.txPool = append(s.txPool, tx)
+    s.mu.Unlock()
+    w.WriteHeader(http.StatusAccepted)
+    w.Write([]byte(`{"status":"queued"}`))
+}
+
+// list pending txs
+func (s *Server) pendingTxHandler(w http.ResponseWriter, r *http.Request) {
     s.mu.RLock()
     defer s.mu.RUnlock()
-    w, ok := s.wallets[address]
-    if !ok {
-        return 0, false
-    }
-    return w.Balance, true
+    json.NewEncoder(w).Encode(s.txPool)
 }
 
-func (s *Store) EnsureWallet(address string) *Wallet {
+// start background worker to simulate processing
+func (s *Server) startProcessor(ctx context.Context) {
+    ticker := time.NewTicker(2 * time.Second)
+    defer ticker.Stop()
+    for {
+        select {
+        case <-ctx.Done():
+            log.Println("processor stopped")
+            return
+        case <-ticker.C:
+            s.processBatch()
+        }
+    }
+}
+
+func (s *Server) processBatch() {
     s.mu.Lock()
-    defer s.mu.Unlock()
-    w, ok := s.wallets[address]
-    if !ok {
-        w = &Wallet{Address: address, Balance: 0, Currency: "ETH"}
-        s.wallets[address] = w
-        s.nonces[address] = 0
+    batch := s.txPool
+    s.txPool = nil
+    s.mu.Unlock()
+    if len(batch) == 0 {
+        return
     }
-    return w
-}
-
-func (s *Store) IncrementNonce(address string) uint64 {
+    log.Printf("processing %d transactions\n", len(batch))
+    // Simulate state changes
     s.mu.Lock()
-    defer s.mu.Unlock()
-    s.nonces[address]++
-    return s.nonces[address]
-}
-
-func (s *Store) GetNonce(address string) uint64 {
-    s.mu.RLock()
-    defer s.mu.RUnlock()
-    return s.nonces[address]
-}
-
-func (s *Store) ProcessTx(tx *Transaction) error {
-    if tx.From == "" || tx.To == "" {
-        return fmt.Errorf("missing from or to address")
-    }
-    if tx.Amount <= 0 {
-        return fmt.Errorf("amount must be positive")
-    }
-    fromWallet := s.EnsureWallet(tx.From)
-    toWallet := s.EnsureWallet(tx.To)
-    expectedNonce := s.GetNonce(tx.From) + 1
-    if tx.Nonce != expectedNonce {
-        return fmt.Errorf("invalid nonce: expected %d, got %d", expectedNonce, tx.Nonce)
-    }
-    if fromWallet.Balance < tx.Amount {
-        return fmt.Errorf("insufficient funds")
-    }
-    fromWallet.Balance -= tx.Amount
-    toWallet.Balance += tx.Amount
-    s.IncrementNonce(tx.From)
-    return nil
-}
-
-// Middleware for logging each request
-func loggingMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        start := time.Now()
-        next.ServeHTTP(w, r)
-        log.Printf("%s %s %s", r.Method, r.RequestURI, time.Since(start))
-    })
-}
-
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-func balanceHandler(store *Store) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        vars := mux.Vars(r)
-        address := vars["address"]
-        balance, ok := store.GetBalance(address)
-        w.Header().Set("Content-Type", "application/json")
+    for _, tx := range batch {
+        fromW, ok := s.wallets[tx.From]
         if !ok {
-            w.WriteHeader(http.StatusNotFound)
-            json.NewEncoder(w).Encode(map[string]string{"error": "wallet not found"})
-            return
+            fromW = &Wallet{Address: tx.From, Balance: "0", Nonce: 0}
+            s.wallets[tx.From] = fromW
         }
-        json.NewEncoder(w).Encode(map[string]interface{}{"address": address, "balance": balance})
+        toW, ok := s.wallets[tx.To]
+        if !ok {
+            toW = &Wallet{Address: tx.To, Balance: "0", Nonce: 0}
+            s.wallets[tx.To] = toW
+        }
+        // For demo, just increment nonce, ignore balances
+        fromW.Nonce++
+        toW.Nonce++
     }
-}
-
-func relayHandler(store *Store) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        var tx Transaction
-        if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
-            w.WriteHeader(http.StatusBadRequest)
-            json.NewEncoder(w).Encode(map[string]string{"error": "invalid JSON payload"})
-            return
-        }
-        // In a real implementation, verify signature here.
-        if err := store.ProcessTx(&tx); err != nil {
-            w.WriteHeader(http.StatusBadRequest)
-            json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-            return
-        }
-        w.WriteHeader(http.StatusAccepted)
-        json.NewEncoder(w).Encode(map[string]string{"status": "transaction relayed"})
-    }
+    s.mu.Unlock()
 }
 
 func main() {
-    port := os.Getenv("PORT")
-    if port == "" {
-        port = "8080"
-    }
-    store := NewStore()
-    // Seed some demo wallets for quick testing
-    store.EnsureWallet("0xDemoAlice").Balance = 10.0
-    store.EnsureWallet("0xDemoBob").Balance = 5.0
+    srv := NewServer()
+    // seed a demo wallet
+    srv.wallets["0xDEMO"] = &Wallet{Address: "0xDEMO", Balance: "1000000000000000000", Nonce: 0}
+    mux := http.NewServeMux()
+    mux.HandleFunc("/health", srv.healthHandler)
+    mux.HandleFunc("/wallet/", srv.walletHandler) // expects /wallet/{address}
+    mux.HandleFunc("/relay", srv.relayHandler)
+    mux.HandleFunc("/pending", srv.pendingTxHandler)
 
-    r := mux.NewRouter()
-    r.Use(loggingMiddleware)
-    r.HandleFunc("/health", healthHandler).Methods("GET")
-    r.HandleFunc("/wallet/{address}/balance", balanceHandler(store)).Methods("GET")
-    r.HandleFunc("/relay", relayHandler(store)).Methods("POST")
-
-    srv := &http.Server{
-        Addr:    ":" + port,
-        Handler: r,
+    httpServer := &http.Server{
+        Addr:    ":8080",
+        Handler: mux,
     }
 
-    // Graceful shutdown handling
+    // graceful shutdown
+    stop := make(chan os.Signal, 1)
+    signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+    ctx, cancel := context.WithCancel(context.Background())
+    go srv.startProcessor(ctx)
+
     go func() {
-        log.Printf("Server listening on port %s", port)
-        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-            log.Fatalf("listen: %s\n", err)
+        log.Println("Server listening on :8080")
+        if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            log.Fatalf("listen error: %v", err)
         }
     }()
 
-    quit := make(chan os.Signal, 1)
-    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-    <-quit
+    <-stop
     log.Println("Shutting down server...")
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
-    if err := srv.Shutdown(ctx); err != nil {
-        log.Fatalf("Server forced to shutdown: %v", err)
+    cancel()
+    ctxShutdown, _ := context.WithTimeout(context.Background(), 5*time.Second)
+    if err := httpServer.Shutdown(ctxShutdown); err != nil {
+        log.Fatalf("Shutdown error: %v", err)
     }
-    log.Println("Server exiting")
+    log.Println("Server gracefully stopped")
 }

@@ -1,262 +1,186 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Net.Http;
-using System.Net.Http.Json;
-using System.Text.Json;
 
-namespace MagnumOpus.Core
+namespace MagnumOpus.Backend.Core
 {
-    /// <summary>
-    /// High-performance transaction processor for the Magnum Opus platform.
-    /// Handles validation, signing simulation, and relay of blockchain transactions.
-    /// </summary>
-    public class TransactionProcessor : IDisposable
+    public class TransactionProcessor
     {
-        private readonly HttpClient _httpClient;
-        private readonly ConcurrentQueue<Transaction> _pendingQueue = new ConcurrentQueue<Transaction>();
-        private readonly SemaphoreSlim _processingLock = new SemaphoreSlim(1, 1);
-        private readonly ILogger _logger;
-        private readonly IBlockchainClient _blockchainClient;
-        private CancellationTokenSource _cts = new CancellationTokenSource();
-        private bool _disposed = false;
+        private readonly Dictionary<string, BigInteger> _balances = new Dictionary<string, BigInteger>();
+        private readonly List<Transaction> _pendingTransactions = new List<Transaction>();
+        private readonly List<Block> _blockchain = new List<Block>();
+        private readonly int _difficulty = 4;
+        private readonly object _lock = new object();
 
-        public event EventHandler<TransactionProcessedEventArgs> TransactionProcessed;
-        public event EventHandler<TransactionFailedEventArgs> TransactionFailed;
-
-        public TransactionProcessor(ILogger logger, IBlockchainClient blockchainClient)
+        public class Transaction
         {
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _blockchainClient = blockchainClient ?? throw new ArgumentNullException(nameof(blockchainClient));
-            _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-            
-            // Start background processing loop
-            Task.Run(ProcessTransactionsAsync);
+            public string FromAddress { get; set; }
+            public string ToAddress { get; set; }
+            public BigInteger Amount { get; set; }
+            public string Signature { get; set; }
+            public string TransactionId { get; set; }
+
+            public Transaction(string from, string to, BigInteger amount)
+            {
+                FromAddress = from;
+                ToAddress = to;
+                Amount = amount;
+                TransactionId = ComputeTransactionId();
+            }
+
+            private string ComputeTransactionId()
+            {
+                using (SHA256 sha256 = SHA256.Create())
+                {
+                    byte[] hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes($"{FromAddress}{ToAddress}{Amount}"));
+                    return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+                }
+            }
         }
 
-        /// <summary>
-        /// Submits a transaction for processing.
-        /// </summary>
-        public async Task<bool> SubmitTransactionAsync(Transaction transaction, CancellationToken cancellationToken = default)
+        public class Block
         {
-            if (transaction == null) throw new ArgumentNullException(nameof(transaction));
-            if (string.IsNullOrEmpty(transaction.From)) throw new ArgumentException("Sender address is required.");
-            if (string.IsNullOrEmpty(transaction.To)) throw new ArgumentException("Recipient address is required.");
-            if (transaction.Value < 0) throw new ArgumentException("Transaction value cannot be negative.");
+            public int Index { get; set; }
+            public DateTime Timestamp { get; set; }
+            public List<Transaction> Transactions { get; set; }
+            public string PreviousHash { get; set; }
+            public string Hash { get; set; }
+            public int Nonce { get; set; }
 
-            // Validate nonce
-            long currentNonce = await _blockchainClient.GetNonceAsync(transaction.From, cancellationToken);
-            if (transaction.Nonce != currentNonce)
+            public Block(int index, List<Transaction> transactions, string previousHash)
             {
-                _logger.LogWarning($"Nonce mismatch for {transaction.From}. Expected {currentNonce}, got {transaction.Nonce}.");
+                Index = index;
+                Timestamp = DateTime.UtcNow;
+                Transactions = transactions;
+                PreviousHash = previousHash;
+                Hash = ComputeHash();
+            }
+
+            public string ComputeHash()
+            {
+                using (SHA256 sha256 = SHA256.Create())
+                {
+                    string transactionData = string.Join("", Transactions.Select(t => t.TransactionId));
+                    byte[] hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes($"{Index}{Timestamp}{transactionData}{PreviousHash}{Nonce}"));
+                    return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+                }
+            }
+
+            public void MineBlock(int difficulty)
+            {
+                string target = new string('0', difficulty);
+                while (Hash.Substring(0, difficulty) != target)
+                {
+                    Nonce++;
+                    Hash = ComputeHash();
+                }
+            }
+        }
+
+        public void AddTransaction(Transaction transaction)
+        {
+            lock (_lock)
+            {
+                if (!IsValidTransaction(transaction))
+                {
+                    throw new InvalidOperationException("Invalid transaction");
+                }
+
+                _pendingTransactions.Add(transaction);
+            }
+        }
+
+        public void MinePendingTransactions(string minerAddress)
+        {
+            lock (_lock)
+            {
+                if (_pendingTransactions.Count == 0)
+                {
+                    return;
+                }
+
+                Block newBlock = new Block(_blockchain.Count, _pendingTransactions, GetLatestBlock()?.Hash ?? "0")
+                {
+                    Nonce = 0
+                };
+
+                newBlock.MineBlock(_difficulty);
+
+                _blockchain.Add(newBlock);
+                _pendingTransactions.Clear();
+
+                // Reward the miner
+                Transaction rewardTransaction = new Transaction("0", minerAddress, 10);
+                _pendingTransactions.Add(rewardTransaction);
+            }
+        }
+
+        public bool IsValidTransaction(Transaction transaction)
+        {
+            if (transaction.FromAddress == null || transaction.ToAddress == null || transaction.Amount <= 0)
+            {
                 return false;
             }
 
-            // Estimate gas
-            try
+            if (!_balances.ContainsKey(transaction.FromAddress) || _balances[transaction.FromAddress] < transaction.Amount)
             {
-                var gasEstimate = await _blockchainClient.EstimateGasAsync(transaction, cancellationToken);
-                transaction.GasLimit = gasEstimate;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"Failed to estimate gas for transaction {transaction.Id}");
                 return false;
             }
-
-            // Sign transaction (simulated)
-            transaction.Signature = SignTransaction(transaction);
-            transaction.Timestamp = DateTime.UtcNow;
-
-            _pendingQueue.Enqueue(transaction);
-            _logger.LogInformation($"Transaction {transaction.Id} queued for processing.");
 
             return true;
         }
 
-        /// <summary>
-        /// Background loop to process queued transactions.
-        /// </summary>
-        private async Task ProcessTransactionsAsync()
+        public bool IsChainValid()
         {
-            while (!_cts.IsCancellationRequested)
+            for (int i = 1; i < _blockchain.Count; i++)
             {
-                try
+                Block currentBlock = _blockchain[i];
+                Block previousBlock = _blockchain[i - 1];
+
+                if (currentBlock.Hash != currentBlock.ComputeHash())
                 {
-                    if (_pendingQueue.TryDequeue(out var transaction))
-                    {
-                        await ProcessSingleTransactionAsync(transaction);
-                    }
-                    else
-                    {
-                        await Task.Delay(100, _cts.Token);
-                    }
+                    return false;
                 }
-                catch (OperationCanceledException)
+
+                if (currentBlock.PreviousHash != previousBlock.Hash)
                 {
-                    break;
+                    return false;
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error in transaction processing loop.");
-                    await Task.Delay(1000, _cts.Token);
-                }
+            }
+
+            return true;
+        }
+
+        public Block GetLatestBlock()
+        {
+            return _blockchain.LastOrDefault();
+        }
+
+        public BigInteger GetBalance(string address)
+        {
+            lock (_lock)
+            {
+                return _balances.ContainsKey(address) ? _balances[address] : 0;
             }
         }
 
-        private async Task ProcessSingleTransactionAsync(Transaction transaction)
+        public void UpdateBalance(string address, BigInteger amount)
         {
-            await _processingLock.WaitAsync();
-            try
+            lock (_lock)
             {
-                _logger.LogInformation($"Processing transaction {transaction.Id} from {transaction.From} to {transaction.To}.");
-
-                // Simulate execution
-                var result = await _blockchainClient.SendRawTransactionAsync(transaction, _cts.Token);
-
-                if (result.Success)
+                if (_balances.ContainsKey(address))
                 {
-                    _logger.LogInformation($"Transaction {transaction.Id} confirmed with hash {result.TransactionHash}.");
-                    TransactionProcessed?.Invoke(this, new TransactionProcessedEventArgs(transaction, result.TransactionHash));
+                    _balances[address] += amount;
                 }
                 else
                 {
-                    _logger.LogWarning($"Transaction {transaction.Id} failed: {result.Error}.");
-                    TransactionFailed?.Invoke(this, new TransactionFailedEventArgs(transaction, result.Error));
+                    _balances[address] = amount;
                 }
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"Exception processing transaction {transaction.Id}.");
-                TransactionFailed?.Invoke(this, new TransactionFailedEventArgs(transaction, ex.Message));
-            }
-            finally
-            {
-                _processingLock.Release();
-            }
         }
-
-        private string SignTransaction(Transaction transaction)
-        {
-            // Simulated ECDSA signing
-            var payload = $"{transaction.From}:{transaction.To}:{transaction.Value}:{transaction.Nonce}:{transaction.GasLimit}";
-            using (var sha256 = SHA256.Create())
-            {
-                var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(payload));
-                return Convert.ToBase64String(hash);
-            }
-        }
-
-        public void Dispose()
-        {
-            if (!_disposed)
-            {
-                _cts.Cancel();
-                _cts.Dispose();
-                _httpClient.Dispose();
-                _processingLock.Dispose();
-                _disposed = true;
-            }
-        }
-    }
-
-    public class Transaction
-    {
-        public string Id { get; set; } = Guid.NewGuid().ToString();
-        public string From { get; set; }
-        public string To { get; set; }
-        public decimal Value { get; set; }
-        public long Nonce { get; set; }
-        public long GasLimit { get; set; }
-        public decimal GasPrice { get; set; }
-        public string Data { get; set; } = string.Empty;
-        public string Signature { get; set; }
-        public DateTime Timestamp { get; set; }
-    }
-
-    public class TransactionProcessedEventArgs : EventArgs
-    {
-        public Transaction Transaction { get; }
-        public string TransactionHash { get; }
-
-        public TransactionProcessedEventArgs(Transaction transaction, string transactionHash)
-        {
-            Transaction = transaction;
-            TransactionHash = transactionHash;
-        }
-    }
-
-    public class TransactionFailedEventArgs : EventArgs
-    {
-        public Transaction Transaction { get; }
-        public string Error { get; }
-
-        public TransactionFailedEventArgs(Transaction transaction, string error)
-        {
-            Transaction = transaction;
-            Error = error;
-        }
-    }
-
-    public interface ILogger
-    {
-        void LogInformation(string message);
-        void LogWarning(string message);
-        void LogError(Exception ex, string message);
-    }
-
-    public interface IBlockchainClient
-    {
-        Task<long> GetNonceAsync(string address, CancellationToken cancellationToken);
-        Task<long> EstimateGasAsync(Transaction transaction, CancellationToken cancellationToken);
-        Task<TransactionResult> SendRawTransactionAsync(Transaction transaction, CancellationToken cancellationToken);
-    }
-
-    public class TransactionResult
-    {
-        public bool Success { get; set; }
-        public string TransactionHash { get; set; }
-        public string Error { get; set; }
-    }
-
-    // Mock implementation for testing
-    public class MockBlockchainClient : IBlockchainClient
-    {
-        private readonly Random _random = new Random();
-
-        public Task<long> GetNonceAsync(string address, CancellationToken cancellationToken)
-        {
-            return Task.FromResult((long)_random.Next(0, 1000));
-        }
-
-        public Task<long> EstimateGasAsync(Transaction transaction, CancellationToken cancellationToken)
-        {
-            return Task.FromResult(21000L + _random.Next(0, 10000));
-        }
-
-        public Task<TransactionResult> SendRawTransactionAsync(Transaction transaction, CancellationToken cancellationToken)
-        {
-            var success = _random.NextDouble() > 0.1; // 90% success rate
-            var result = new TransactionResult
-            {
-                Success = success,
-                TransactionHash = success ? $"0x{Guid.NewGuid():N}" : null,
-                Error = success ? null : "Insufficient funds"
-            };
-            return Task.FromResult(result);
-        }
-    }
-
-    // Simple console logger
-    public class ConsoleLogger : ILogger
-    {
-        public void LogInformation(string message) => Console.WriteLine($"[INFO] {message}");
-        public void LogWarning(string message) => Console.WriteLine($"[WARN] {message}");
-        public void LogError(Exception ex, string message) => Console.WriteLine($"[ERROR] {message}: {ex.Message}");
     }
 }
