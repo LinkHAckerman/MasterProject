@@ -4,7 +4,7 @@ Thanks for your interest in contributing! Magnum Opus is a crypto/Web3 multi-lan
 
 ## Before you contribute: the CLA
 
-This project is released under the [MIT License](LICENSE.txt), but contributions are accepted under the terms of the [Contributor License Agreement](CLA.md).
+This project is released under the [MIT License](LICENSE), but contributions are accepted under the terms of the [Contributor License Agreement](CLA.md).
 
 **Please read the CLA before opening a pull request.** In short, by submitting a contribution you agree that:
 
@@ -46,7 +46,7 @@ The Maintainer will review your pull request and may ask for changes. Contributi
 
 ## License
 
-Unless stated otherwise, the Project is distributed under the [MIT License](LICENSE.txt). Your contribution is accepted under the terms of the [CLA](CLA.md), which allows the Maintainer to distribute and, if needed, relicense it.
+Unless stated otherwise, the Project is distributed under the [MIT License](LICENSE). Your contribution is accepted under the terms of the [CLA](CLA.md), which allows the Maintainer to distribute and, if needed, relicense it.
 
 ## Questions
 
