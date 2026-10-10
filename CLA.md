@@ -16,18 +16,23 @@ following terms:
    contributions. This agreement does not transfer ownership — it grants the
    Maintainer the rights above *alongside* your own continuing rights.
 
-3. **Right to Relicense.** You understand and agree that the Maintainer may,
+3. **Contributions Are Also Licensed Under MIT.** Your contribution will be
+   distributed as part of the Project under the Project's current license,
+   the [MIT License](LICENSE). This is in addition to the rights you grant
+   the Maintainer in this agreement.
+
+4. **Right to Relicense.** You understand and agree that the Maintainer may,
    at their sole discretion, relicense the Project (including your
    contribution) under a different license in the future — including a more
    restrictive or commercial license — without needing further permission
    from you.
 
-4. **Original Work.** You confirm that each contribution is your own
+5. **Original Work.** You confirm that each contribution is your own
    original work, or that you otherwise have the right to submit it under
    these terms (for example, you have permission from your employer, if
    applicable).
 
-5. **No Warranty.** Your contribution is provided "as is," without warranty
+6. **No Warranty.** Your contribution is provided "as is," without warranty
    of any kind.
 
 By opening a pull request against this repository, you confirm that you have
