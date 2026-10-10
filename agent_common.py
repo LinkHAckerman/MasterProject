@@ -9,12 +9,14 @@ Each provider script only needs to define:
 
 Everything else (state file, manifest truncation, prompt text, JSON
 extraction, retry loop, collision handling, README cooldown, escaping
-repair) lives here once.
+repair, and stalest-first file rotation) lives here once.
 """
 
 import os
 import json
 import time
+import random
+import subprocess
 import requests
 from datetime import date
 
@@ -37,8 +39,17 @@ ALL_PROJECT_FILES = [
     "README.md"
 ]
 
-MAX_CHARS_PER_FILE = 3000
+# Prompt-size limits. The file an agent is ASSIGNED gets a big window so it
+# can see (nearly) all of it before rewriting; every other file only gets a
+# short preview for context.
+MAX_CHARS_FOCUS_FILE = 5000
+MAX_CHARS_OTHER_FILE = 350
 MAX_TOTAL_MANIFEST_CHARS = 12000
+
+# How many files each agent is offered. 1 = strict rotation: the stalest
+# unclaimed file is the agent's assignment. Raise to 2-3 to give agents a
+# little choice (they still only ever see the stalest N).
+FILES_OFFERED_PER_AGENT = 1
 
 PROJECT_GOAL = """
 The Magnum Opus: The ultimate, all-encompassing platform for everything Crypto, NFTs, Web3, DeFi, and Blockchain.
@@ -52,6 +63,10 @@ It must be the best thing ever made, showcasing full-stack mastery across multip
 - ON-CHAIN PROGRAMS (Rust): High-performance, memory-safe on-chain program logic (OnChainProgram.rs).
 - SCRIPTING/GLUE LAYER (Ruby): Lightweight wallet balance and exchange-rate service (WalletService.rb).
 """
+
+# The file(s) this agent is allowed to pick. Set by get_available_files()
+# and enforced by pick_unclaimed_file().
+_current_assignment = []
 
 
 class GenerationFailed(Exception):
@@ -103,34 +118,85 @@ def readme_is_due():
     return (date.today() - last_date).days >= README_MIN_DAYS_BETWEEN_UPDATES
 
 
+_shallow_warning_printed = False
+
+
+def _warn_if_shallow_clone():
+    """Last-modified dates come from git history. In a shallow clone (the
+    actions/checkout default) every file looks like it was touched by the
+    single fetched commit, so rotation silently degrades to random."""
+    global _shallow_warning_printed
+    if _shallow_warning_printed:
+        return
+    _shallow_warning_printed = True
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
+            capture_output=True, text=True, timeout=30
+        ).stdout.strip()
+        if out == "true":
+            print("WARNING: shallow git clone detected - file staleness cannot be "
+                  "determined. Add 'fetch-depth: 0' to the checkout step.")
+    except Exception:
+        pass
+
+
+def get_last_modified_epoch(path):
+    """Unix time of the last commit touching `path`; 0 if the file has no
+    history (missing or brand new/uncommitted) so it sorts as 'stalest'."""
+    try:
+        out = subprocess.run(
+            ["git", "log", "-1", "--format=%ct", "--", path],
+            capture_output=True, text=True, timeout=30
+        ).stdout.strip()
+        return int(out) if out else 0
+    except Exception:
+        return 0
+
+
 def get_available_files(claimed_files):
-    """Files not yet claimed today, with README.md filtered out unless its
-    cooldown has elapsed - unless that filtering would leave nothing to
-    pick, in which case README is allowed back in rather than starving
-    every agent that day."""
-    base_available = [f for f in ALL_PROJECT_FILES if f not in claimed_files]
-    if not base_available:
-        base_available = list(ALL_PROJECT_FILES)
+    """Returns the stalest unclaimed file(s) - the agent's assignment.
 
-    if "README.md" in base_available and not readme_is_due():
-        filtered = [f for f in base_available if f != "README.md"]
+    - Files already claimed in this run are excluded.
+    - README.md is excluded while on cooldown (unless nothing else is left).
+    - Ordering is by last git commit time, oldest first (never-committed or
+      missing files first), with random tie-breaking.
+    """
+    global _current_assignment
+    _warn_if_shallow_clone()
+
+    candidates = [f for f in ALL_PROJECT_FILES if f not in claimed_files]
+    if not candidates:
+        candidates = list(ALL_PROJECT_FILES)
+
+    if "README.md" in candidates and not readme_is_due():
+        filtered = [f for f in candidates if f != "README.md"]
         if filtered:
-            return filtered
+            candidates = filtered
 
-    return base_available
+    random.shuffle(candidates)  # random tie-break; sort below is stable
+    candidates.sort(key=get_last_modified_epoch)
+
+    _current_assignment = candidates[:FILES_OFFERED_PER_AGENT]
+    print(f"Assigned file(s) by staleness: {_current_assignment}")
+    return list(_current_assignment)
 
 
 def build_manifest():
-    """Reads every existing project file, truncating per-file and overall
-    so the prompt stays within free-tier token limits even as the repo grows."""
+    """Reads every existing project file. The assigned file gets a large
+    window; the rest get a short preview. Total size is capped so the prompt
+    stays within free-tier token limits."""
+    focus = set(_current_assignment)
     repo_manifest = {}
     for file_name in ALL_PROJECT_FILES:
-        if os.path.exists(file_name):
-            with open(file_name, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
-                if len(content) > MAX_CHARS_PER_FILE:
-                    content = content[:MAX_CHARS_PER_FILE] + "\n# ...[truncated for prompt size]..."
-                repo_manifest[file_name] = content
+        if not os.path.exists(file_name):
+            continue
+        with open(file_name, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        limit = MAX_CHARS_FOCUS_FILE if file_name in focus else MAX_CHARS_OTHER_FILE
+        if len(content) > limit:
+            content = content[:limit] + "\n# ...[truncated for prompt size]..."
+        repo_manifest[file_name] = content
 
     manifest_json = json.dumps(repo_manifest, indent=2)
     if len(manifest_json) > MAX_TOTAL_MANIFEST_CHARS:
@@ -144,16 +210,19 @@ def build_prompt(agent_label, claimed_files, available_files, manifest_json, rep
 You are {agent_label}, working alongside other AI colleagues on:
 {PROJECT_GOAL}
 
-Here is a snapshot of the current codebase across different languages:
+Here is a snapshot of the current codebase across different languages. The file
+you are assigned has the longest preview; the others are short previews for context:
 ---
 {manifest_json if repo_manifest else "# The architecture is blank. Initialize the structural foundations today."}
 ---
 
 Colleagues have already claimed today: {claimed_files if claimed_files else "nothing yet"}.
-You MUST choose a DIFFERENT file from this list: {available_files}
+Your assigned file today (it has gone the longest without an update): {available_files}
 
 Instructions:
-1. Choose ONE file from that list to drastically improve or create today.
+1. Work on the assigned file above and no other. If it is truncated in the snapshot,
+   keep its existing structure and improve/extend it - do not discard what is there.
+   If it does not exist yet, create it.
 2. Respond with ONLY a strict JSON object: {{"filename": "...", "content": "...complete updated file content..."}}
 3. No markdown code fences. No commentary. Just the raw JSON object.
 4. Inside the "content" string, use real single-backslash JSON escapes
@@ -301,18 +370,23 @@ def try_generate(model_names, call_fn, extract_text_fn):
 
 def pick_unclaimed_file(model_names, call_fn, extract_text_fn, claimed_files, max_pick_attempts=3):
     """
-    Full generation flow: ask for a file+content pick (trying every model in
-    the list, per try_generate's rules, until one produces usable text), and
-    if it picks something already claimed today (or the JSON doesn't parse),
-    re-ask up to max_pick_attempts times before giving up gracefully.
+    Full generation flow: ask for the assigned file's new content (trying
+    every model in the list, per try_generate's rules, until one produces
+    usable text). If the model returns a different file than assigned (or
+    one already claimed today, or the JSON doesn't parse), re-ask up to
+    max_pick_attempts times before giving up gracefully.
 
     Returns (target_file, file_content) on success, or (None, None) if it
-    never got a clean, unclaimed pick after all attempts (not an error -
-    the caller should exit(0) in this case).
+    never got a clean pick after all attempts (not an error - the caller
+    should exit(0) in this case).
 
     Raises GenerationFailed if every model failed to produce usable content
     on every attempt (real outage/misconfiguration - caller should exit(1)).
     """
+    allowed = list(_current_assignment) if _current_assignment else [
+        f for f in ALL_PROJECT_FILES if f not in claimed_files
+    ]
+
     for pick_attempt in range(1, max_pick_attempts + 1):
         raw_text, model = try_generate(model_names, call_fn, extract_text_fn)
 
@@ -327,13 +401,14 @@ def pick_unclaimed_file(model_names, call_fn, extract_text_fn, claimed_files, ma
             print(f"Attempt {pick_attempt}/{max_pick_attempts}: could not parse model output as JSON ({e}). Retrying.")
             continue
 
-        if candidate_file not in claimed_files:
+        if candidate_file in allowed and candidate_file not in claimed_files:
             return candidate_file, candidate_content
 
         print(f"Attempt {pick_attempt}/{max_pick_attempts}: picked '{candidate_file}', "
-              f"already claimed today. Asking again for a different file.")
+              f"but the assignment is {allowed} (claimed today: {claimed_files}). "
+              f"Asking again for the assigned file.")
 
-    print(f"Could not get an unclaimed file pick after {max_pick_attempts} attempts. Skipping this agent's turn.")
+    print(f"Could not get the assigned file after {max_pick_attempts} attempts. Skipping this agent's turn.")
     return None, None
 
 
