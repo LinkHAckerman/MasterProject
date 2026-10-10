@@ -166,7 +166,7 @@ Run all tests with the convenience script:
 
 ## 🤝 Contributing
 We welcome contributions!
-Contributors: see CONTRIBUTING.md and CLA.md.
+Contributors: see [CONTRIBUTING](CONTRIBUTING.md) and [Contributor License Agreement](CLA.md).
 
 Please follow these steps:
 1. Fork the repo and create a feature branch.
