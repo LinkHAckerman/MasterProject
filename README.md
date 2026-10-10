@@ -165,7 +165,10 @@ Run all tests with the convenience script:
 ---
 
 ## 🤝 Contributing
-We welcome contributions! Please follow these steps:
+We welcome contributions!
+Contributors: see CONTRIBUTING.md and CLA.md.
+
+Please follow these steps:
 1. Fork the repo and create a feature branch.
 2. Ensure **all** tests pass locally.
 3. Add or update documentation where appropriate.
