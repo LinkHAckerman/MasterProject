@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout Repository Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history, so agents can rank files by last-modified date
 
       - name: Reset Daily Agent State
         run: rm -f .agent_state.json
@@ -27,7 +29,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
-          cache: false
+          cache: false   # no go.sum in the repo, so skip the cache warning
 
       - name: Install Necessary Web Libraries
         run: pip install requests
