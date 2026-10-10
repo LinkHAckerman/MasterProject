@@ -47,6 +47,24 @@ module MagnumOpus
       { success: true, from:, to:, amount:, usd_equivalent: usd_from.round(2), converted_amount: amount_to }
     end
     
+    # Fetch token balance for a given contract address
+    def get_token_balance(contract_address)
+      raise ArgumentError, 'Contract address is required' if contract_address.nil? || contract_address.empty?
+
+      # Mock implementation - replace with actual blockchain API call
+      { success: true, contract_address:, balance: '1000.00', symbol: 'MAG' }
+    end
+    
+    # Fetch transaction history for the wallet
+    def get_transaction_history
+      # Mock implementation - replace with actual blockchain API call
+      transactions = [
+        { tx_hash: '0x123...', amount: '1.5', symbol: 'ETH', timestamp: Time.now.to_i, status: 'confirmed' },
+        { tx_hash: '0x456...', amount: '1000.0', symbol: 'MAG', timestamp: Time.now.to_i - 3600, status: 'confirmed' }
+      ]
+      { success: true, transactions: }
+    end
+    
     private
     
     def fetch_eth_price

@@ -14,6 +14,8 @@
 #include <atomic>
 #include <cstring>
 #include <mutex>
+#include <optional>
+#include <cassert>
 
 namespace MagnumOpus {
 
@@ -143,239 +145,341 @@ namespace MagnumOpus {
 
     class MatchingEngine {
     private:
-        std::map<double, std::vector<Order>, std::greater<double>> buyOrders;
-        std::map<double, std::vector<Order>, std::less<double>> sellOrders;
-        std::unordered_map<uint64_t, Order> activeOrders;
-        uint64_t nextOrderId = 1;
-        std::mutex engineMutex;
+        std::map<double, std::vector<Order>, std::greater<double>> bids;
+        std::map<double, std::vector<Order>, std::less<double>> asks;
+        std::unordered_map<uint64_t, Order> orderLookup;
+        std::vector<MatchResult> tradeHistory;
+        std::mutex bookMutex;
+        std::atomic<uint64_t> nextOrderId{1};
+
+        uint64_t GetCurrentTimeNs() const {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+        }
 
     public:
-        std::vector<MatchResult> SubmitOrder(const std::string& trader, OrderSide side, OrderType type, double price, double quantity) {
-            std::lock_guard<std::mutex> lock(engineMutex);
-            std::vector<MatchResult> matches;
-            
-            uint64_t orderId = nextOrderId++;
-            Order order{ orderId, trader, price, quantity, side, type, static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count()) };
+        MatchingEngine() = default;
+
+        uint64_t SubmitOrder(const std::string& trader, OrderSide side, OrderType type, double price, double quantity, std::vector<MatchResult>& executions) {
+            std::lock_guard<std::mutex> lock(bookMutex);
+            uint64_t orderId = nextOrderId.fetch_add(1);
+            uint64_t ts = GetCurrentTimeNs();
+            Order order{orderId, trader, price, quantity, side, type, ts};
 
             if (side == OrderSide::BUY) {
-                while (order.quantity > 0 && !sellOrders.empty()) {
-                    auto bestSellIt = sellOrders.begin();
-                    if (type == OrderType::LIMIT && bestSellIt->first > order.price) break;
-
-                    auto& orderList = bestSellIt->second;
-                    while (!orderList.empty() && order.quantity > 0) {
-                        auto& bestSell = orderList.front();
-                        double fillQty = std::min(order.quantity, bestSell.quantity);
-                        double executionPrice = bestSell.price;
-
-                        order.quantity -= fillQty;
-                        bestSell.quantity -= fillQty;
-
-                        matches.push_back({
-                            order.id,
-                            bestSell.id,
-                            executionPrice,
-                            fillQty,
-                            static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count())
-                        });
-
-                        if (bestSell.quantity <= 0) {
-                            activeOrders.erase(bestSell.id);
-                            orderList.erase(orderList.begin());
-                        }
-                    }
-
-                    if (orderList.empty()) {
-                        sellOrders.erase(bestSellIt);
-                    }
-                }
-
-                if (order.quantity > 0 && type == OrderType::LIMIT) {
-                    buyOrders[order.price].push_back(order);
-                    activeOrders[order.id] = order;
-                }
+                MatchBuyOrder(order, executions);
             } else {
-                while (order.quantity > 0 && !buyOrders.empty()) {
-                    auto bestBuyIt = buyOrders.begin();
-                    if (type == OrderType::LIMIT && bestBuyIt->first < order.price) break;
-
-                    auto& orderList = bestBuyIt->second;
-                    while (!orderList.empty() && order.quantity > 0) {
-                        auto& bestBuy = orderList.front();
-                        double fillQty = std::min(order.quantity, bestBuy.quantity);
-                        double executionPrice = bestBuy.price;
-
-                        order.quantity -= fillQty;
-                        bestBuy.quantity -= fillQty;
-
-                        matches.push_back({
-                            bestBuy.id,
-                            order.id,
-                            executionPrice,
-                            fillQty,
-                            static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count())
-                        });
-
-                        if (bestBuy.quantity <= 0) {
-                            activeOrders.erase(bestBuy.id);
-                            orderList.erase(orderList.begin());
-                        }
-                    }
-
-                    if (orderList.empty()) {
-                        buyOrders.erase(bestBuyIt);
-                    }
-                }
-
-                if (order.quantity > 0 && type == OrderType::LIMIT) {
-                    sellOrders[order.price].push_back(order);
-                    activeOrders[order.id] = order;
-                }
+                MatchSellOrder(order, executions);
             }
-
-            return matches;
+            return orderId;
         }
 
         bool CancelOrder(uint64_t orderId) {
-            std::lock_guard<std::mutex> lock(engineMutex);
-            auto it = activeOrders.find(orderId);
-            if (it == activeOrders.end()) return false;
+            std::lock_guard<std::mutex> lock(bookMutex);
+            auto it = orderLookup.find(orderId);
+            if (it == orderLookup.end()) return false;
 
-            const auto& order = it->second;
-            if (order.side == OrderSide::BUY) {
-                auto bookIt = buyOrders.find(order.price);
-                if (bookIt != buyOrders.end()) {
-                    auto& list = bookIt->second;
-                    list.erase(std::remove_if(list.begin(), list.end(), [orderId](const Order& o) { return o.id == orderId; }), list.end());
-                    if (list.empty()) buyOrders.erase(bookIt);
+            Order o = it->second;
+            orderLookup.erase(it);
+
+            if (o.side == OrderSide::BUY) {
+                auto bIt = bids.find(o.price);
+                if (bIt != bids.end()) {
+                    auto& queue = bIt->second;
+                    queue.erase(std::remove_if(queue.begin(), queue.end(), [orderId](const Order& ord) { return ord.id == orderId; }), queue.end());
+                    if (queue.empty()) bids.erase(bIt);
                 }
             } else {
-                auto bookIt = sellOrders.find(order.price);
-                if (bookIt != sellOrders.end()) {
-                    auto& list = bookIt->second;
-                    list.erase(std::remove_if(list.begin(), list.end(), [orderId](const Order& o) { return o.id == orderId; }), list.end());
-                    if (list.empty()) sellOrders.erase(bookIt);
+                auto aIt = asks.find(o.price);
+                if (aIt != asks.end()) {
+                    auto& queue = aIt->second;
+                    queue.erase(std::remove_if(queue.begin(), queue.end(), [orderId](const Order& ord) { return ord.id == orderId; }), queue.end());
+                    if (queue.empty()) asks.erase(aIt);
                 }
             }
-
-            activeOrders.erase(it);
             return true;
         }
 
-        std::string GetDepthSnapshot(size_t maxLevels = 5) {
-            std::lock_guard<std::mutex> lock(engineMutex);
-            std::stringstream ss;
-            ss << "{\"bids\":[";
+        void GetDepth(std::vector<std::pair<double, double>>& topBids, std::vector<std::pair<double, double>>& topAsks, size_t depth = 10) {
+            std::lock_guard<std::mutex> lock(bookMutex);
+            topBids.clear();
+            topAsks.clear();
+
             size_t count = 0;
-            for (auto it = buyOrders.begin(); it != buyOrders.end() && count < maxLevels; ++it, ++count) {
+            for (const auto& [price, queue] : bids) {
+                if (count++ >= depth) break;
                 double totalQty = 0;
-                for (const auto& o : it->second) totalQty += o.quantity;
-                if (count > 0) ss << ",";
-                ss << "{\"price\":" << it->first << ",\"quantity\":" << totalQty << "}";
+                for (const auto& ord : queue) totalQty += ord.quantity;
+                topBids.emplace_back(price, totalQty);
             }
-            ss << "],\"asks\":[";
+
             count = 0;
-            for (auto it = sellOrders.begin(); it != sellOrders.end() && count < maxLevels; ++it, ++count) {
+            for (const auto& [price, queue] : asks) {
+                if (count++ >= depth) break;
                 double totalQty = 0;
-                for (const auto& o : it->second) totalQty += o.quantity;
-                if (count > 0) ss << ",";
-                ss << "{\"price\":" << it->first << ",\"quantity\":" << totalQty << "}";
+                for (const auto& ord : queue) totalQty += ord.quantity;
+                topAsks.emplace_back(price, totalQty);
             }
-            ss << "]}";
-            return ss.str();
+        }
+
+        const std::vector<MatchResult>& GetTradeHistory() const {
+            return tradeHistory;
+        }
+
+    private:
+        void MatchBuyOrder(Order& buyOrder, std::vector<MatchResult>& executions) {
+            while (buyOrder.quantity > 0.00000001 && !asks.empty()) {
+                auto bestAskIt = asks.begin();
+                double askPrice = bestAskIt->first;
+
+                if (buyOrder.type == OrderType::LIMIT && buyOrder.price < askPrice) {
+                    break;
+                }
+
+                auto& askQueue = bestAskIt->second;
+                while (!askQueue.empty() && buyOrder.quantity > 0.00000001) {
+                    Order& sellOrder = askQueue.front();
+                    double matchQty = std::min(buyOrder.quantity, sellOrder.quantity);
+                    double execPrice = sellOrder.price;
+
+                    MatchResult mr{
+                        buyOrder.id,
+                        sellOrder.id,
+                        execPrice,
+                        matchQty,
+                        GetCurrentTimeNs()
+                    };
+                    executions.push_back(mr);
+                    tradeHistory.push_back(mr);
+
+                    buyOrder.quantity -= matchQty;
+                    sellOrder.quantity -= matchQty;
+
+                    if (sellOrder.quantity <= 0.00000001) {
+                        orderLookup.erase(sellOrder.id);
+                        askQueue.erase(askQueue.begin());
+                    } else {
+                        orderLookup[sellOrder.id] = sellOrder;
+                    }
+                }
+
+                if (askQueue.empty()) {
+                    asks.erase(bestAskIt);
+                }
+            }
+
+            if (buyOrder.type == OrderType::LIMIT && buyOrder.quantity > 0.00000001) {
+                bids[buyOrder.price].push_back(buyOrder);
+                orderLookup[buyOrder.id] = buyOrder;
+            }
+        }
+
+        void MatchSellOrder(Order& sellOrder, std::vector<MatchResult>& executions) {
+            while (sellOrder.quantity > 0.00000001 && !bids.empty()) {
+                auto bestBidIt = bids.begin();
+                double bidPrice = bestBidIt->first;
+
+                if (sellOrder.type == OrderType::LIMIT && sellOrder.price > bidPrice) {
+                    break;
+                }
+
+                auto& bidQueue = bestBidIt->second;
+                while (!bidQueue.empty() && sellOrder.quantity > 0.00000001) {
+                    Order& buyOrder = bidQueue.front();
+                    double matchQty = std::min(sellOrder.quantity, buyOrder.quantity);
+                    double execPrice = buyOrder.price;
+
+                    MatchResult mr{
+                        buyOrder.id,
+                        sellOrder.id,
+                        execPrice,
+                        matchQty,
+                        GetCurrentTimeNs()
+                    };
+                    executions.push_back(mr);
+                    tradeHistory.push_back(mr);
+
+                    sellOrder.quantity -= matchQty;
+                    buyOrder.quantity -= matchQty;
+
+                    if (buyOrder.quantity <= 0.00000001) {
+                        orderLookup.erase(buyOrder.id);
+                        bidQueue.erase(bidQueue.begin());
+                    } else {
+                        orderLookup[buyOrder.id] = buyOrder;
+                    }
+                }
+
+                if (bidQueue.empty()) {
+                    bids.erase(bestBidIt);
+                }
+            }
+
+            if (sellOrder.type == OrderType::LIMIT && sellOrder.quantity > 0.00000001) {
+                asks[sellOrder.price].push_back(sellOrder);
+                orderLookup[sellOrder.id] = sellOrder;
+            }
         }
     };
 
-    // Parallel Proof-of-Work Mining Engine
-    class MultiThreadedMiner {
+    // Automated Market Maker (AMM) Constant Product & Concentrated Liquidity Simulator
+    class AmmMathEngine {
     public:
-        struct MiningResult {
-            uint64_t nonce;
-            std::string blockHash;
-            bool success;
-            double executionTimeMs;
+        struct SwapQuote {
+            double amountOut;
+            double feePaid;
+            double priceImpact;
+            double executionPrice;
         };
 
-        static MiningResult MineBlock(const std::string& prevHash, const std::string& merkleRoot, int difficulty, uint32_t numThreads = 4) {
-            std::atomic<bool> found(false);
-            std::atomic<uint64_t> winningNonce(0);
-            std::string winningHash = "";
-            std::mutex resultMutex;
-
-            std::string targetPrefix(difficulty, '0');
-            auto startTime = std::chrono::high_resolution_clock::now();
-
-            std::vector<std::thread> workers;
-            for (uint32_t t = 0; t < numThreads; ++t) {
-                workers.emplace_back([t, numThreads, &prevHash, &merkleRoot, &difficulty, &targetPrefix, &found, &winningNonce, &winningHash, &resultMutex]() {
-                    uint64_t nonce = t;
-                    while (!found.load(std::memory_order_relaxed)) {
-                        std::string payload = prevHash + merkleRoot + std::to_string(nonce);
-                        std::string hash = Sha256::ComputeHash(payload);
-
-                        std::string hexPart = (hash.substr(0, 2) == "0x") ? hash.substr(2) : hash;
-                        if (hexPart.substr(0, difficulty) == targetPrefix) {
-                            if (!found.exchange(true)) {
-                                winningNonce.store(nonce);
-                                std::lock_guard<std::mutex> lock(resultMutex);
-                                winningHash = hash;
-                            }
-                            break;
-                        }
-
-                        nonce += numThreads;
-                        if (nonce > 10000000) break;
-                    }
-                });
+        // Standard x * y = k Constant Product Swaps with custom protocol fee basis points (e.g., 30 bps = 0.3%)
+        static SwapQuote ComputeConstantProductSwap(double reserveIn, double reserveOut, double amountIn, double feeBps = 30.0) {
+            if (reserveIn <= 0.0 || reserveOut <= 0.0 || amountIn <= 0.0) {
+                return {0.0, 0.0, 0.0, 0.0};
             }
 
-            for (auto& w : workers) {
-                if (w.joinable()) w.join();
+            double feeRate = feeBps / 10000.0;
+            double feePaid = amountIn * feeRate;
+            double effectiveAmountIn = amountIn - feePaid;
+            
+            double newReserveIn = reserveIn + effectiveAmountIn;
+            double amountOut = (reserveOut * effectiveAmountIn) / newReserveIn;
+            
+            double spotPrice = reserveOut / reserveIn;
+            double executionPrice = amountOut / amountIn;
+            double priceImpact = (spotPrice > 0.0) ? std::abs((spotPrice - executionPrice) / spotPrice) * 100.0 : 0.0;
+
+            return {amountOut, feePaid, priceImpact, executionPrice};
+        }
+
+        // Concentrated Liquidity (Uniswap V3 style) tick & sqrtPrice calculations
+        static double TickToPrice(int32_t tick) {
+            return std::pow(1.0001, static_cast<double>(tick));
+        }
+
+        static int32_t PriceToTick(double price) {
+            return static_cast<int32_t>(std::floor(std::log(price) / std::log(1.0001)));
+        }
+
+        // Calculates amounts required for adding liquidity in a price range [Pa, Pb]
+        static std::pair<double, double> GetAmountsForLiquidity(double sqrtPriceCurrent, double sqrtPriceA, double sqrtPriceB, double liquidity) {
+            if (sqrtPriceA > sqrtPriceB) std::swap(sqrtPriceA, sqrtPriceB);
+
+            double amount0 = 0.0;
+            double amount1 = 0.0;
+
+            if (sqrtPriceCurrent <= sqrtPriceA) {
+                amount0 = liquidity * (sqrtPriceB - sqrtPriceA) / (sqrtPriceA * sqrtPriceB);
+            } else if (sqrtPriceCurrent < sqrtPriceB) {
+                amount0 = liquidity * (sqrtPriceB - sqrtPriceCurrent) / (sqrtPriceCurrent * sqrtPriceB);
+                amount1 = liquidity * (sqrtPriceCurrent - sqrtPriceA);
+            } else {
+                amount1 = liquidity * (sqrtPriceB - sqrtPriceA);
             }
 
-            auto endTime = std::chrono::high_resolution_clock::now();
-            double duration = std::chrono::duration<double, std::milli>(endTime - startTime).count();
-
-            return { winningNonce.load(), winningHash, found.load(), duration };
+            return {amount0, amount1};
         }
     };
-}
 
-// C ABI Exports for Native Platform Interop (.NET C# / Node.js FFI)
-extern "C" {
-    #if defined(_WIN32)
-        #define EXPORT_API __declspec(dllexport)
-    #else
-        #define EXPORT_API __attribute__((visibility("default")))
-    #endif
+    // Block & Proof-of-Work Verification / Difficulty Retargeting Engine
+    class ConsensusEngine {
+    public:
+        struct BlockHeader {
+            uint32_t version;
+            std::string previousBlockHash;
+            std::string merkleRoot;
+            uint64_t timestamp;
+            uint32_t targetBits;
+            uint64_t nonce;
+        };
 
-    static MagnumOpus::MatchingEngine g_MatchingEngine;
-
-    EXPORT_API const char* ComputeSha256(const char* input) {
-        static thread_local std::string result;
-        result = MagnumOpus::Sha256::ComputeHash(input ? input : "");
-        return result.c_str();
-    }
-
-    EXPORT_API const char* ComputeMerkleRoot(const char** hashes, int count) {
-        static thread_local std::string result;
-        std::vector<std::string> txList;
-        for (int i = 0; i < count; ++i) {
-            if (hashes[i]) txList.push_back(hashes[i]);
+        static std::string SerializeHeader(const BlockHeader& header) {
+            std::stringstream ss;
+            ss << header.version << ":"
+               << header.previousBlockHash << ":"
+               << header.merkleRoot << ":"
+               << header.timestamp << ":"
+               << header.targetBits << ":"
+               << header.nonce;
+            return ss.str();
         }
-        result = MagnumOpus::MerkleTreeEngine::CalculateRoot(txList);
-        return result.c_str();
+
+        static bool CheckProofOfWork(const BlockHeader& header, uint32_t requiredLeadingZeros) {
+            std::string serialized = SerializeHeader(header);
+            std::string hash = Sha256::ComputeHash(serialized);
+            
+            // Expect '0x' prefix followed by requiredLeadingZeros
+            if (hash.size() < 2 + requiredLeadingZeros) return false;
+            for (uint32_t i = 0; i < requiredLeadingZeros; ++i) {
+                if (hash[2 + i] != '0') {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        static uint64_t MineNonce(BlockHeader& header, uint32_t requiredLeadingZeros, uint64_t maxIterations = 2000000ULL) {
+            for (uint64_t n = 0; n < maxIterations; ++n) {
+                header.nonce = n;
+                if (CheckProofOfWork(header, requiredLeadingZeros)) {
+                    return n;
+                }
+            }
+            return 0;
+        }
+    };
+
+} // namespace MagnumOpus
+
+#ifdef MAGNUM_OPUS_STANDALONE
+int main() {
+    using namespace MagnumOpus;
+    std::cout << "==============================================\n";
+    std::cout << "  MAGNUM OPUS // C++ High-Performance Engine  \n";
+    std::cout << "==============================================\n";
+
+    // 1. Merkle Tree & Proof Verification
+    std::vector<std::string> txs = {
+        "0xaaa111bbb222ccc333ddd444eee555fff",
+        "0x1234567890abcdef1234567890abcdef",
+        "0xdeadbeefcafebabe0123456789abcdef",
+        "0x999888777666555444333222111000ff"
+    };
+
+    std::string root = MerkleTreeEngine::CalculateRoot(txs);
+    std::cout << "[Merkle] Root: " << root << "\n";
+
+    auto proof = MerkleTreeEngine::GenerateProof(txs, 2);
+    bool isValid = MerkleTreeEngine::VerifyProof(txs[2], proof, root);
+    std::cout << "[Merkle] Tx #2 Proof Verification: " << (isValid ? "PASSED (Valid)" : "FAILED") << "\n\n";
+
+    // 2. High Frequency Limit Order Book Matching
+    MatchingEngine engine;
+    std::vector<MatchResult> executions;
+
+    engine.SubmitOrder("Alice", OrderSide::SELL, OrderType::LIMIT, 3500.50, 1.5, executions);
+    engine.SubmitOrder("Bob", OrderSide::SELL, OrderType::LIMIT, 3501.00, 2.0, executions);
+    engine.SubmitOrder("Charlie", OrderSide::BUY, OrderType::LIMIT, 3499.00, 1.0, executions);
+
+    std::cout << "[OrderBook] Added limit orders. Now submitting matching Buy Market Order...\n";
+    engine.SubmitOrder("Dave", OrderSide::BUY, OrderType::MARKET, 0.0, 2.0, executions);
+
+    for (const auto& match : executions) {
+        std::cout << "[OrderBook MATCH] BuyID: " << match.buyOrderId 
+                  << " | SellID: " << match.sellOrderId 
+                  << " | Price: $" << match.matchPrice 
+                  << " | Qty: " << match.matchQuantity << "\n";
     }
 
-    EXPORT_API const char* SubmitOrderToEngine(const char* trader, int side, int type, double price, double quantity) {
-        static thread_local std::string result;
-        auto matches = g_MatchingEngine.SubmitOrder(
-            trader ? trader : "Anonymous",
-            static_cast<MagnumOpus::OrderSide>(side),
-            static_cast<MagnumOpus::OrderType>(type),
-            price,
-            quantity
-        );
+    // 3. AMM Constant Product Swap
+    double ethReserve = 500.0;
+    double usdcReserve = 1750000.0;
+    double ethInput = 10.0;
+    auto quote = AmmMathEngine::ComputeConstantProductSwap(ethReserve, usdcReserve, ethInput, 30.0);
+    std::cout << "\n[AMM Swap] Swapping " << ethInput << " ETH -> Output: " 
+              << quote.amountOut << " USDC | Fee: " << quote.feePaid 
+              << " ETH | Price Impact: " << quote.priceImpact << "%\n";
 
-        std::stringstream ss;
-        ss << "{\"matches_count\":
+    return 0;
+}
+#endif
