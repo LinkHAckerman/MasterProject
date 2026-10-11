@@ -65,11 +65,9 @@ contract MagnumOpusToken is IERC20 {
     function transferFrom(address sender, address recipient, uint256 amount) external override returns (bool) {
         uint256 currentAllowance = _allowances[sender][msg.sender];
         require(currentAllowance >= amount, "ERC20: transfer amount exceeds allowance");
-        
         unchecked {
             _approve(sender, msg.sender, currentAllowance - amount);
         }
-
         _transfer(sender, recipient, amount);
         return true;
     }
@@ -126,12 +124,16 @@ contract MagnumOpusToken is IERC20 {
     }
 }
 
+/**
+ * @title MagnumOpusStakingVault
+ * @notice Simple ERC20 staking vault that distributes reward tokens proportionally to stake.
+ */
 contract MagnumOpusStakingVault {
     IERC20 public immutable stakingToken;
     IERC20 public immutable rewardToken;
 
     address public owner;
-    uint256 public rewardRate = 100;
+    uint256 public rewardRate; // reward tokens per second
     uint256 public lastUpdateTime;
     uint256 public rewardPerTokenStored;
 
@@ -144,9 +146,11 @@ contract MagnumOpusStakingVault {
     event Staked(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount);
     event RewardPaid(address indexed user, uint256 reward);
+    event RewardAdded(uint256 reward);
+    event RewardRateUpdated(uint256 newRate);
 
     modifier onlyOwner() {
-        require(msg.sender == owner, "Vault: caller is not owner");
+        require(msg.sender == owner, "StakingVault: caller is not the owner");
         _;
     }
 
@@ -160,57 +164,114 @@ contract MagnumOpusStakingVault {
         _;
     }
 
-    constructor(address _stakingToken, address _rewardToken) {
+    constructor(address _stakingToken, address _rewardToken, uint256 _initialRewardRate) {
+        require(_stakingToken != address(0) && _rewardToken != address(0), "StakingVault: token address zero");
         owner = msg.sender;
         stakingToken = IERC20(_stakingToken);
         rewardToken = IERC20(_rewardToken);
+        rewardRate = _initialRewardRate;
+        lastUpdateTime = block.timestamp;
     }
 
-    function totalSupply() external view returns (uint256) {
-        return _totalSupply;
-    }
-
-    function balanceOf(address account) external view returns (uint256) {
-        return _balances[account];
-    }
-
+    /**
+     * @dev Returns the current reward per token stored value.
+     */
     function rewardPerToken() public view returns (uint256) {
         if (_totalSupply == 0) {
             return rewardPerTokenStored;
         }
-        return rewardPerTokenStored + (((block.timestamp - lastUpdateTime) * rewardRate * 1e18) / _totalSupply);
+        uint256 timeDelta = block.timestamp - lastUpdateTime;
+        return rewardPerTokenStored + (timeDelta * rewardRate * 1e18) / _totalSupply;
     }
 
+    /**
+     * @dev Returns the amount of reward tokens earned by `account`.
+     */
     function earned(address account) public view returns (uint256) {
-        return ((_balances[account] * (rewardPerToken() - userRewardPerTokenPaid[account])) / 1e18) + rewards[account];
+        uint256 accrued = (_balances[account] * (rewardPerToken() - userRewardPerTokenPaid[account])) / 1e18;
+        return rewards[account] + accrued;
     }
 
+    /**
+     * @notice Stake `amount` of staking tokens.
+     */
     function stake(uint256 amount) external updateReward(msg.sender) {
-        require(amount > 0, "Cannot stake 0");
+        require(amount > 0, "StakingVault: cannot stake 0");
         _totalSupply += amount;
         _balances[msg.sender] += amount;
-        stakingToken.transferFrom(msg.sender, address(this), amount);
+        require(stakingToken.transferFrom(msg.sender, address(this), amount), "StakingVault: transfer failed");
         emit Staked(msg.sender, amount);
     }
 
-    function withdraw(uint256 amount) external updateReward(msg.sender) {
-        require(amount > 0, "Cannot withdraw 0");
+    /**
+     * @notice Withdraw `amount` of previously staked tokens.
+     */
+    function withdraw(uint256 amount) public updateReward(msg.sender) {
+        require(amount > 0, "StakingVault: cannot withdraw 0");
+        require(_balances[msg.sender] >= amount, "StakingVault: withdraw exceeds balance");
         _totalSupply -= amount;
         _balances[msg.sender] -= amount;
-        stakingToken.transfer(msg.sender, amount);
+        require(stakingToken.transfer(msg.sender, amount), "StakingVault: transfer failed");
         emit Withdrawn(msg.sender, amount);
     }
 
-    function getReward() external updateReward(msg.sender) {
+    /**
+     * @notice Claim all earned reward tokens.
+     */
+    function getReward() public updateReward(msg.sender) {
         uint256 reward = rewards[msg.sender];
         if (reward > 0) {
             rewards[msg.sender] = 0;
-            rewardToken.transfer(msg.sender, reward);
+            require(rewardToken.transfer(msg.sender, reward), "StakingVault: reward transfer failed");
             emit RewardPaid(msg.sender, reward);
         }
     }
 
-    function setRewardRate(uint256 _rewardRate) external onlyOwner updateReward(address(0)) {
-        rewardRate = _rewardRate;
+    /**
+     * @notice Withdraw all staked tokens and claim rewards.
+     */
+    function exit() external {
+        withdraw(_balances[msg.sender]);
+        getReward();
+    }
+
+    /**
+     * @notice Owner can update the reward emission rate.
+     */
+    function setRewardRate(uint256 _newRate) external onlyOwner {
+        rewardRate = _newRate;
+        emit RewardRateUpdated(_newRate);
+    }
+
+    /**
+     * @notice Owner can fund the contract with reward tokens.
+     * The supplied `reward` amount is transferred from the owner to the vault.
+     */
+    function notifyRewardAmount(uint256 reward) external onlyOwner updateReward(address(0)) {
+        require(rewardToken.transferFrom(msg.sender, address(this), reward), "StakingVault: funding failed");
+        emit RewardAdded(reward);
+        // Optionally, adjust rewardRate based on a fixed duration; omitted for simplicity.
+    }
+
+    /**
+     * @notice Recover ERC20 tokens mistakenly sent to the contract, except the staking token.
+     */
+    function recoverERC20(address tokenAddress, uint256 tokenAmount) external onlyOwner {
+        require(tokenAddress != address(stakingToken), "StakingVault: cannot withdraw staking token");
+        IERC20(tokenAddress).transfer(owner, tokenAmount);
+    }
+
+    /**
+     * @notice View function to get the total amount staked.
+     */
+    function totalStaked() external view returns (uint256) {
+        return _totalSupply;
+    }
+
+    /**
+     * @notice View function to get a user's staked balance.
+     */
+    function balanceOf(address account) external view returns (uint256) {
+        return _balances[account];
     }
 }
