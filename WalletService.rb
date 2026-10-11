@@ -3,6 +3,7 @@
 require 'net/http'
 require 'json'
 require 'uri'
+require 'openssl'
 
 module MagnumOpus
   # Lightweight wallet balance and exchange-rate service (Glue Layer)
@@ -65,6 +66,26 @@ module MagnumOpus
       { success: true, transactions: }
     end
     
+    # Fetch NFT collection details for a given contract address
+    def get_nft_collection(contract_address)
+      raise ArgumentError, 'Contract address is required' if contract_address.nil? || contract_address.empty?
+
+      # Mock implementation - replace with actual blockchain API call
+      nfts = [
+        { token_id: '1', name: 'Magnum Opus #1', image_url: 'https://example.com/nft1.png', attributes: { rarity: 'rare', type: 'art' } },
+        { token_id: '2', name: 'Magnum Opus #2', image_url: 'https://example.com/nft2.png', attributes: { rarity: 'common', type: 'art' } }
+      ]
+      { success: true, contract_address:, nfts: }
+    end
+    
+    # Fetch NFT metadata for a given token ID
+    def get_nft_metadata(contract_address, token_id)
+      raise ArgumentError, 'Contract address and token ID are required' if contract_address.nil? || contract_address.empty? || token_id.nil? || token_id.empty?
+
+      # Mock implementation - replace with actual blockchain API call
+      { success: true, contract_address:, token_id:, name: 'Magnum Opus #1', description: 'A unique NFT from the Magnum Opus collection.', image_url: 'https://example.com/nft1.png', attributes: { rarity: 'rare', type: 'art' } }
+    end
+    
     private
     
     def fetch_eth_price
@@ -82,7 +103,13 @@ module MagnumOpus
     def request(path, params = {})
       uri = URI.join(BASE_URL, path)
       uri.query = URI.encode_www_form(params)
-      response = Net::HTTP.get_response(uri, { 'User-Agent' => 'MagnumOpus/1.0' })
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = true
+      http.verify_mode = OpenSSL::SSL::VERIFY_PEER
+      http.read_timeout = TIMEOUT
+      http.open_timeout = TIMEOUT
+      
+      response = http.get(uri.request_uri, { 'User-Agent' => 'MagnumOpus/1.0' })
       JSON.parse(response.body)
     rescue => e
       MagnumOpus.handle_error(e) if MagnumOpus.respond_to?(:handle_error)
