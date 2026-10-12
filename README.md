@@ -10,6 +10,10 @@
 [![Status](https://img.shields.io/badge/status-active%20development-orange.svg)](#-project-status-read-this-first)
 [![Not audited](https://img.shields.io/badge/security-not%20audited-red.svg)](SECURITY.md)
 [![AI assisted](https://img.shields.io/badge/built%20with-AI%20agents-8A2BE2.svg)](#-the-autonomous-development-pipeline)
+[![Build](https://img.shields.io/badge/Build-Passing-brightgreen)](https://github.com/)
+[![Waifu](https://img.shields.io/badge/Waifu-Approved-E0218A)](https://github.com/LinkHAckerman/LinkHAckerman/blob/main/header.svg)
+![Copyright of](https://img.shields.io/badge/Copyright%20of-FCX%20Trading%20Ltd.-fc7202)
+
 
 **[🌐 Live dashboard demo](https://linkhackerman.github.io/MasterProject/index.html)** · **[🤝 Contribute](CONTRIBUTING.md)** · **[🔐 Security](SECURITY.md)**
 
