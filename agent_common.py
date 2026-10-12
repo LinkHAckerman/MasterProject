@@ -51,6 +51,39 @@ MAX_TOTAL_MANIFEST_CHARS = 12000
 # little choice (they still only ever see the stalest N).
 FILES_OFFERED_PER_AGENT = 1
 
+# --- README guardrails -------------------------------------------------------
+REPO_SLUG = "LinkHAckerman/MasterProject"
+REPO_NAME = "MasterProject"
+
+# Project documents the README must always link to. Agents never edit these
+# files (they are not in ALL_PROJECT_FILES); the README just has to point at them.
+README_REQUIRED_DOCS = [
+    ("License", "LICENSE"),
+    ("Contributing", "CONTRIBUTING.md"),
+    ("Contributor License Agreement", "CLA.md"),
+    ("Security Policy", "SECURITY.md"),
+    ("Terms of Use", "TERMS.md"),
+    ("Code of Conduct", "CODE_OF_CONDUCT.md"),
+]
+README_DOCS_HEADING = "## Project Documents"
+README_MIN_CHARS = 800  # anything shorter is treated as a failed generation
+
+README_RULES = f"""
+README RULES (the README is public-facing, so it must be accurate):
+- Only describe files, folders, commands, tests, scripts, Docker/Helm/CI setups
+  that appear in the REAL FILE LIST below. If something is not in that list it
+  does NOT exist - do not document it as if it does. A short "Roadmap" section
+  may mention planned work, clearly labelled as planned.
+- The repository is {REPO_SLUG}. Never use placeholder URLs such as
+  "yourorg/magnum-opus"; use https://github.com/{REPO_SLUG}.git and the
+  directory name {REPO_NAME}.
+- Present the project honestly: a multi-language Web3 showcase, developed with
+  AI assistance, still evolving, NOT audited and NOT for use with real funds.
+- Keep a "Project Documents" section linking to: LICENSE, CONTRIBUTING.md,
+  CLA.md, SECURITY.md, TERMS.md, CODE_OF_CONDUCT.md.
+- Keep it professional, concise, and free of hype or invented metrics.
+"""
+
 PROJECT_GOAL = """
 The Magnum Opus: The ultimate, all-encompassing platform for everything Crypto, NFTs, Web3, DeFi, and Blockchain.
 It must be the best thing ever made, showcasing full-stack mastery across multiple ecosystems:
@@ -182,6 +215,44 @@ def get_available_files(claimed_files):
     return list(_current_assignment)
 
 
+def get_repo_file_listing():
+    """Real tracked files (plus anything new on disk), for grounding the
+    README prompt. Skips caches and internal state files."""
+    skip_prefixes = ("__pycache__/", ".git/")
+    skip_names = {".agent_state.json", ".readme_state.json"}
+    files = set()
+    try:
+        out = subprocess.run(["git", "ls-files"], capture_output=True, text=True, timeout=30).stdout
+        files.update(line.strip() for line in out.splitlines() if line.strip())
+    except Exception:
+        pass
+    try:
+        files.update(f for f in os.listdir(".") if os.path.isfile(f))
+    except Exception:
+        pass
+    return sorted(
+        f for f in files
+        if f not in skip_names and not f.startswith(skip_prefixes)
+    )
+
+
+def enforce_readme_requirements(content):
+    """Deterministic safety net applied to every generated README, whatever
+    the model wrote: fixes placeholder URLs/paths and guarantees the links to
+    the project documents are present."""
+    content = content.replace("yourorg/magnum-opus", REPO_SLUG)
+    content = content.replace("cd magnum-opus", f"cd {REPO_NAME}")
+
+    missing = [(label, path) for label, path in README_REQUIRED_DOCS if path not in content]
+    if missing:
+        lines = [f"- [{label}]({path})" for label, path in missing]
+        if README_DOCS_HEADING in content:
+            content = content.rstrip() + "\n" + "\n".join(lines) + "\n"
+        else:
+            content = content.rstrip() + f"\n\n{README_DOCS_HEADING}\n\n" + "\n".join(lines) + "\n"
+    return content
+
+
 def build_manifest():
     """Reads every existing project file. The assigned file gets a large
     window; the rest get a short preview. Total size is capped so the prompt
@@ -206,6 +277,11 @@ def build_manifest():
 
 
 def build_prompt(agent_label, claimed_files, available_files, manifest_json, repo_manifest):
+    readme_section = ""
+    if "README.md" in available_files:
+        listing = "\n".join(f"  - {f}" for f in get_repo_file_listing())
+        readme_section = f"{README_RULES}\nREAL FILE LIST:\n{listing}\n"
+
     return f"""
 You are {agent_label}, working alongside other AI colleagues on:
 {PROJECT_GOAL}
@@ -233,7 +309,7 @@ Instructions:
    (backticks, e.g. `{{regex pattern here}}`) instead of a double-quoted
    string - double-quoted Go strings only support a small fixed set of
    escape sequences and will fail to compile otherwise.
-"""
+{readme_section}"""
 
 
 def extract_json(raw_text):
@@ -402,6 +478,12 @@ def pick_unclaimed_file(model_names, call_fn, extract_text_fn, claimed_files, ma
             continue
 
         if candidate_file in allowed and candidate_file not in claimed_files:
+            if candidate_file == "README.md":
+                if len(candidate_content) < README_MIN_CHARS:
+                    print(f"Attempt {pick_attempt}/{max_pick_attempts}: README too short "
+                          f"({len(candidate_content)} chars), likely a bad generation. Retrying.")
+                    continue
+                candidate_content = enforce_readme_requirements(candidate_content)
             return candidate_file, candidate_content
 
         print(f"Attempt {pick_attempt}/{max_pick_attempts}: picked '{candidate_file}', "
