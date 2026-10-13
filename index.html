@@ -184,23 +184,32 @@
         .metric-value {
             font-size: 1.5rem;
             font-weight: 700;
-            margin-bottom: 0.25rem;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
         }
 
         .metric-change {
+            font-size: 0.85rem;
+            font-weight: 500;
             display: flex;
             align-items: center;
             gap: 0.25rem;
-            font-size: 0.85rem;
-            font-family: var(--font-mono);
         }
 
-        .change-positive {
+        .metric-change-positive {
             color: var(--accent-emerald);
         }
 
-        .change-negative {
+        .metric-change-negative {
             color: var(--accent-rose);
+        }
+
+        .chart-container {
+            height: 200px;
+            width: 100%;
+            margin-top: 1rem;
         }
 
         .sidebar {
@@ -229,11 +238,26 @@
             font-weight: 600;
         }
 
-        .wallet-address {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            font-family: var(--font-mono);
-            word-break: break-all;
+        .wallet-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .wallet-action-btn {
+            background: rgba(56, 189, 248, 0.1);
+            border: none;
+            color: var(--accent-cyan);
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .wallet-action-btn:hover {
+            background: rgba(56, 189, 248, 0.2);
         }
 
         .wallet-balance {
@@ -242,89 +266,59 @@
             margin-bottom: 0.5rem;
         }
 
-        .wallet-actions {
-            display: flex;
-            gap: 0.5rem;
+        .wallet-address {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            word-break: break-all;
+            margin-bottom: 1rem;
         }
 
-        .btn-action {
-            background: rgba(56, 189, 248, 0.1);
-            border: 1px solid rgba(56, 189, 248, 0.2);
-            color: var(--accent-cyan);
-            padding: 0.45rem 0.9rem;
-            border-radius: 8px;
-            font-size: 0.8rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.2s, border-color 0.2s;
-        }
-
-        .btn-action:hover {
-            background: rgba(56, 189, 248, 0.15);
-            border-color: rgba(56, 189, 248, 0.3);
-        }
-
-        .asset-list {
+        .wallet-assets {
             display: flex;
             flex-direction: column;
             gap: 0.75rem;
         }
 
-        .asset-item {
+        .wallet-asset {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 0.75rem;
-            background: rgba(10, 15, 36, 0.5);
-            border-radius: 8px;
-            transition: background 0.2s;
         }
 
-        .asset-item:hover {
-            background: rgba(10, 15, 36, 0.7);
-        }
-
-        .asset-info {
+        .wallet-asset-info {
             display: flex;
             align-items: center;
             gap: 0.75rem;
         }
 
-        .asset-icon {
+        .wallet-asset-icon {
             width: 32px;
             height: 32px;
             border-radius: 50%;
+            background: rgba(56, 189, 248, 0.1);
             display: grid;
             place-items: center;
             font-weight: 700;
-            color: #fff;
-            font-family: var(--font-mono);
+            color: var(--accent-cyan);
         }
 
-        .asset-name {
+        .wallet-asset-name {
             font-size: 0.9rem;
             font-weight: 500;
         }
 
-        .asset-symbol {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            font-family: var(--font-mono);
-        }
-
-        .asset-balance {
-            font-size: 0.9rem;
-            font-weight: 500;
-            text-align: right;
-        }
-
-        .asset-value {
+        .wallet-asset-symbol {
             font-size: 0.8rem;
             color: var(--text-muted);
-            text-align: right;
         }
 
-        .transaction-history {
+        .wallet-asset-value {
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .transactions-card {
             background: var(--bg-card);
             border: 1px solid var(--border-color);
             border-radius: 12px;
@@ -332,19 +326,31 @@
             backdrop-filter: blur(8px);
         }
 
-        .transaction-header {
+        .transactions-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 1rem;
         }
 
-        .transaction-title {
+        .transactions-title {
             font-size: 1rem;
             font-weight: 600;
         }
 
-        .transaction-list {
+        .transactions-view-all {
+            font-size: 0.85rem;
+            color: var(--accent-cyan);
+            text-decoration: none;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .transactions-view-all:hover {
+            opacity: 0.8;
+        }
+
+        .transactions-list {
             display: flex;
             flex-direction: column;
             gap: 0.75rem;
@@ -355,13 +361,13 @@
             justify-content: space-between;
             align-items: center;
             padding: 0.75rem;
-            background: rgba(10, 15, 36, 0.5);
+            background: rgba(56, 189, 248, 0.05);
             border-radius: 8px;
             transition: background 0.2s;
         }
 
         .transaction-item:hover {
-            background: rgba(10, 15, 36, 0.7);
+            background: rgba(56, 189, 248, 0.1);
         }
 
         .transaction-info {
@@ -374,11 +380,11 @@
             width: 32px;
             height: 32px;
             border-radius: 50%;
+            background: rgba(56, 189, 248, 0.1);
             display: grid;
             place-items: center;
             font-weight: 700;
-            color: #fff;
-            font-family: var(--font-mono);
+            color: var(--accent-cyan);
         }
 
         .transaction-details {
@@ -393,724 +399,304 @@
         }
 
         .transaction-time {
-            font-size: 0.75rem;
+            font-size: 0.8rem;
             color: var(--text-muted);
         }
 
         .transaction-amount {
             font-size: 0.9rem;
             font-weight: 500;
-            text-align: right;
         }
 
         .transaction-status {
             font-size: 0.8rem;
-            color: var(--text-muted);
-            text-align: right;
+            font-weight: 500;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
         }
 
         .status-pending {
+            background: rgba(245, 158, 11, 0.1);
             color: var(--accent-amber);
         }
 
         .status-completed {
+            background: rgba(16, 185, 129, 0.1);
             color: var(--accent-emerald);
         }
 
         .status-failed {
+            background: rgba(244, 63, 94, 0.1);
             color: var(--accent-rose);
         }
 
-        .chart-container {
+        .news-card {
             background: var(--bg-card);
             border: 1px solid var(--border-color);
             border-radius: 12px;
             padding: 1.25rem;
             backdrop-filter: blur(8px);
-            height: 300px;
         }
 
-        .chart-header {
+        .news-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 1rem;
         }
 
-        .chart-title {
+        .news-title {
             font-size: 1rem;
             font-weight: 600;
         }
 
-        .chart-timeframe {
-            display: flex;
-            gap: 0.5rem;
-        }
-
-        .timeframe-btn {
-            background: rgba(56, 189, 248, 0.1);
-            border: 1px solid rgba(56, 189, 248, 0.2);
+        .news-view-all {
+            font-size: 0.85rem;
             color: var(--accent-cyan);
-            padding: 0.3rem 0.6rem;
-            border-radius: 8px;
-            font-size: 0.7rem;
-            font-weight: 500;
+            text-decoration: none;
             cursor: pointer;
-            transition: background 0.2s, border-color 0.2s;
+            transition: opacity 0.2s;
         }
 
-        .timeframe-btn:hover {
-            background: rgba(56, 189, 248, 0.15);
-            border-color: rgba(56, 189, 248, 0.3);
+        .news-view-all:hover {
+            opacity: 0.8;
         }
 
-        .timeframe-btn.active {
-            background: rgba(56, 189, 248, 0.2);
-            border-color: rgba(56, 189, 248, 0.4);
-        }
-
-        .chart-canvas {
-            width: 100%;
-            height: 100%;
-        }
-
-        .orderbook-container {
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 1.25rem;
-            backdrop-filter: blur(8px);
-            height: 300px;
-        }
-
-        .orderbook-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1rem;
-        }
-
-        .orderbook-title {
-            font-size: 1rem;
-            font-weight: 600;
-        }
-
-        .orderbook-pair {
-            display: flex;
-            gap: 0.5rem;
-        }
-
-        .pair-selector {
-            background: rgba(56, 189, 248, 0.1);
-            border: 1px solid rgba(56, 189, 248, 0.2);
-            color: var(--accent-cyan);
-            padding: 0.3rem 0.6rem;
-            border-radius: 8px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.2s, border-color 0.2s;
-        }
-
-        .pair-selector:hover {
-            background: rgba(56, 189, 248, 0.15);
-            border-color: rgba(56, 189, 248, 0.3);
-        }
-
-        .orderbook-content {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1rem;
-            height: calc(100% - 3rem);
-        }
-
-        .orderbook-side {
+        .news-list {
             display: flex;
             flex-direction: column;
-            gap: 0.5rem;
-            height: 100%;
-        }
-
-        .orderbook-side-header {
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            padding: 0 0.5rem;
-        }
-
-        .orderbook-orders {
-            display: flex;
-            flex-direction: column;
-            gap: 0.25rem;
-            overflow-y: auto;
-            height: 100%;
-        }
-
-        .orderbook-order {
-            display: flex;
-            justify-content: space-between;
-            padding: 0.5rem;
-            background: rgba(10, 15, 36, 0.5);
-            border-radius: 4px;
-            transition: background 0.2s;
-        }
-
-        .orderbook-order:hover {
-            background: rgba(10, 15, 36, 0.7);
-        }
-
-        .order-price {
-            font-size: 0.8rem;
-            font-weight: 500;
-        }
-
-        .order-amount {
-            font-size: 0.8rem;
-            font-weight: 500;
-            text-align: right;
-        }
-
-        .order-total {
-            font-size: 0.7rem;
-            color: var(--text-muted);
-            text-align: right;
-        }
-
-        .order-bid {
-            color: var(--accent-emerald);
-        }
-
-        .order-ask {
-            color: var(--accent-rose);
-        }
-
-        .trade-form {
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 1.25rem;
-            backdrop-filter: blur(8px);
-        }
-
-        .trade-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1rem;
-        }
-
-        .trade-title {
-            font-size: 1rem;
-            font-weight: 600;
-        }
-
-        .trade-tabs {
-            display: flex;
-            gap: 0.5rem;
-        }
-
-        .trade-tab {
-            background: rgba(56, 189, 248, 0.1);
-            border: 1px solid rgba(56, 189, 248, 0.2);
-            color: var(--accent-cyan);
-            padding: 0.3rem 0.6rem;
-            border-radius: 8px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.2s, border-color 0.2s;
-        }
-
-        .trade-tab:hover {
-            background: rgba(56, 189, 248, 0.15);
-            border-color: rgba(56, 189, 248, 0.3);
-        }
-
-        .trade-tab.active {
-            background: rgba(56, 189, 248, 0.2);
-            border-color: rgba(56, 189, 248, 0.4);
-        }
-
-        .form-group {
-            margin-bottom: 1rem;
-        }
-
-        .form-label {
-            display: block;
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            margin-bottom: 0.5rem;
-        }
-
-        .form-input {
-            width: 100%;
-            padding: 0.75rem;
-            background: rgba(10, 15, 36, 0.5);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            color: var(--text-main);
-            font-size: 0.9rem;
-            transition: border-color 0.2s;
-        }
-
-        .form-input:focus {
-            border-color: var(--accent-cyan);
-            outline: none;
-        }
-
-        .form-actions {
-            display: flex;
-            gap: 0.5rem;
-        }
-
-        .btn-trade {
-            flex: 1;
-            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
-            border: none;
-            color: white;
-            padding: 0.75rem;
-            border-radius: 8px;
-            font-weight: 700;
-            cursor: pointer;
-            font-size: 0.9rem;
-            transition: transform 0.2s, box-shadow 0.2s;
-            box-shadow: 0 4px 15px rgba(168, 85, 247, 0.2);
-        }
-
-        .btn-trade:hover {
-            transform: translateY(-1px);
-            box-shadow: var(--glow-purple);
-        }
-
-        .btn-buy {
-            background: linear-gradient(90deg, var(--accent-emerald), var(--accent-cyan));
-        }
-
-        .btn-sell {
-            background: linear-gradient(90deg, var(--accent-rose), var(--accent-purple));
-        }
-
-        .modal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(3, 6, 17, 0.85);
-            backdrop-filter: blur(8px);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 200;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.3s;
-        }
-
-        .modal.active {
-            opacity: 1;
-            pointer-events: all;
-        }
-
-        .modal-content {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 2rem;
-            width: 90%;
-            max-width: 500px;
-            max-height: 90vh;
-            overflow-y: auto;
-            position: relative;
-        }
-
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1.5rem;
-        }
-
-        .modal-title {
-            font-size: 1.25rem;
-            font-weight: 700;
-        }
-
-        .modal-close {
-            background: none;
-            border: none;
-            color: var(--text-muted);
-            font-size: 1.5rem;
-            cursor: pointer;
-            transition: color 0.2s;
-        }
-
-        .modal-close:hover {
-            color: var(--text-main);
-        }
-
-        .modal-body {
-            margin-bottom: 1.5rem;
-        }
-
-        .modal-footer {
-            display: flex;
-            justify-content: flex-end;
             gap: 0.75rem;
         }
 
-        .btn-modal {
-            padding: 0.6rem 1.2rem;
-            border-radius: 8px;
-            font-weight: 700;
-            cursor: pointer;
-            font-size: 0.9rem;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-
-        .btn-modal-primary {
-            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
-            border: none;
-            color: white;
-            box-shadow: 0 4px 15px rgba(168, 85, 247, 0.2);
-        }
-
-        .btn-modal-primary:hover {
-            transform: translateY(-1px);
-            box-shadow: var(--glow-purple);
-        }
-
-        .btn-modal-secondary {
-            background: rgba(56, 189, 248, 0.1);
-            border: 1px solid rgba(56, 189, 248, 0.2);
-            color: var(--accent-cyan);
-        }
-
-        .btn-modal-secondary:hover {
-            background: rgba(56, 189, 248, 0.15);
-            border-color: rgba(56, 189, 248, 0.3);
-        }
-
-        .notification {
-            position: fixed;
-            bottom: 2rem;
-            right: 2rem;
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 1rem 1.5rem;
+        .news-item {
             display: flex;
-            align-items: center;
-            gap: 1rem;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-            transform: translateY(100px);
-            opacity: 0;
-            pointer-events: none;
-            transition: transform 0.3s, opacity 0.3s;
-            z-index: 300;
+            flex-direction: column;
+            gap: 0.25rem;
+            padding: 0.75rem;
+            background: rgba(56, 189, 248, 0.05);
+            border-radius: 8px;
+            transition: background 0.2s;
         }
 
-        .notification.active {
-            transform: translateY(0);
-            opacity: 1;
-            pointer-events: all;
+        .news-item:hover {
+            background: rgba(56, 189, 248, 0.1);
         }
 
-        .notification-icon {
-            width: 24px;
-            height: 24px;
-            border-radius: 50%;
-            display: grid;
-            place-items: center;
-            font-weight: 700;
-            color: #fff;
-            font-family: var(--font-mono);
+        .news-source {
+            font-size: 0.8rem;
+            color: var(--text-muted);
         }
 
-        .notification-success {
-            background: rgba(16, 185, 129, 0.1);
-            border-color: rgba(16, 185, 129, 0.2);
-            color: var(--accent-emerald);
-        }
-
-        .notification-error {
-            background: rgba(244, 63, 94, 0.1);
-            border-color: rgba(244, 63, 94, 0.2);
-            color: var(--accent-rose);
-        }
-
-        .notification-message {
+        .news-headline {
             font-size: 0.9rem;
             font-weight: 500;
         }
 
-        .notification-close {
-            background: none;
-            border: none;
+        .news-time {
+            font-size: 0.8rem;
             color: var(--text-muted);
-            font-size: 1rem;
-            cursor: pointer;
-            transition: color 0.2s;
-            margin-left: 1rem;
         }
 
-        .notification-close:hover {
-            color: var(--text-main);
+        .footer {
+            text-align: center;
+            padding: 1.5rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .footer-link {
+            color: var(--accent-cyan);
+            text-decoration: none;
+            transition: opacity 0.2s;
+        }
+
+        .footer-link:hover {
+            opacity: 0.8;
         }
     </style>
 </head>
 <body>
     <header>
         <div class="logo-container">
-            <div class="logo-icon">[1mMO[0m</div>
+            <div class="logo-icon">F525</div>
             <div class="logo-text">MAGNUM OPUS</div>
         </div>
         <div class="nav-actions">
             <div class="gas-badge">
-                <span>Gas: 25 Gwei</span>
+                <span>F680</span>
+                <span>Gas: 12 Gwei</span>
             </div>
             <button class="btn-connect">Connect Wallet</button>
         </div>
     </header>
+
     <div class="dashboard-container">
         <div class="main-workspace">
             <div class="metric-grid">
                 <div class="metric-card">
-                    <div class="metric-title">Total Portfolio Value</div>
-                    <div class="metric-value">$12,456.78</div>
-                    <div class="metric-change change-positive">
-                        <span>[1m+2.34%[0m</span>
-                        <span>[1m+$289.12[0m</span>
+                    <div class="metric-title">Total Value Locked</div>
+                    <div class="metric-value">$12,345,678</div>
+                    <div class="metric-change metric-change-positive">
+                        <span>F332</span>
+                        <span>+12.34%</span>
                     </div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-title">24h Trading Volume</div>
-                    <div class="metric-value">$456,789.01</div>
-                    <div class="metric-change change-negative">
-                        <span>[1m-1.23%[0m</span>
-                        <span>[1m-$5,678.90[0m</span>
+                    <div class="chart-container">
+                        <!-- Chart will be rendered here -->
                     </div>
                 </div>
                 <div class="metric-card">
                     <div class="metric-title">Active Wallets</div>
-                    <div class="metric-value">12,345</div>
-                    <div class="metric-change change-positive">
-                        <span>[1m+5.67%[0m</span>
-                        <span>[1m+689[0m</span>
+                    <div class="metric-value">4,567</div>
+                    <div class="metric-change metric-change-positive">
+                        <span>F332</span>
+                        <span>+8.76%</span>
+                    </div>
+                    <div class="chart-container">
+                        <!-- Chart will be rendered here -->
                     </div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-title">Total Transactions</div>
-                    <div class="metric-value">789,012</div>
-                    <div class="metric-change change-positive">
-                        <span>[1m+3.45%[0m</span>
-                        <span>[1m+26,789[0m</span>
+                    <div class="metric-title">Transaction Volume</div>
+                    <div class="metric-value">$9,876,543</div>
+                    <div class="metric-change metric-change-negative">
+                        <span>F53B</span>
+                        <span>-3.21%</span>
+                    </div>
+                    <div class="chart-container">
+                        <!-- Chart will be rendered here -->
+                    </div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">NFT Floor Price</div>
+                    <div class="metric-value">2.34 ETH</div>
+                    <div class="metric-change metric-change-positive">
+                        <span>F332</span>
+                        <span>+5.67%</span>
+                    </div>
+                    <div class="chart-container">
+                        <!-- Chart will be rendered here -->
                     </div>
                 </div>
             </div>
-            <div class="chart-container">
-                <div class="chart-header">
-                    <div class="chart-title">Portfolio Performance</div>
-                    <div class="chart-timeframe">
-                        <button class="timeframe-btn active">1D</button>
-                        <button class="timeframe-btn">1W</button>
-                        <button class="timeframe-btn">1M</button>
-                        <button class="timeframe-btn">1Y</button>
-                        <button class="timeframe-btn">ALL</button>
-                    </div>
+
+            <div class="transactions-card">
+                <div class="transactions-header">
+                    <div class="transactions-title">Recent Transactions</div>
+                    <a href="#" class="transactions-view-all">View All</a>
                 </div>
-                <canvas class="chart-canvas" id="portfolioChart"></canvas>
-            </div>
-            <div class="orderbook-container">
-                <div class="orderbook-header">
-                    <div class="orderbook-title">Order Book</div>
-                    <div class="orderbook-pair">
-                        <button class="pair-selector">BTC/USDT</button>
-                        <button class="pair-selector">ETH/USDT</button>
-                        <button class="pair-selector">SOL/USDT</button>
-                    </div>
-                </div>
-                <div class="orderbook-content">
-                    <div class="orderbook-side">
-                        <div class="orderbook-side-header">
-                            <span>Price (USDT)</span>
-                            <span>Amount (BTC)</span>
-                        </div>
-                        <div class="orderbook-orders" id="bids">
-                            <!-- Bids will be populated by JavaScript -->
-                        </div>
-                    </div>
-                    <div class="orderbook-side">
-                        <div class="orderbook-side-header">
-                            <span>Price (USDT)</span>
-                            <span>Amount (BTC)</span>
-                        </div>
-                        <div class="orderbook-orders" id="asks">
-                            <!-- Asks will be populated by JavaScript -->
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="sidebar">
-            <div class="wallet-card">
-                <div class="wallet-header">
-                    <div class="wallet-title">Wallet</div>
-                    <div class="wallet-address" id="walletAddress">0x123...456</div>
-                </div>
-                <div class="wallet-balance" id="walletBalance">$12,456.78</div>
-                <div class="wallet-actions">
-                    <button class="btn-action">Deposit</button>
-                    <button class="btn-action">Withdraw</button>
-                    <button class="btn-action">Transfer</button>
-                </div>
-            </div>
-            <div class="asset-list">
-                <div class="asset-item">
-                    <div class="asset-info">
-                        <div class="asset-icon" style="background: linear-gradient(135deg, #f7931a, #f5821f);">BTC</div>
-                        <div>
-                            <div class="asset-name">Bitcoin</div>
-                            <div class="asset-symbol">BTC</div>
-                        </div>
-                    </div>
-                    <div>
-                        <div class="asset-balance">0.5678 BTC</div>
-                        <div class="asset-value">$18,901.23</div>
-                    </div>
-                </div>
-                <div class="asset-item">
-                    <div class="asset-info">
-                        <div class="asset-icon" style="background: linear-gradient(135deg, #627eea, #584bc4);">ETH</div>
-                        <div>
-                            <div class="asset-name">Ethereum</div>
-                            <div class="asset-symbol">ETH</div>
-                        </div>
-                    </div>
-                    <div>
-                        <div class="asset-balance">4.5678 ETH</div>
-                        <div class="asset-value">$12,345.67</div>
-                    </div>
-                </div>
-                <div class="asset-item">
-                    <div class="asset-info">
-                        <div class="asset-icon" style="background: linear-gradient(135deg, #3772ff, #00d1ff);">SOL</div>
-                        <div>
-                            <div class="asset-name">Solana</div>
-                            <div class="asset-symbol">SOL</div>
-                        </div>
-                    </div>
-                    <div>
-                        <div class="asset-balance">123.4567 SOL</div>
-                        <div class="asset-value">$3,456.78</div>
-                    </div>
-                </div>
-            </div>
-            <div class="transaction-history">
-                <div class="transaction-header">
-                    <div class="transaction-title">Recent Transactions</div>
-                </div>
-                <div class="transaction-list">
+                <div class="transactions-list">
                     <div class="transaction-item">
                         <div class="transaction-info">
-                            <div class="transaction-icon" style="background: linear-gradient(135deg, #f7931a, #f5821f);">BTC</div>
+                            <div class="transaction-icon">F4B0</div>
                             <div class="transaction-details">
-                                <div class="transaction-type">Bought Bitcoin</div>
+                                <div class="transaction-type">Sent ETH</div>
                                 <div class="transaction-time">2 minutes ago</div>
                             </div>
                         </div>
-                        <div>
-                            <div class="transaction-amount">+0.1234 BTC</div>
-                            <div class="transaction-status status-completed">Completed</div>
-                        </div>
+                        <div class="transaction-amount">-0.5 ETH</div>
+                        <div class="transaction-status status-completed">Completed</div>
                     </div>
                     <div class="transaction-item">
                         <div class="transaction-info">
-                            <div class="transaction-icon" style="background: linear-gradient(135deg, #627eea, #584bc4);">ETH</div>
+                            <div class="transaction-icon">F4B8</div>
                             <div class="transaction-details">
-                                <div class="transaction-type">Sold Ethereum</div>
+                                <div class="transaction-type">Received USDC</div>
                                 <div class="transaction-time">15 minutes ago</div>
                             </div>
                         </div>
-                        <div>
-                            <div class="transaction-amount">-1.2345 ETH</div>
-                            <div class="transaction-status status-completed">Completed</div>
-                        </div>
+                        <div class="transaction-amount">+1,200 USDC</div>
+                        <div class="transaction-status status-completed">Completed</div>
                     </div>
                     <div class="transaction-item">
                         <div class="transaction-info">
-                            <div class="transaction-icon" style="background: linear-gradient(135deg, #3772ff, #00d1ff);">SOL</div>
+                            <div class="transaction-icon">F525</div>
                             <div class="transaction-details">
-                                <div class="transaction-type">Received Solana</div>
-                                <div class="transaction-time">1 hour ago</div>
+                                <div class="transaction-type">NFT Purchase</div>
+                                <div class="transaction-time">30 minutes ago</div>
                             </div>
                         </div>
-                        <div>
-                            <div class="transaction-amount">+12.3456 SOL</div>
-                            <div class="transaction-status status-completed">Completed</div>
+                        <div class="transaction-amount">-2.1 ETH</div>
+                        <div class="transaction-status status-pending">Pending</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="wallet-card">
+                <div class="wallet-header">
+                    <div class="wallet-title">My Wallet</div>
+                    <div class="wallet-actions">
+                        <button class="wallet-action-btn">F50D</button>
+                        <button class="wallet-action-btn">F504</button>
+                    </div>
+                </div>
+                <div class="wallet-balance">12.34 ETH</div>
+                <div class="wallet-address">0x1234...5678</div>
+                <div class="wallet-assets">
+                    <div class="wallet-asset">
+                        <div class="wallet-asset-info">
+                            <div class="wallet-asset-icon">F4B0</div>
+                            <div>
+                                <div class="wallet-asset-name">Ethereum</div>
+                                <div class="wallet-asset-symbol">ETH</div>
+                            </div>
                         </div>
+                        <div class="wallet-asset-value">12.34 ETH</div>
+                    </div>
+                    <div class="wallet-asset">
+                        <div class="wallet-asset-info">
+                            <div class="wallet-asset-icon">F4B8</div>
+                            <div>
+                                <div class="wallet-asset-name">USD Coin</div>
+                                <div class="wallet-asset-symbol">USDC</div>
+                            </div>
+                        </div>
+                        <div class="wallet-asset-value">1,200 USDC</div>
+                    </div>
+                    <div class="wallet-asset">
+                        <div class="wallet-asset-info">
+                            <div class="wallet-asset-icon">F525</div>
+                            <div>
+                                <div class="wallet-asset-name">NFT Collection</div>
+                                <div class="wallet-asset-symbol">NFT</div>
+                            </div>
+                        </div>
+                        <div class="wallet-asset-value">3 NFTs</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="news-card">
+                <div class="news-header">
+                    <div class="news-title">Latest News</div>
+                    <a href="#" class="news-view-all">View All</a>
+                </div>
+                <div class="news-list">
+                    <div class="news-item">
+                        <div class="news-source">CoinDesk</div>
+                        <div class="news-headline">Ethereum Upgrade to Improve Scalability</div>
+                        <div class="news-time">2 hours ago</div>
+                    </div>
+                    <div class="news-item">
+                        <div class="news-source">Decrypt</div>
+                        <div class="news-headline">Bitcoin Reaches New All-Time High</div>
+                        <div class="news-time">5 hours ago</div>
+                    </div>
+                    <div class="news-item">
+                        <div class="news-source">The Block</div>
+                        <div class="news-headline">Solana Network Faces Temporary Outage</div>
+                        <div class="news-time">8 hours ago</div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-    <div class="trade-form">
-        <div class="trade-header">
-            <div class="trade-title">Trade</div>
-            <div class="trade-tabs">
-                <button class="trade-tab active">Limit</button>
-                <button class="trade-tab">Market</button>
-                <button class="trade-tab">Stop-Limit</button>
-            </div>
-        </div>
-        <div class="form-group">
-            <label class="form-label" for="tradePair">Trading Pair</label>
-            <select class="form-input" id="tradePair">
-                <option value="BTC/USDT">BTC/USDT</option>
-                <option value="ETH/USDT">ETH/USDT</option>
-                <option value="SOL/USDT">SOL/USDT</option>
-            </select>
-        </div>
-        <div class="form-group">
-            <label class="form-label" for="tradeAmount">Amount</label>
-            <input class="form-input" type="number" id="tradeAmount" placeholder="0.00">
-        </div>
-        <div class="form-group">
-            <label class="form-label" for="tradePrice">Price</label>
-            <input class="form-input" type="number" id="tradePrice" placeholder="0.00">
-        </div>
-        <div class="form-actions">
-            <button class="btn-trade btn-buy">Buy</button>
-            <button class="btn-trade btn-sell">Sell</button>
-        </div>
-    </div>
-    <div class="modal" id="connectWalletModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <div class="modal-title">Connect Wallet</div>
-                <button class="modal-close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <p>Please select a wallet provider to connect to the Magnum Opus platform.</p>
-                <div class="wallet-providers">
-                    <button class="wallet-provider">MetaMask</button>
-                    <button class="wallet-provider">WalletConnect</button>
-                    <button class="wallet-provider">Coinbase Wallet</button>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-modal btn-modal-secondary">Cancel</button>
-                <button class="btn-modal btn-modal-primary">Connect</button>
-            </div>
-        </div>
-    </div>
-    <div class="notification" id="notification">
-        <div class="notification-icon" style="background: linear-gradient(135deg, #10b981, #38bdf8);">[1m![0m</div>
-        <div class="notification-message">Transaction completed successfully!</div>
-        <button class="notification-close">&times;</button>
-    </div>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <footer class="footer">
+        <p>© 2023 MAGNUM OPUS. All rights reserved. | <a href="#" class="footer-link">Privacy Policy</a> | <a href="#" class="footer-link">Terms of Service</a></p>
+    </footer>
+
     <script src="app.js"></script>
 </body>
 </html>
