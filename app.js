@@ -145,447 +145,203 @@
             priceChange: document.getElementById('price-change-display'),
             orderBookAsks: document.getElementById('orderbook-asks'),
             orderBookBids: document.getElementById('orderbook-bids'),
-            portfolioContainer: document.getElementById('portfolio-container'),
-            transactionsContainer: document.getElementById('transactions-container'),
-            notificationsContainer: document.getElementById('notifications-container'),
-            settingsBtn: document.getElementById('settings-btn'),
-            themeToggle: document.getElementById('theme-toggle'),
-            currencySelect: document.getElementById('currency-select'),
-            slippageInput: document.getElementById('slippage-input'),
-            soundToggle: document.getElementById('sound-toggle'),
-            refreshIntervalInput: document.getElementById('refresh-interval-input'),
-            stakingContainer: document.getElementById('staking-container'),
-            chartCanvas: document.getElementById('price-chart'),
-            volumeDisplay: document.getElementById('volume-display'),
-            highLowDisplay: document.getElementById('high-low-display')
+            transactionList: document.getElementById('transaction-list'),
+            notificationContainer: document.getElementById('notification-container'),
+            portfolioList: document.getElementById('portfolio-list'),
+            chartContainer: document.getElementById('price-chart-container')
         };
     }
 
     function initChartData() {
-        const now = Date.now();
-        for (let i = 0; i < 50; i++) {
-            const time = now - (49 - i) * 60000;
-            state.market.chartData.labels.push(formatTime(new Date(time)));
-            state.market.chartData.prices.push((3450 + Math.sin(i / 5) * 50 + Math.random() * 10).toFixed(2));
+        const now = new Date();
+        for (let i = 30; i >= 0; i--) {
+            const time = new Date(now.getTime() - i * 60000);
+            state.market.chartData.labels.push(time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+            state.market.chartData.prices.push(state.market.price * (1 + (Math.random() * 0.02 - 0.01)));
         }
     }
 
     function setupEventListeners() {
-        if (DOM.connectBtn) DOM.connectBtn.addEventListener('click', toggleWalletConnection);
-        if (DOM.pairSelect) DOM.pairSelect.addEventListener('change', onPairChange);
-        if (DOM.settingsBtn) DOM.settingsBtn.addEventListener('click', openSettingsModal);
-        if (DOM.themeToggle) DOM.themeToggle.addEventListener('change', toggleTheme);
-        if (DOM.currencySelect) DOM.currencySelect.addEventListener('change', updateCurrency);
-        if (DOM.slippageInput) DOM.slippageInput.addEventListener('change', updateSlippage);
-        if (DOM.soundToggle) DOM.soundToggle.addEventListener('change', toggleSounds);
-        if (DOM.refreshIntervalInput) DOM.refreshIntervalInput.addEventListener('change', updateRefreshInterval);
+        if (DOM.connectBtn) {
+            DOM.connectBtn.addEventListener('click', toggleWalletConnection);
+        }
+        if (DOM.pairSelect) {
+            DOM.pairSelect.addEventListener('change', (e) => {
+                state.market.selectedPair = e.target.value;
+                updateMarketData();
+            });
+        }
     }
 
     function initializeChart() {
-        if (!DOM.chartCanvas) return;
-        const ctx = DOM.chartCanvas.getContext('2d');
-        priceChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: state.market.chartData.labels,
-                datasets: [{
-                    label: state.market.selectedPair,
-                    data: state.market.chartData.prices,
-                    borderColor: getComputedStyle(document.documentElement).getPropertyValue('--accent-cyan').trim(),
-                    backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    fill: true,
-                    tension: 0.3
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                animation: false,
-                scales: {
-                    x: {
-                        ticks: { color: '#94a3b8' },
-                        grid: { display: false }
-                    },
-                    y: {
-                        ticks: { color: '#94a3b8' },
-                        grid: { color: 'rgba(56, 189, 248, 0.05)' }
-                    }
-                },
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        mode: 'index',
-                        intersect: false
-                    }
-                },
-                interaction: {
-                    mode: 'nearest',
-                    axis: 'x',
-                    intersect: false
-                }
-            }
-        });
+        const ctx = document.createElement('canvas');
+        if (DOM.chartContainer) {
+            DOM.chartContainer.appendChild(ctx);
+            // In a real app, we would use Chart.js here. 
+            // For this architecture, we simulate the visual update.
+            console.log('Chart initialized for', state.market.selectedPair);
+        }
     }
 
     function populateOrderBook() {
-        const pair = state.market.selectedPair;
-        const rate = PAIR_RATES[pair]?.price || 3450.75;
-        const spread = rate * 0.001;
-        state.orderBook.bids = [];
-        state.orderBook.asks = [];
+        // Generate initial mock orderbook
         for (let i = 0; i < state.orderBook.maxDepth; i++) {
-            const bidPrice = rate - spread * (i + 1);
-            const askPrice = rate + spread * (i + 1);
-            const bidSize = (Math.random() * 2 + 0.5).toFixed(3);
-            const askSize = (Math.random() * 2 + 0.5).toFixed(3);
-            state.orderBook.bids.push({ price: bidPrice.toFixed(2), size: bidSize });
-            state.orderBook.asks.push({ price: askPrice.toFixed(2), size: askSize });
+            const askPrice = state.market.price * (1 + (i * 0.001) + 0.001);
+            const bidPrice = state.market.price * (1 - (i * 0.001) - 0.001);
+            state.orderBook.asks.push({ price: askPrice, amount: Math.random() * 2 });
+            state.orderBook.bids.push({ price: bidPrice, amount: Math.random() * 2 });
         }
+        state.orderBook.asks.sort((a, b) => a.price - b.price);
+        state.orderBook.bids.sort((a, b) => b.price - a.price);
     }
 
     function renderOrderBook() {
-        if (!DOM.orderBookBids || !DOM.orderBookAsks) return;
-        DOM.orderBookBids.innerHTML = '';
-        DOM.orderBookAsks.innerHTML = '';
-        state.orderBook.bids.slice().reverse().forEach(bid => {
-            const row = document.createElement('div');
-            row.className = 'orderbook-row';
-            row.innerHTML = `<span class="price">${bid.price}</span><span class="size">${bid.size}</span>`;
-            DOM.orderBookBids.appendChild(row);
-        });
-        state.orderBook.asks.forEach(ask => {
-            const row = document.createElement('div');
-            row.className = 'orderbook-row';
-            row.innerHTML = `<span class="price">${ask.price}</span><span class="size">${ask.size}</span>`;
-            DOM.orderBookAsks.appendChild(row);
-        });
+        if (!DOM.orderBookAsks || !DOM.orderBookBids) return;
+
+        DOM.orderBookAsks.innerHTML = state.orderBook.asks.map(ask => `
+            <div class="order-row ask">
+                <span class="price">${ask.price.toFixed(2)}</span>
+                <span class="amount">${ask.amount.toFixed(4)}</span>
+            </div>
+        `).join('');
+
+        DOM.orderBookBids.innerHTML = state.orderBook.bids.map(bid => `
+            <div class="order-row bid">
+                <span class="price">${bid.price.toFixed(2)}</span>
+                <span class="amount">${bid.amount.toFixed(4)}</span>
+            </div>
+        `).join('');
     }
 
     function renderPortfolio() {
-        if (!DOM.portfolioContainer) return;
-        DOM.portfolioContainer.innerHTML = '';
-        state.portfolio.forEach(asset => {
-            const item = document.createElement('div');
-            item.className = 'portfolio-item';
-            item.innerHTML = `
-                <div class="asset-info">
-                    <span class="symbol">${asset.symbol}</span>
-                    <span class="name">${asset.name}</span>
+        if (!DOM.portfolioList) return;
+        DOM.portfolioList.innerHTML = state.portfolio.map(item => `
+            <div class="portfolio-item">
+                <div class="item-info">
+                    <span class="symbol">${item.symbol}</span>
+                    <span class="name">${item.name}</span>
                 </div>
-                <div class="asset-value">
-                    <span class="amount">${asset.balance.toFixed(4)}</span>
-                    <span class="usd-value">$${asset.value.toLocaleString()}</span>
+                <div class="item-values">
+                    <span class="balance">${item.balance.toFixed(4)}</span>
+                    <span class="value">$${item.value.toLocaleString()}</span>
                 </div>
-                <div class="allocation-bar">
-                    <div class="allocation-fill" style="width: ${asset.allocation}%"></div>
-                </div>
-            `;
-            DOM.portfolioContainer.appendChild(item);
-        });
+            </div>
+        `).join('');
     }
 
     function renderTransactions() {
-        if (!DOM.transactionsContainer) return;
-        DOM.transactionsContainer.innerHTML = '';
-        state.transactions.slice().reverse().slice(0, 10).forEach(tx => {
-            const item = document.createElement('div');
-            item.className = `transaction-item ${tx.status}`;
-            item.innerHTML = `
-                <div class="tx-hash">${tx.hash?.substring(0, 10)}...${tx.hash?.substring(tx.hash.length - 8)}</div>
-                <div class="tx-details">
-                    <span class="tx-type ${tx.type}">${tx.type}</span>
-                    <span class="tx-amount">${tx.amount} ${tx.token}</span>
-                </div>
-                <div class="tx-time">${formatTimeAgo(tx.timestamp)}</div>
-            `;
-            DOM.transactionsContainer.appendChild(item);
-        });
+        if (!DOM.transactionList) return;
+        DOM.transactionList.innerHTML = state.transactions.map(tx => `
+            <div class="tx-row ${tx.type}">
+                <span class="tx-time">${tx.time}</span>
+                <span class="tx-hash">${tx.hash.substring(0, 8)}...</span>
+                <span class="tx-status">${tx.status}</span>
+                <span class="tx-amount">${tx.amount}</span>
+            </div>
+        `).join('');
     }
 
     function updateUI() {
-        if (DOM.walletAddress) DOM.walletAddress.textContent = state.wallet.address || 'Not Connected';
-        if (DOM.walletBalance) DOM.walletBalance.textContent = `$${state.wallet.balanceUsdt.toLocaleString()}`;
-        if (DOM.gasPrice) DOM.gasPrice.textContent = `${state.gas.current} Gwei`;
-        if (DOM.currentPrice) DOM.currentPrice.textContent = formatPrice(state.market.price);
+        if (DOM.walletAddress) {
+            DOM.walletAddress.textContent = state.wallet.connected ? state.wallet.address : 'Not Connected';
+            DOM.walletAddress.classList.toggle('connected', state.wallet.connected);
+        }
+        if (DOM.walletBalance) {
+            DOM.walletBalance.textContent = state.wallet.connected ? `${state.wallet.balanceEth} ETH` : '0.00 ETH';
+        }
+        if (DOM.currentPrice) {
+            DOM.currentPrice.textContent = `$${state.market.price.toLocaleString()}`;
+        }
         if (DOM.priceChange) {
             DOM.priceChange.textContent = `${state.market.change24h > 0 ? '+' : ''}${state.market.change24h}%`;
-            DOM.priceChange.className = `price-change ${state.market.change24h >= 0 ? 'positive' : 'negative'}`;
+            DOM.priceChange.className = state.market.change24h >= 0 ? 'price-up' : 'price-down';
         }
-        if (DOM.volumeDisplay) DOM.volumeDisplay.textContent = `Vol: $${state.market.volume24h.toLocaleString()}`;
-        if (DOM.highLowDisplay) DOM.highLowDisplay.textContent = `H: ${formatPrice(state.market.high24h)} L: ${formatPrice(state.market.low24h)}`;
-        if (DOM.pairSelect) DOM.pairSelect.value = state.market.selectedPair;
-        updateStakingDisplay();
-    }
-
-    function updateStakingDisplay() {
-        if (!DOM.stakingContainer) return;
-        DOM.stakingContainer.innerHTML = `
-            <div class="staking-summary">
-                <div class="staked-amount">
-                    <span class="label">Staked OPUS</span>
-                    <span class="value">${state.staking.stakedOpus.toFixed(2)}</span>
-                </div>
-                <div class="reward-info">
-                    <span class="apy">APY: ${state.staking.rewardRateApy}%</span>
-                    <span class="pending">Pending: ${state.staking.pendingRewards.toFixed(4)} OPUS</span>
-                </div>
-            </div>
-        `;
+        if (DOM.gasPrice) {
+            DOM.gasPrice.textContent = `${state.gas.current} Gwei`;
+        }
     }
 
     function startSimulationEngines() {
-        marketInterval = setInterval(simulateMarketData, state.settings.autoRefreshInterval);
-        gasInterval = setInterval(simulateGasData, 15000);
-        orderBookInterval = setInterval(() => {
-            populateOrderBook();
-            renderOrderBook();
-        }, 5000);
-    }
-
-    function simulateMarketData() {
-        const pair = state.market.selectedPair;
-        const rate = PAIR_RATES[pair]?.price || 3450.75;
-        const volatility = 0.02;
-        const change = (Math.random() - 0.5) * volatility * rate;
-        state.market.price += change;
-        state.market.change24h = ((state.market.price - rate + change) / rate * 100).toFixed(2);
-        state.market.high24h = Math.max(state.market.high24h, state.market.price);
-        state.market.low24h = Math.min(state.market.low24h, state.market.price);
-        state.market.volume24h += Math.random() * 1000000;
-        updateChart();
-        updateUI();
-    }
-
-    function simulateGasData() {
-        state.gas.slow = Math.floor(Math.random() * 5 + 10);
-        state.gas.standard = Math.floor(Math.random() * 5 + 15);
-        state.gas.fast = Math.floor(Math.random() * 5 + 20);
-        state.gas.current = state.gas.standard;
-        if (DOM.gasPrice) DOM.gasPrice.textContent = `${state.gas.current} Gwei`;
-    }
-
-    function updateChart() {
-        if (!priceChart) return;
-        const now = new Date();
-        state.market.chartData.labels.push(formatTime(now));
-        state.market.chartData.prices.push(state.market.price.toFixed(2));
-        if (state.market.chartData.labels.length > 100) {
-            state.market.chartData.labels.shift();
+        // Market Price Fluctuation
+        marketInterval = setInterval(() => {
+            const volatility = 0.002;
+            const change = 1 + (Math.random() * volatility * 2 - volatility);
+            state.market.price *= change;
+            state.market.chartData.prices.push(state.market.price);
             state.market.chartData.prices.shift();
-        }
-        priceChart.data.labels = state.market.chartData.labels;
-        priceChart.data.datasets[0].data = state.market.chartData.prices;
-        priceChart.update('none');
+            updateUI();
+        }, 2000);
+
+        // Gas Price Fluctuation
+        gasInterval = setInterval(() => {
+            state.gas.current = Math.max(10, Math.min(50, state.gas.current + (Math.floor(Math.random() * 3) - 1)));
+            updateUI();
+        }, 5000);
+
+        // Orderbook Fluctuation
+        orderBookInterval = setInterval(() => {
+            state.orderBook.asks.forEach(ask => ask.amount = Math.max(0.1, ask.amount + (Math.random() * 0.2 - 0.1)));
+            state.orderBook.bids.forEach(bid => bid.amount = Math.max(0.1, bid.amount + (Math.random() * 0.2 - 0.1)));
+            renderOrderBook();
+        }, 1500);
     }
 
     function toggleWalletConnection() {
-        if (state.wallet.connected) {
-            disconnectWallet();
+        if (!state.wallet.connected) {
+            state.wallet.connected = true;
+            state.wallet.address = '0x' + Array.from({length: 40}, () => Math.floor(Math.random() * 16).toString(16)).join('');
+            addNotification('Wallet Connected', `Connected to ${state.wallet.networkName}`, 'success');
         } else {
-            connectWallet();
+            state.wallet.connected = false;
+            state.wallet.address = null;
+            addNotification('Wallet Disconnected', 'Session ended.', 'warning');
         }
-    }
-
-    function connectWallet() {
-        state.wallet.connected = true;
-        state.wallet.address = '0x' + Math.random().toString(16).substring(2, 18) + '...';
-        state.wallet.balanceEth = (Math.random() * 20 + 5).toFixed(3);
-        state.wallet.balanceUsdt = (Math.random() * 50000 + 10000).toFixed(2);
         updateUI();
-        addNotification('Wallet Connected', `Connected to ${state.wallet.address}`, 'success');
-        playSound('connect');
     }
 
-    function disconnectWallet() {
-        state.wallet.connected = false;
-        state.wallet.address = null;
-        updateUI();
-        addNotification('Wallet Disconnected', 'Your wallet has been disconnected.', 'info');
-        playSound('disconnect');
-    }
-
-    function onPairChange() {
-        if (!DOM.pairSelect) return;
-        state.market.selectedPair = DOM.pairSelect.value;
-        const rate = PAIR_RATES[state.market.selectedPair]?.price || 3450.75;
-        state.market.price = rate;
-        state.market.change24h = (Math.random() * 10 - 5).toFixed(2);
-        populateOrderBook();
-        renderOrderBook();
-        updateChart();
-        updateUI();
-        addNotification('Pair Changed', `Now viewing ${state.market.selectedPair}`, 'info');
-    }
-
-    function openSettingsModal() {
-        addNotification('Settings', 'Opening settings panel...', 'info');
-    }
-
-    function toggleTheme() {
-        if (!DOM.themeToggle) return;
-        state.settings.theme = DOM.themeToggle.checked ? 'light' : 'dark';
-        document.body.className = state.settings.theme;
-        saveSettingsToStorage();
-        addNotification('Theme Changed', `Switched to ${state.settings.theme} mode.`, 'info');
-    }
-
-    function updateCurrency() {
-        if (!DOM.currencySelect) return;
-        state.settings.currency = DOM.currencySelect.value;
-        saveSettingsToStorage();
-        updateUI();
-        addNotification('Currency Updated', `Display currency set to ${state.settings.currency}.`, 'info');
-    }
-
-    function updateSlippage() {
-        if (!DOM.slippageInput) return;
-        state.settings.slippageTolerance = parseFloat(DOM.slippageInput.value) || 0.5;
-        saveSettingsToStorage();
-        addNotification('Slippage Tolerance', `Set to ${state.settings.slippageTolerance}%`, 'info');
-    }
-
-    function toggleSounds() {
-        if (!DOM.soundToggle) return;
-        state.settings.enableSounds = DOM.soundToggle.checked;
-        saveSettingsToStorage();
-        addNotification('Sound Effects', state.settings.enableSounds ? 'Enabled' : 'Disabled', 'info');
-    }
-
-    function updateRefreshInterval() {
-        if (!DOM.refreshIntervalInput) return;
-        state.settings.autoRefreshInterval = parseInt(DOM.refreshIntervalInput.value) || 3000;
-        saveSettingsToStorage();
-        if (marketInterval) clearInterval(marketInterval);
-        marketInterval = setInterval(simulateMarketData, state.settings.autoRefreshInterval);
-        addNotification('Refresh Rate', `Auto-refresh set to ${state.settings.autoRefreshInterval}ms`, 'info');
-    }
-
-    function addNotification(title, message, type = 'info') {
+    function addNotification(title, message, type) {
+        const id = Date.now();
         const notification = {
-            id: Date.now(),
+            id,
             title,
             message,
             type,
-            timestamp: new Date()
+            time: new Date().toLocaleTimeString()
         };
-        state.notifications.push(notification);
-        if (state.notifications.length > 20) state.notifications.shift();
-        renderNotifications();
-        setTimeout(() => removeNotification(notification.id), 5000);
-    }
-
-    function removeNotification(id) {
-        state.notifications = state.notifications.filter(n => n.id !== id);
-        renderNotifications();
-    }
-
-    function renderNotifications() {
-        if (!DOM.notificationsContainer) return;
-        DOM.notificationsContainer.innerHTML = '';
-        state.notifications.slice().reverse().forEach(note => {
-            const item = document.createElement('div');
-            item.className = `notification ${note.type}`;
-            item.innerHTML = `
-                <div class="notification-title">${note.title}</div>
-                <div class="notification-message">${note.message}</div>
-                <div class="notification-time">${formatTime(note.timestamp)}</div>
+        state.notifications.unshift(notification);
+        if (DOM.notificationContainer) {
+            const el = document.createElement('div');
+            el.className = `notification notification-${type} animate-in`;
+            el.id = `notif-${id}`;
+            el.innerHTML = `
+                <div class="notif-header"><strong>${title}</strong></div>
+                <div class="notif-body">${message}</div>
             `;
-            DOM.notificationsContainer.appendChild(item);
-        });
+            DOM.notificationContainer.prepend(el);
+            setTimeout(() => {
+                el.classList.add('animate-out');
+                setTimeout(() => el.remove(), 500);
+            }, 4000);
+        }
     }
 
-    function playSound(type) {
-        if (!state.settings.enableSounds) return;
-        if (!audioCtx) {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        }
-        const oscillator = audioCtx.createOscillator();
-        const gainNode = audioCtx.createGain();
-        oscillator.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-        oscillator.type = 'sine';
-        switch (type) {
-            case 'connect':
-                oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
-                break;
-            case 'disconnect':
-                oscillator.frequency.setValueAtTime(220, audioCtx.currentTime);
-                break;
-            default:
-                oscillator.frequency.setValueAtTime(330, audioCtx.currentTime);
-        }
-        gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
-        oscillator.start(audioCtx.currentTime);
-        oscillator.stop(audioCtx.currentTime + 0.5);
+    function updateMarketData() {
+        // Simulate fetching new pair data
+        const pair = PAIR_RATES[state.market.selectedPair] || PAIR_RATES['ETH/USDT'];
+        state.market.price = pair.price;
+        addNotification('Market Switched', `Now viewing ${state.market.selectedPair}`, 'info');
+        updateUI();
     }
 
     function setupWeb3Listeners() {
-        window.addEventListener('message', (event) => {
-            if (event.data?.type === 'WEB3_EVENT') {
-                handleWeb3Event(event.data.payload);
-            }
+        // Mocking EIP-1193 provider events
+        window.addEventListener('magnum:accountChanged', (e) => {
+            state.wallet.address = e.detail.address;
+            updateUI();
         });
     }
 
-    function handleWeb3Event(payload) {
-        switch (payload.event) {
-            case 'TRANSACTION_SUBMITTED':
-                addNotification('Transaction Submitted', payload.txHash, 'info');
-                break;
-            case 'TRANSACTION_CONFIRMED':
-                addNotification('Transaction Confirmed', payload.txHash, 'success');
-                simulateNewTransaction(payload);
-                break;
-            case 'PRICE_UPDATE':
-                state.market.price = payload.price;
-                updateChart();
-                updateUI();
-                break;
-            default:
-                console.log('Unhandled Web3 event:', payload);
-        }
-    }
-
-    function simulateNewTransaction(payload) {
-        const tx = {
-            id: Date.now(),
-            hash: payload.txHash || '0x' + Math.random().toString(16).substring(2, 66),
-            type: payload.type || 'SWAP',
-            amount: payload.amount || '1.25',
-            token: payload.token || 'ETH',
-            status: 'confirmed',
-            timestamp: new Date()
-        };
-        state.transactions.push(tx);
-        if (state.transactions.length > 50) state.transactions.shift();
-        renderTransactions();
-    }
-
-    function formatPrice(price) {
-        return new Intl.NumberFormat(state.settings.currency === 'USD' ? 'en-US' : 'en-US', {
-            style: 'currency',
-            currency: state.settings.currency,
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-        }).format(price);
-    }
-
-    function formatTime(date) {
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
-
-    function formatTimeAgo(date) {
-        const seconds = Math.floor((new Date() - date) / 1000);
-        if (seconds < 60) return `${seconds}s ago`;
-        const minutes = Math.floor(seconds / 60);
-        if (minutes < 60) return `${minutes}m ago`;
-        const hours = Math.floor(minutes / 60);
-        return `${hours}h ago`;
-    }
-
-    // Start the application
+    // Run Application
     document.addEventListener('DOMContentLoaded', init);
+
 })();
