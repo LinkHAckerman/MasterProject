@@ -139,26 +139,11 @@ contract MagnumOpusStakingVault {
     uint256 public totalStaked;
 
     mapping(address => uint256) public userRewardPerTokenPaid;
-    mapping(address => uint256) public rewards;
-    mapping(address => uint256) private _balances;
-
-    event Staked(address indexed user, uint256 amount);
-    event Withdrawn(address indexed user, uint256 amount);
-    event RewardPaid(address indexed user, uint256 reward);
-    event RewardRateUpdated(uint256 newRate);
+    mapping(address => uint256) public userRewards;
+    mapping(address => uint256) public userStakes;
 
     modifier onlyOwner() {
-        require(msg.sender == owner, "StakingVault: caller is not owner");
-        _;
-    }
-
-    modifier updateReward(address account) {
-        rewardPerTokenStored = rewardPerToken();
-        lastUpdateTime = block.timestamp;
-        if (account != address(0)) {
-            rewards[account] = earned(account);
-            userRewardPerTokenPaid[account] = rewardPerTokenStored;
-        }
+        require(msg.sender == owner, "MagnumOpusStakingVault: caller is not the owner");
         _;
     }
 
@@ -168,173 +153,190 @@ contract MagnumOpusStakingVault {
         rewardToken = IERC20(_rewardToken);
     }
 
-    function balanceOf(address account) external view returns (uint256) {
-        return _balances[account];
-    }
+    function stake(uint256 amount) external {
+        require(amount > 0, "MagnumOpusStakingVault: cannot stake 0");
+        require(stakingToken.transferFrom(msg.sender, address(this), amount), "MagnumOpusStakingVault: transfer failed");
 
-    function rewardPerToken() public view returns (uint256) {
-        if (totalStaked == 0) {
-            return rewardPerTokenStored;
-        }
-        return rewardPerTokenStored + (((block.timestamp - lastUpdateTime) * rewardRate * 1e18) / totalStaked);
-    }
-
-    function earned(address account) public view returns (uint256) {
-        return ((_balances[account] * (rewardPerToken() - userRewardPerTokenPaid[account])) / 1e18) + rewards[account];
-    }
-
-    function stake(uint256 amount) external updateReward(msg.sender) {
-        require(amount > 0, "StakingVault: cannot stake 0");
+        _updateReward(msg.sender);
+        userStakes[msg.sender] += amount;
         totalStaked += amount;
-        _balances[msg.sender] += amount;
-        require(stakingToken.transferFrom(msg.sender, address(this), amount), "StakingVault: transfer failed");
-        emit Staked(msg.sender, amount);
     }
 
-    function withdraw(uint256 amount) external updateReward(msg.sender) {
-        require(amount > 0, "StakingVault: cannot withdraw 0");
-        require(_balances[msg.sender] >= amount, "StakingVault: insufficient balance");
+    function unstake(uint256 amount) external {
+        require(amount > 0, "MagnumOpusStakingVault: cannot unstake 0");
+        require(userStakes[msg.sender] >= amount, "MagnumOpusStakingVault: insufficient stake");
+
+        _updateReward(msg.sender);
+        userStakes[msg.sender] -= amount;
         totalStaked -= amount;
-        _balances[msg.sender] -= amount;
-        require(stakingToken.transfer(msg.sender, amount), "StakingVault: transfer failed");
-        emit Withdrawn(msg.sender, amount);
+        require(stakingToken.transfer(msg.sender, amount), "MagnumOpusStakingVault: transfer failed");
     }
 
-    function getReward() external updateReward(msg.sender) {
-        uint256 reward = rewards[msg.sender];
+    function claimRewards() external {
+        _updateReward(msg.sender);
+        uint256 reward = userRewards[msg.sender];
         if (reward > 0) {
-            rewards[msg.sender] = 0;
-            require(rewardToken.transfer(msg.sender, reward), "StakingVault: reward transfer failed");
-            emit RewardPaid(msg.sender, reward);
+            userRewards[msg.sender] = 0;
+            require(rewardToken.transfer(msg.sender, reward), "MagnumOpusStakingVault: transfer failed");
         }
     }
 
-    function setRewardRate(uint256 _rewardRate) external onlyOwner updateReward(address(0)) {
+    function setRewardRate(uint256 _rewardRate) external onlyOwner {
+        _updateReward(address(0));
         rewardRate = _rewardRate;
-        emit RewardRateUpdated(_rewardRate);
+    }
+
+    function _updateReward(address account) internal {
+        if (account != address(0)) {
+            userRewards[account] += (totalStaked * (rewardPerTokenStored - userRewardPerTokenPaid[account])) / 1e18;
+            userRewardPerTokenPaid[account] = rewardPerTokenStored;
+        }
+
+        uint256 currentTime = block.timestamp;
+        uint256 timeElapsed = currentTime - lastUpdateTime;
+        if (timeElapsed > 0 && totalStaked > 0) {
+            rewardPerTokenStored += (timeElapsed * rewardRate * 1e18) / totalStaked;
+        }
+        lastUpdateTime = currentTime;
     }
 }
 
 /**
+ * @title MagnumOpusNFT
+ * @notice Non-Fungible Token (NFT) contract with basic minting and transfer functionality.
+ */
+contract MagnumOpusNFT {
+    string public name = "Magnum Opus NFT";
+    string public symbol = "MONFT";
+
+    address public owner;
+
+    mapping(uint256 => address) private _owners;
+    mapping(address => uint256) private _balances;
+    mapping(uint256 => bool) private _exists;
+
+    uint256 private _totalSupply;
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "MagnumOpusNFT: caller is not the owner");
+        _;
+    }
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    function totalSupply() external view returns (uint256) {
+        return _totalSupply;
+    }
+
+    function balanceOf(address owner) external view returns (uint256) {
+        return _balances[owner];
+    }
+
+    function ownerOf(uint256 tokenId) external view returns (address) {
+        require(_exists[tokenId], "MagnumOpusNFT: token does not exist");
+        return _owners[tokenId];
+    }
+
+    function transferFrom(address from, address to, uint256 tokenId) external {
+        require(_exists[tokenId], "MagnumOpusNFT: token does not exist");
+        require(_owners[tokenId] == from, "MagnumOpusNFT: transfer from incorrect owner");
+        require(to != address(0), "MagnumOpusNFT: transfer to zero address");
+
+        _balances[from] -= 1;
+        _balances[to] += 1;
+        _owners[tokenId] = to;
+
+        emit Transfer(from, to, tokenId);
+    }
+
+    function mint(address to, uint256 tokenId) external onlyOwner {
+        require(to != address(0), "MagnumOpusNFT: mint to zero address");
+        require(!_exists[tokenId], "MagnumOpusNFT: token already exists");
+
+        _balances[to] += 1;
+        _owners[tokenId] = to;
+        _exists[tokenId] = true;
+        _totalSupply += 1;
+
+        emit Transfer(address(0), to, tokenId);
+    }
+
+    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+}
+
+/**
  * @title MagnumOpusDEX
- * @notice Constant-Product Automated Market Maker (AMM) supporting token pairs and liquidity management.
+ * @notice Decentralized Exchange (DEX) contract for trading ERC20 tokens.
  */
 contract MagnumOpusDEX {
-    IERC20 public immutable token0;
-    IERC20 public immutable token1;
-
-    uint256 public reserve0;
-    uint256 public reserve1;
-
-    uint256 public totalSupply;
-    mapping(address => uint256) public balanceOf;
-
-    event MintLiquidity(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
-    event BurnLiquidity(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
-    event Swap(address indexed trader, uint256 amountIn, IERC20 tokenIn, uint256 amountOut, IERC20 tokenOut);
-
-    constructor(address _token0, address _token1) {
-        token0 = IERC20(_token0);
-        token1 = IERC20(_token1);
+    struct Order {
+        address trader;
+        uint256 amount;
+        uint256 price;
+        bool isBuy;
     }
 
-    function _mint(address to, uint256 amount) private {
-        balanceOf[to] += amount;
-        totalSupply += amount;
+    IERC20 public tokenA;
+    IERC20 public tokenB;
+
+    address public owner;
+
+    mapping(uint256 => Order) public orders;
+    uint256 public orderCount;
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "MagnumOpusDEX: caller is not the owner");
+        _;
     }
 
-    function _burn(address from, uint256 amount) private {
-        balanceOf[from] -= amount;
-        totalSupply -= amount;
+    constructor(address _tokenA, address _tokenB) {
+        owner = msg.sender;
+        tokenA = IERC20(_tokenA);
+        tokenB = IERC20(_tokenB);
     }
 
-    function _update(uint256 balance0, uint256 balance1) private {
-        reserve0 = balance0;
-        reserve1 = balance1;
-    }
+    function createOrder(uint256 amount, uint256 price, bool isBuy) external {
+        require(amount > 0, "MagnumOpusDEX: amount must be greater than 0");
+        require(price > 0, "MagnumOpusDEX: price must be greater than 0");
 
-    function _sqrt(uint256 y) private pure returns (uint256 z) {
-        if (y > 3) {
-            z = y;
-            uint256 x = y / 2 + 1;
-            while (x < z) {
-                z = x;
-                x = (y / x + x) / 2;
-            }
-        } else if (y != 0) {
-            z = 1;
-        }
-    }
-
-    function _min(uint256 x, uint256 y) private pure returns (uint256) {
-        return x < y ? x : y;
-    }
-
-    function addLiquidity(uint256 amount0Desired, uint256 amount1Desired) external returns (uint256 liquidity) {
-        require(token0.transferFrom(msg.sender, address(this), amount0Desired), "DEX: token0 transfer failed");
-        require(token1.transferFrom(msg.sender, address(this), amount1Desired), "DEX: token1 transfer failed");
-
-        uint256 balance0 = token0.balanceOf(address(this));
-        uint256 balance1 = token1.balanceOf(address(this));
-
-        uint256 amount0 = balance0 - reserve0;
-        uint256 amount1 = balance1 - reserve1;
-
-        if (totalSupply == 0) {
-            liquidity = _sqrt(amount0 * amount1);
+        if (isBuy) {
+            require(tokenB.transferFrom(msg.sender, address(this), amount * price), "MagnumOpusDEX: transfer failed");
         } else {
-            liquidity = _min(
-                (amount0 * totalSupply) / reserve0,
-                (amount1 * totalSupply) / reserve1
-            );
+            require(tokenA.transferFrom(msg.sender, address(this), amount), "MagnumOpusDEX: transfer failed");
         }
 
-        require(liquidity > 0, "DEX: liquidity is 0");
-        _mint(msg.sender, liquidity);
-        _update(balance0, balance1);
+        orderCount += 1;
+        orders[orderCount] = Order(msg.sender, amount, price, isBuy);
 
-        emit MintLiquidity(msg.sender, amount0, amount1, liquidity);
+        emit OrderCreated(orderCount, msg.sender, amount, price, isBuy);
     }
 
-    function removeLiquidity(uint256 liquidity) external returns (uint256 amount0, uint256 amount1) {
-        require(balanceOf[msg.sender] >= liquidity, "DEX: insufficient liquidity shares");
+    function matchOrder(uint256 orderId) external {
+        require(orders[orderId].trader != address(0), "MagnumOpusDEX: order does not exist");
+        require(orders[orderId].trader != msg.sender, "MagnumOpusDEX: cannot match own order");
 
-        uint256 balance0 = token0.balanceOf(address(this));
-        uint256 balance1 = token1.balanceOf(address(this));
+        Order memory order = orders[orderId];
+        uint256 amount = order.amount;
+        uint256 price = order.price;
+        bool isBuy = order.isBuy;
 
-        amount0 = (liquidity * balance0) / totalSupply;
-        amount1 = (liquidity * balance1) / totalSupply;
+        if (isBuy) {
+            require(tokenA.transferFrom(msg.sender, address(this), amount), "MagnumOpusDEX: transfer failed");
+            require(tokenB.transfer(order.trader, amount * price), "MagnumOpusDEX: transfer failed");
+            require(tokenA.transfer(msg.sender, amount), "MagnumOpusDEX: transfer failed");
+        } else {
+            require(tokenB.transferFrom(msg.sender, address(this), amount * price), "MagnumOpusDEX: transfer failed");
+            require(tokenA.transfer(order.trader, amount), "MagnumOpusDEX: transfer failed");
+            require(tokenB.transfer(msg.sender, amount * price), "MagnumOpusDEX: transfer failed");
+        }
 
-        require(amount0 > 0 && amount1 > 0, "DEX: zero output amount");
+        delete orders[orderId];
 
-        _burn(msg.sender, liquidity);
-        require(token0.transfer(msg.sender, amount0), "DEX: token0 transfer failed");
-        require(token1.transfer(msg.sender, amount1), "DEX: token1 transfer failed");
-
-        _update(token0.balanceOf(address(this)), token1.balanceOf(address(this)));
-
-        emit BurnLiquidity(msg.sender, amount0, amount1, liquidity);
+        emit OrderMatched(orderId, msg.sender, amount, price, isBuy);
     }
 
-    function swap(address tokenIn, uint256 amountIn, uint256 minOut) external returns (uint256 amountOut) {
-        require(tokenIn == address(token0) || tokenIn == address(token1), "DEX: invalid token");
-        require(amountIn > 0, "DEX: amountIn must be > 0");
-
-        bool isToken0 = tokenIn == address(token0);
-        (IERC20 inToken, IERC20 outToken, uint256 resIn, uint256 resOut) = isToken0
-            ? (token0, token1, reserve0, reserve1)
-            : (token1, token0, reserve1, reserve0);
-
-        require(inToken.transferFrom(msg.sender, address(this), amountIn), "DEX: input transfer failed");
-
-        uint256 amountInWithFee = amountIn * 997;
-        amountOut = (amountInWithFee * resOut) / ((resIn * 1000) + amountInWithFee);
-
-        require(amountOut >= minOut, "DEX: slippage exceeded");
-        require(outToken.transfer(msg.sender, amountOut), "DEX: output transfer failed");
-
-        _update(token0.balanceOf(address(this)), token1.balanceOf(address(this)));
-
-        emit Swap(msg.sender, amountIn, inToken, amountOut, outToken);
-    }
+    event OrderCreated(uint256 indexed orderId, address indexed trader, uint256 amount, uint256 price, bool isBuy);
+    event OrderMatched(uint256 indexed orderId, address indexed trader, uint256 amount, uint256 price, bool isBuy);
 }

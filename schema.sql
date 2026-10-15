@@ -4,6 +4,9 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- Enum for transaction status
+CREATE TYPE tx_status AS ENUM ('pending','confirmed','failed','reverted');
+
 -- Core Users Table
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -19,6 +22,11 @@ CREATE TABLE IF NOT EXISTS users (
     CONSTRAINT chk_user_status CHECK (status IN ('active','suspended','deleted','verified'))
 );
 
+CREATE TRIGGER trg_users_updated_at
+BEFORE UPDATE ON users
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
 -- Wallet Hierarchy and Network Support
 CREATE TABLE IF NOT EXISTS wallets (
     wallet_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -33,6 +41,11 @@ CREATE TABLE IF NOT EXISTS wallets (
     CONSTRAINT chk_network CHECK (network IN ('Ethereum','Polygon','BinanceSmartChain','Solana','Avalanche','PolygonZK','Arbitrum','Optimism','Base','Mantle'))
 );
 
+CREATE TRIGGER trg_wallets_updated_at
+BEFORE UPDATE ON wallets
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
 -- Token and NFT Classification
 CREATE TABLE IF NOT EXISTS assets (
     asset_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -46,9 +59,15 @@ CREATE TABLE IF NOT EXISTS assets (
     token_type VARCHAR(50) CHECK (token_type IN ('ERC20','ERC721','ERC1155','BEP20','BEP2','BSCToken','SolanaSPL','AVAXToken','PolygonToken','WrappedToken')),
     total_supply NUMERIC(38,18),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (symbol, network),
     CONSTRAINT chk_token_network CHECK (network IN ('Ethereum','Polygon','BinanceSmartChain','Solana','Avalanche','PolygonZK','Arbitrum','Optimism','Base','Mantle'))
 );
+
+CREATE TRIGGER trg_assets_updated_at
+BEFORE UPDATE ON assets
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
 
 -- NFT Collection and Token Metadata
 CREATE TABLE IF NOT EXISTS nft_collections (
@@ -59,8 +78,14 @@ CREATE TABLE IF NOT EXISTS nft_collections (
     image_url VARCHAR(255),
     attributes JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (asset_id)
 );
+
+CREATE TRIGGER trg_nft_collections_updated_at
+BEFORE UPDATE ON nft_collections
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
 
 -- NFT Token IDs and Ownership
 CREATE TABLE IF NOT EXISTS nft_tokens (
@@ -69,8 +94,14 @@ CREATE TABLE IF NOT EXISTS nft_tokens (
     token_index BIGINT NOT NULL,
     owner_address VARCHAR(42) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (token_id, owner_address)
 );
+
+CREATE TRIGGER trg_nft_tokens_updated_at
+BEFORE UPDATE ON nft_tokens
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
 
 -- Balances (current snapshot)
 CREATE TABLE IF NOT EXISTS balances (
@@ -97,7 +128,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     gas_price NUMERIC(38,18),
     gas_used BIGINT,
     status tx_status NOT NULL DEFAULT 'pending',
-    transaction_type VARCHAR(50) CHECK (transaction_type IN ('transfer','mint','burn','swap','stake','unstake','deposit','withdraw','approve','revoke','swap','liquidity_add','liquidity_remove','swap_exact_in','swap_exact_out','approve_for_delegate','delegate')),
+    transaction_type VARCHAR(50) CHECK (transaction_type IN ('transfer','mint','burn','swap','stake','unstake','deposit','withdraw','approve','revoke','liquidity_add','liquidity_remove','swap_exact_in','swap_exact_out','approve_for_delegate','delegate')),
     chain_id INTEGER,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     confirmed_at TIMESTAMPTZ,
@@ -112,94 +143,28 @@ CREATE INDEX IF NOT EXISTS idx_transactions_asset ON transactions(asset_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_block ON transactions(block_number);
 CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
+CREATE INDEX IF NOT EXISTS idx_assets_symbol_network ON assets(symbol, network);
+CREATE INDEX IF NOT EXISTS idx_wallets_user ON wallets(user_id);
+CREATE INDEX IF NOT EXISTS idx_balances_wallet ON balances(wallet_id);
+CREATE INDEX IF NOT EXISTS idx_balances_asset ON balances(asset_id);
 
--- Smart Contract Interactions
-CREATE TABLE IF NOT EXISTS smart_contract_interactions (
-    interaction_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tx_id UUID NOT NULL REFERENCES transactions(tx_id) ON DELETE CASCADE,
-    contract_address VARCHAR(42) NOT NULL,
-    function_name VARCHAR(100) NOT NULL,
-    function_signature VARCHAR(255),
-    input_parameters JSONB,
-    output_parameters JSONB,
-    event_logs JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (tx_id, contract_address, function_name)
-);
+-- Function to auto-update updated_at timestamps
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- DeFi Protocol Interactions
-CREATE TABLE IF NOT EXISTS defi_interactions (
-    interaction_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tx_id UUID NOT NULL REFERENCES transactions(tx_id) ON DELETE CASCADE,
-    protocol VARCHAR(50) NOT NULL,
-    interaction_type VARCHAR(50) NOT NULL,
-    pool_address VARCHAR(42),
-    token_in UUID REFERENCES assets(asset_id),
-    token_out UUID REFERENCES assets(asset_id),
-    amount_in NUMERIC(38,18),
-    amount_out NUMERIC(38,18),
-    slippage NUMERIC(5,2),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (tx_id, protocol, interaction_type)
-);
-
--- Staking and Yield Farming
-CREATE TABLE IF NOT EXISTS staking_positions (
-    position_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    wallet_id UUID NOT NULL REFERENCES wallets(wallet_id) ON DELETE CASCADE,
-    asset_id UUID NOT NULL REFERENCES assets(asset_id) ON DELETE RESTRICT,
-    amount NUMERIC(38,18) NOT NULL,
-    start_date TIMESTAMPTZ NOT NULL,
-    end_date TIMESTAMPTZ,
-    apr NUMERIC(10,2),
-    status VARCHAR(20) NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_staking_status CHECK (status IN ('active','completed','withdrawn','failed'))
-);
-
--- Liquidity Pools
-CREATE TABLE IF NOT EXISTS liquidity_pools (
-    pool_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    protocol VARCHAR(50) NOT NULL,
-    pool_address VARCHAR(42) NOT NULL UNIQUE,
-    token0 UUID NOT NULL REFERENCES assets(asset_id),
-    token1 UUID NOT NULL REFERENCES assets(asset_id),
-    fee_tier VARCHAR(10),
-    liquidity NUMERIC(38,18),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (protocol, pool_address)
-);
-
--- User Preferences
-CREATE TABLE IF NOT EXISTS user_preferences (
-    preference_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    preference_key VARCHAR(100) NOT NULL,
-    preference_value JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (user_id, preference_key)
-);
-
--- Audit Logs
-CREATE TABLE IF NOT EXISTS audit_logs (
-    log_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    action VARCHAR(100) NOT NULL,
-    entity_type VARCHAR(50),
-    entity_id VARCHAR(255),
-    old_values JSONB,
-    new_values JSONB,
-    ip_address VARCHAR(45),
-    user_agent TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_entity_type CHECK (entity_type IN ('user','wallet','transaction','asset','nft','staking','liquidity_pool','preference'))
-);
-
--- Indexes for audit logs
-CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
+-- View for aggregated wallet balances across all assets
+CREATE OR REPLACE VIEW wallet_balance_summary AS
+SELECT
+    w.wallet_id,
+    w.address,
+    w.network,
+    jsonb_object_agg(a.symbol, b.balance) AS balances
+FROM wallets w
+JOIN balances b ON w.wallet_id = b.wallet_id
+JOIN assets a ON b.asset_id = a.asset_id
+GROUP BY w.wallet_id, w.address, w.network;
