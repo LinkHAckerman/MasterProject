@@ -165,234 +165,213 @@ namespace MagnumOpus.Backend.Core
         public string Owner { get; set; } = string.Empty;
     }
 
+    #endregion
+
     public sealed class NodeStats
     {
         public long ChainHeight { get; set; }
         public int PendingTransactions { get; set; }
-        public long ProcessedTransactions { get; set; }
+        public int ConfirmedTransactions { get; set; }
+        public int FailedTransactions { get; set; }
         public DateTime LastBlockTimestamp { get; set; }
+        public int PeerCount { get; set; }
     }
 
-    #endregion
-
-    /// <summary>
-    /// Core transaction processor that validates, batches, mines and records transactions.
-    /// It runs a background loop that creates blocks of a configurable size and difficulty.
-    /// </summary>
-    public sealed class TransactionProcessor : IDisposable
+    public class TransactionProcessor
     {
         private readonly ConcurrentQueue<Transaction> _pendingQueue = new();
-        private readonly List<Block> _chain = new();
+        private readonly ConcurrentDictionary<string, Transaction> _inFlight = new();
         private readonly ConcurrentDictionary<string, TransactionReceipt> _receipts = new();
-        private readonly object _chainLock = new();
+        private readonly TimeSpan _processingInterval = TimeSpan.FromSeconds(1);
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _processingTask;
+        private readonly object _blockLock = new();
+        private Block _currentBlock;
+        private readonly List<Block> _chain = new();
+        private readonly int _blockCapacity = 10;
+        private readonly int _difficulty = 4; // number of leading zeros required
 
-        private readonly int _blockCapacity;
-        private readonly int _miningDifficulty;
-        private readonly string _minerAddress = "MAGNUM-OPUS-MINER";
-
-        public TransactionProcessor(int blockCapacity = 5, int miningDifficulty = 3)
+        public TransactionProcessor()
         {
-            _blockCapacity = blockCapacity;
-            _miningDifficulty = miningDifficulty;
-            InitializeGenesisBlock();
-            _processingTask = Task.Run(ProcessLoopAsync);
-        }
-
-        private void InitializeGenesisBlock()
-        {
-            var genesis = new Block
+            // Create genesis block
+            _currentBlock = new Block
             {
                 Index = 0,
                 Timestamp = DateTime.UtcNow,
                 PreviousHash = new string('0', 64),
-                Transactions = new List<Transaction>(),
                 Nonce = 0,
-                Difficulty = _miningDifficulty,
-                MinerAddress = _minerAddress,
-                MerkleRoot = new string('0', 64)
+                Difficulty = _difficulty,
+                MinerAddress = "MAGNUM-OPUS-GENESIS"
             };
-            genesis.Hash = ComputeHash(genesis);
-            lock (_chainLock) { _chain.Add(genesis); }
+            _currentBlock.Hash = ComputeHash(_currentBlock);
+            _chain.Add(_currentBlock);
+
+            _processingTask = Task.Run(ProcessLoopAsync);
         }
 
-        /// <summary>
-        /// Enqueue a new transaction for processing. Throws if validation fails.
-        /// </summary>
         public void EnqueueTransaction(Transaction tx)
         {
-            if (tx == null) throw new ArgumentNullException(nameof(tx));
-            if (!ValidateTransaction(tx))
-                throw new ArgumentException("Transaction validation failed.");
-
-            // Assign a unique Id if missing
-            if (string.IsNullOrWhiteSpace(tx.Id))
-                tx.Id = Guid.NewGuid().ToString();
-
-            _pendingQueue.Enqueue(tx);
+            if (ValidateTransaction(tx))
+            {
+                _pendingQueue.Enqueue(tx);
+            }
+            else
+            {
+                tx.Status = TransactionStatus.Rejected;
+                var receipt = new TransactionReceipt
+                {
+                    TransactionId = tx.Id,
+                    BlockIndex = -1,
+                    BlockHash = string.Empty,
+                    GasUsed = 0,
+                    FeePaid = tx.Fee,
+                    Status = TransactionStatus.Rejected,
+                    Timestamp = DateTime.UtcNow,
+                    ExecutionMessage = "Validation failed"
+                };
+                _receipts[tx.Id] = receipt;
+            }
         }
 
         private bool ValidateTransaction(Transaction tx)
         {
-            // Basic sanity checks – real implementation would verify signatures, nonce, balances, etc.
-            if (string.IsNullOrWhiteSpace(tx.Sender) || string.IsNullOrWhiteSpace(tx.Recipient))
+            // Basic sanity checks
+            if (string.IsNullOrWhiteSpace(tx.Id) ||
+                string.IsNullOrWhiteSpace(tx.Sender) ||
+                string.IsNullOrWhiteSpace(tx.Recipient) ||
+                tx.Amount <= 0 ||
+                tx.Fee < 0)
+            {
                 return false;
-            if (tx.Amount <= 0) return false;
-            if (string.IsNullOrWhiteSpace(tx.Signature)) return false;
-            // Placeholder for cryptographic signature verification
+            }
+
+            // Nonce must be greater than zero (placeholder logic)
+            if (tx.Nonce == 0)
+                return false;
+
+            // Signature placeholder – real implementation would verify ECDSA signatures
+            if (string.IsNullOrWhiteSpace(tx.Signature))
+                return false;
+
             return true;
         }
 
         private async Task ProcessLoopAsync()
         {
-            var batch = new List<Transaction>();
             while (!_cts.IsCancellationRequested)
             {
-                while (batch.Count < _blockCapacity && _pendingQueue.TryDequeue(out var tx))
-                {
-                    tx.Status = TransactionStatus.Pending;
-                    batch.Add(tx);
-                }
-
-                if (batch.Count > 0)
-                {
-                    var block = CreateBlock(batch);
-                    await MineBlockAsync(block);
-                    lock (_chainLock) { _chain.Add(block); }
-                    foreach (var tx in batch)
-                    {
-                        tx.Status = TransactionStatus.Confirmed;
-                        var receipt = GenerateReceipt(tx, block);
-                        _receipts[tx.Id] = receipt;
-                    }
-                    batch.Clear();
-                }
-                await Task.Delay(500, _cts.Token).ConfigureAwait(false);
+                await ProcessPendingAsync();
+                await Task.Delay(_processingInterval, _cts.Token);
             }
         }
 
-        private Block CreateBlock(IReadOnlyList<Transaction> transactions)
+        private async Task ProcessPendingAsync()
         {
-            Block previous;
-            lock (_chainLock) { previous = _chain[^1]; }
-
-            var block = new Block
+            while (_pendingQueue.TryDequeue(out var tx))
             {
-                Index = previous.Index + 1,
-                Timestamp = DateTime.UtcNow,
-                PreviousHash = previous.Hash,
-                Transactions = new List<Transaction>(transactions),
-                Nonce = 0,
-                Difficulty = _miningDifficulty,
-                MinerAddress = _minerAddress,
-                MerkleRoot = ComputeMerkleRoot(transactions)
-            };
-            return block;
+                _inFlight[tx.Id] = tx;
+                // Simulate minimal processing latency
+                await Task.Yield();
+
+                lock (_blockLock)
+                {
+                    _currentBlock.Transactions.Add(tx);
+                    tx.Status = TransactionStatus.Confirmed;
+                    var receipt = new TransactionReceipt
+                    {
+                        TransactionId = tx.Id,
+                        BlockIndex = _currentBlock.Index,
+                        BlockHash = _currentBlock.Hash,
+                        GasUsed = 21000,
+                        FeePaid = tx.Fee,
+                        Status = TransactionStatus.Confirmed,
+                        Timestamp = DateTime.UtcNow,
+                        ExecutionMessage = "Success"
+                    };
+                    _receipts[tx.Id] = receipt;
+
+                    if (_currentBlock.Transactions.Count >= _blockCapacity)
+                    {
+                        MineCurrentBlock();
+                    }
+                }
+
+                _inFlight.TryRemove(tx.Id, out _);
+            }
         }
 
-        private async Task MineBlockAsync(Block block)
+        private void MineCurrentBlock()
         {
-            var target = new string('0', block.Difficulty);
+            var targetPrefix = new string('0', _difficulty);
             while (true)
             {
-                block.Nonce++;
-                block.Hash = ComputeHash(block);
-                if (block.Hash.StartsWith(target)) break;
-                // Yield to keep the thread responsive
-                await Task.Yield();
-            }
-        }
-
-        private string ComputeHash(Block block)
-        {
-            using var sha = SHA256.Create();
-            var raw = $"{block.Index}{block.Timestamp:O}{block.PreviousHash}{block.MerkleRoot}{block.Nonce}{block.MinerAddress}{block.Difficulty}";
-            var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
-            return Convert.ToHexString(bytes).ToLowerInvariant();
-        }
-
-        private string ComputeMerkleRoot(IReadOnlyList<Transaction> transactions)
-        {
-            if (transactions == null || transactions.Count == 0)
-                return new string('0', 64);
-
-            List<string> hashes = transactions.Select(t => ComputeTxHash(t)).ToList();
-            while (hashes.Count > 1)
-            {
-                var next = new List<string>();
-                for (int i = 0; i < hashes.Count; i += 2)
+                var hash = ComputeHash(_currentBlock);
+                if (hash.StartsWith(targetPrefix))
                 {
-                    var left = hashes[i];
-                    var right = (i + 1 < hashes.Count) ? hashes[i + 1] : left;
-                    next.Add(CombineHashes(left, right));
+                    _currentBlock.Hash = hash;
+                    break;
                 }
-                hashes = next;
+                _currentBlock.Nonce++;
             }
-            return hashes[0];
-        }
 
-        private string ComputeTxHash(Transaction tx)
-        {
-            using var sha = SHA256.Create();
-            var bytes = sha.ComputeHash(tx.GetRawPayloadBytes());
-            return Convert.ToHexString(bytes).ToLowerInvariant();
-        }
+            // Append mined block to chain
+            _chain.Add(_currentBlock);
 
-        private string CombineHashes(string left, string right)
-        {
-            using var sha = SHA256.Create();
-            var combined = Encoding.UTF8.GetBytes(left + right);
-            var bytes = sha.ComputeHash(combined);
-            return Convert.ToHexString(bytes).ToLowerInvariant();
-        }
-
-        private TransactionReceipt GenerateReceipt(Transaction tx, Block block)
-        {
-            return new TransactionReceipt
+            // Start a fresh block
+            var newBlock = new Block
             {
-                TransactionId = tx.Id,
-                BlockIndex = block.Index,
-                BlockHash = block.Hash,
-                GasUsed = 0, // placeholder – real gas calculation would be here
-                FeePaid = tx.Fee,
-                Status = tx.Status,
+                Index = _currentBlock.Index + 1,
                 Timestamp = DateTime.UtcNow,
-                ExecutionMessage = "Transaction confirmed and included in block."
+                PreviousHash = _currentBlock.Hash,
+                Nonce = 0,
+                Difficulty = _difficulty,
+                MinerAddress = "MAGNUM-OPUS-MINER"
             };
+            newBlock.Hash = ComputeHash(newBlock);
+            _currentBlock = newBlock;
         }
 
-        /// <summary>
-        /// Retrieve a receipt for a given transaction id. Returns null if not found.
-        /// </summary>
+        private static string ComputeHash(Block block)
+        {
+            using var sha = SHA256.Create();
+            var raw = $"{block.Index}:{block.Timestamp:O}:{block.PreviousHash}:{block.Nonce}:{block.MerkleRoot}:{block.MinerAddress}:{block.Difficulty}";
+            var bytes = Encoding.UTF8.GetBytes(raw);
+            var hash = sha.ComputeHash(bytes);
+            return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+        }
+
         public TransactionReceipt? GetReceipt(string transactionId)
         {
-            if (string.IsNullOrWhiteSpace(transactionId)) return null;
             _receipts.TryGetValue(transactionId, out var receipt);
             return receipt;
         }
 
-        /// <summary>
-        /// Returns a thread‑safe snapshot of the current blockchain.
-        /// </summary>
         public IReadOnlyList<Block> GetChain()
         {
-            lock (_chainLock) { return _chain.AsReadOnly(); }
+            return _chain.AsReadOnly();
         }
 
-        /// <summary>
-        /// Gracefully stops the background processing loop.
-        /// </summary>
+        public NodeStats GetNodeStats()
+        {
+            return new NodeStats
+            {
+                ChainHeight = _chain.Count - 1,
+                PendingTransactions = _pendingQueue.Count,
+                ConfirmedTransactions = _receipts.Values.Count(r => r.Status == TransactionStatus.Confirmed),
+                FailedTransactions = _receipts.Values.Count(r => r.Status == TransactionStatus.Failed || r.Status == TransactionStatus.Rejected),
+                LastBlockTimestamp = _chain[^1].Timestamp,
+                PeerCount = 0 // Placeholder – network layer would populate this
+            };
+        }
+
         public void Shutdown()
         {
             _cts.Cancel();
-            try { _processingTask.Wait(); } catch { /* ignored */ }
-        }
-
-        public void Dispose()
-        {
-            Shutdown();
-            _cts.Dispose();
+            try
+            {
+                _processingTask.Wait();
+            }
+            catch (AggregateException) { }
         }
     }
 }
