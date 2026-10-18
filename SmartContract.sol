@@ -19,6 +19,9 @@ interface IERC20 {
     event Approval(address indexed owner, address indexed spender, uint256 value);
 }
 
+/**
+ * @dev Basic ERC20 implementation used as the platform's native token.
+ */
 contract MagnumOpusToken is IERC20 {
     string public name = "Magnum Opus Protocol";
     string public symbol = "MOPUS";
@@ -133,210 +136,110 @@ contract MagnumOpusStakingVault {
     IERC20 public immutable rewardToken;
 
     address public owner;
-    uint256 public rewardRate; // reward tokens per second
+    uint256 public rewardRate; // reward tokens distributed per second
     uint256 public lastUpdateTime;
     uint256 public rewardPerTokenStored;
     uint256 public totalStaked;
 
     mapping(address => uint256) public userRewardPerTokenPaid;
-    mapping(address => uint256) public userRewards;
-    mapping(address => uint256) public userStakes;
+    mapping(address => uint256) public rewards;
+
+    event Staked(address indexed user, uint256 amount);
+    event Withdrawn(address indexed user, uint256 amount);
+    event RewardPaid(address indexed user, uint256 reward);
+    event RewardRateUpdated(uint256 newRate);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     modifier onlyOwner() {
-        require(msg.sender == owner, "MagnumOpusStakingVault: caller is not the owner");
+        require(msg.sender == owner, "StakingVault: caller is not the owner");
         _;
     }
 
-    constructor(address _stakingToken, address _rewardToken) {
+    modifier updateReward(address account) {
+        rewardPerTokenStored = rewardPerToken();
+        lastUpdateTime = block.timestamp;
+        if (account != address(0)) {
+            rewards[account] = earned(account);
+            userRewardPerTokenPaid[account] = rewardPerTokenStored;
+        }
+        _;
+    }
+
+    constructor(address _stakingToken, address _rewardToken, uint256 _initialRewardRate) {
+        require(_stakingToken != address(0) && _rewardToken != address(0), "StakingVault: token address zero");
         owner = msg.sender;
         stakingToken = IERC20(_stakingToken);
         rewardToken = IERC20(_rewardToken);
+        rewardRate = _initialRewardRate;
+        lastUpdateTime = block.timestamp;
     }
 
-    function stake(uint256 amount) external {
-        require(amount > 0, "MagnumOpusStakingVault: cannot stake 0");
-        require(stakingToken.transferFrom(msg.sender, address(this), amount), "MagnumOpusStakingVault: transfer failed");
+    /**
+     * @dev Returns reward per token accumulated up to the current block timestamp.
+     */
+    function rewardPerToken() public view returns (uint256) {
+        if (totalStaked == 0) {
+            return rewardPerTokenStored;
+        }
+        uint256 timeDelta = block.timestamp - lastUpdateTime;
+        return rewardPerTokenStored + ((timeDelta * rewardRate * 1e18) / totalStaked);
+    }
 
-        _updateReward(msg.sender);
-        userStakes[msg.sender] += amount;
+    /**
+     * @dev Calculates the earned reward for an account.
+     */
+    function earned(address account) public view returns (uint256) {
+        uint256 perToken = rewardPerToken() - userRewardPerTokenPaid[account];
+        return (stakingToken.balanceOf(account) * perToken) / 1e18 + rewards[account];
+    }
+
+    /**
+     * @notice Stake a specific amount of the staking token.
+     */
+    function stake(uint256 amount) external updateReward(msg.sender) {
+        require(amount > 0, "StakingVault: cannot stake 0");
         totalStaked += amount;
+        require(stakingToken.transferFrom(msg.sender, address(this), amount), "StakingVault: transfer failed");
+        emit Staked(msg.sender, amount);
     }
 
-    function unstake(uint256 amount) external {
-        require(amount > 0, "MagnumOpusStakingVault: cannot unstake 0");
-        require(userStakes[msg.sender] >= amount, "MagnumOpusStakingVault: insufficient stake");
-
-        _updateReward(msg.sender);
-        userStakes[msg.sender] -= amount;
+    /**
+     * @notice Withdraw staked tokens.
+     */
+    function withdraw(uint256 amount) external updateReward(msg.sender) {
+        require(amount > 0, "StakingVault: cannot withdraw 0");
+        require(stakingToken.balanceOf(msg.sender) >= amount, "StakingVault: insufficient balance");
         totalStaked -= amount;
-        require(stakingToken.transfer(msg.sender, amount), "MagnumOpusStakingVault: transfer failed");
+        require(stakingToken.transfer(msg.sender, amount), "StakingVault: transfer failed");
+        emit Withdrawn(msg.sender, amount);
     }
 
-    function claimRewards() external {
-        _updateReward(msg.sender);
-        uint256 reward = userRewards[msg.sender];
+    /**
+     * @notice Claim accumulated rewards.
+     */
+    function getReward() external updateReward(msg.sender) {
+        uint256 reward = rewards[msg.sender];
         if (reward > 0) {
-            userRewards[msg.sender] = 0;
-            require(rewardToken.transfer(msg.sender, reward), "MagnumOpusStakingVault: transfer failed");
+            rewards[msg.sender] = 0;
+            require(rewardToken.transfer(msg.sender, reward), "StakingVault: reward transfer failed");
+            emit RewardPaid(msg.sender, reward);
         }
     }
 
-    function setRewardRate(uint256 _rewardRate) external onlyOwner {
-        _updateReward(address(0));
-        rewardRate = _rewardRate;
+    /**
+     * @notice Allows the owner to update the reward distribution rate.
+     */
+    function setRewardRate(uint256 _newRate) external onlyOwner updateReward(address(0)) {
+        rewardRate = _newRate;
+        emit RewardRateUpdated(_newRate);
     }
 
-    function _updateReward(address account) internal {
-        if (account != address(0)) {
-            userRewards[account] += (totalStaked * (rewardPerTokenStored - userRewardPerTokenPaid[account])) / 1e18;
-            userRewardPerTokenPaid[account] = rewardPerTokenStored;
-        }
-
-        uint256 currentTime = block.timestamp;
-        uint256 timeElapsed = currentTime - lastUpdateTime;
-        if (timeElapsed > 0 && totalStaked > 0) {
-            rewardPerTokenStored += (timeElapsed * rewardRate * 1e18) / totalStaked;
-        }
-        lastUpdateTime = currentTime;
+    /**
+     * @notice Transfer contract ownership.
+     */
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "StakingVault: new owner is zero address");
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
     }
-}
-
-/**
- * @title MagnumOpusNFT
- * @notice Non-Fungible Token (NFT) contract with basic minting and transfer functionality.
- */
-contract MagnumOpusNFT {
-    string public name = "Magnum Opus NFT";
-    string public symbol = "MONFT";
-
-    address public owner;
-
-    mapping(uint256 => address) private _owners;
-    mapping(address => uint256) private _balances;
-    mapping(uint256 => bool) private _exists;
-
-    uint256 private _totalSupply;
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "MagnumOpusNFT: caller is not the owner");
-        _;
-    }
-
-    constructor() {
-        owner = msg.sender;
-    }
-
-    function totalSupply() external view returns (uint256) {
-        return _totalSupply;
-    }
-
-    function balanceOf(address owner) external view returns (uint256) {
-        return _balances[owner];
-    }
-
-    function ownerOf(uint256 tokenId) external view returns (address) {
-        require(_exists[tokenId], "MagnumOpusNFT: token does not exist");
-        return _owners[tokenId];
-    }
-
-    function transferFrom(address from, address to, uint256 tokenId) external {
-        require(_exists[tokenId], "MagnumOpusNFT: token does not exist");
-        require(_owners[tokenId] == from, "MagnumOpusNFT: transfer from incorrect owner");
-        require(to != address(0), "MagnumOpusNFT: transfer to zero address");
-
-        _balances[from] -= 1;
-        _balances[to] += 1;
-        _owners[tokenId] = to;
-
-        emit Transfer(from, to, tokenId);
-    }
-
-    function mint(address to, uint256 tokenId) external onlyOwner {
-        require(to != address(0), "MagnumOpusNFT: mint to zero address");
-        require(!_exists[tokenId], "MagnumOpusNFT: token already exists");
-
-        _balances[to] += 1;
-        _owners[tokenId] = to;
-        _exists[tokenId] = true;
-        _totalSupply += 1;
-
-        emit Transfer(address(0), to, tokenId);
-    }
-
-    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
-}
-
-/**
- * @title MagnumOpusDEX
- * @notice Decentralized Exchange (DEX) contract for trading ERC20 tokens.
- */
-contract MagnumOpusDEX {
-    struct Order {
-        address trader;
-        uint256 amount;
-        uint256 price;
-        bool isBuy;
-    }
-
-    IERC20 public tokenA;
-    IERC20 public tokenB;
-
-    address public owner;
-
-    mapping(uint256 => Order) public orders;
-    uint256 public orderCount;
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "MagnumOpusDEX: caller is not the owner");
-        _;
-    }
-
-    constructor(address _tokenA, address _tokenB) {
-        owner = msg.sender;
-        tokenA = IERC20(_tokenA);
-        tokenB = IERC20(_tokenB);
-    }
-
-    function createOrder(uint256 amount, uint256 price, bool isBuy) external {
-        require(amount > 0, "MagnumOpusDEX: amount must be greater than 0");
-        require(price > 0, "MagnumOpusDEX: price must be greater than 0");
-
-        if (isBuy) {
-            require(tokenB.transferFrom(msg.sender, address(this), amount * price), "MagnumOpusDEX: transfer failed");
-        } else {
-            require(tokenA.transferFrom(msg.sender, address(this), amount), "MagnumOpusDEX: transfer failed");
-        }
-
-        orderCount += 1;
-        orders[orderCount] = Order(msg.sender, amount, price, isBuy);
-
-        emit OrderCreated(orderCount, msg.sender, amount, price, isBuy);
-    }
-
-    function matchOrder(uint256 orderId) external {
-        require(orders[orderId].trader != address(0), "MagnumOpusDEX: order does not exist");
-        require(orders[orderId].trader != msg.sender, "MagnumOpusDEX: cannot match own order");
-
-        Order memory order = orders[orderId];
-        uint256 amount = order.amount;
-        uint256 price = order.price;
-        bool isBuy = order.isBuy;
-
-        if (isBuy) {
-            require(tokenA.transferFrom(msg.sender, address(this), amount), "MagnumOpusDEX: transfer failed");
-            require(tokenB.transfer(order.trader, amount * price), "MagnumOpusDEX: transfer failed");
-            require(tokenA.transfer(msg.sender, amount), "MagnumOpusDEX: transfer failed");
-        } else {
-            require(tokenB.transferFrom(msg.sender, address(this), amount * price), "MagnumOpusDEX: transfer failed");
-            require(tokenA.transfer(order.trader, amount), "MagnumOpusDEX: transfer failed");
-            require(tokenB.transfer(msg.sender, amount * price), "MagnumOpusDEX: transfer failed");
-        }
-
-        delete orders[orderId];
-
-        emit OrderMatched(orderId, msg.sender, amount, price, isBuy);
-    }
-
-    event OrderCreated(uint256 indexed orderId, address indexed trader, uint256 amount, uint256 price, bool isBuy);
-    event OrderMatched(uint256 indexed orderId, address indexed trader, uint256 amount, uint256 price, bool isBuy);
 }
