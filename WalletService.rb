@@ -28,7 +28,7 @@ module MagnumOpus
     DEFAULT_CACHE_TTL_SEC = 60
     MAX_RETRY_ATTEMPTS = 3
 
-    # Fallback rates in USD when external pricing APIs are unavailable or rate‑limited
+    # Fallback rates in USD when external pricing APIs are unavailable or ratelimited
     FALLBACK_RATES = {
       'eth'      => BigDecimal('3450.75'),
       'ethereum' => BigDecimal('3450.75'),
@@ -49,7 +49,7 @@ module MagnumOpus
 
     attr_reader :wallet_address, :primary_chain, :logger
 
-    # @param wallet_address [String, nil] Public 0x… hex address or Base58 Solana public key
+    # @param wallet_address [String, nil] Public 0x hex address or Base58 Solana public key
     # @param primary_chain [Symbol] Primary blockchain network symbol (:ethereum, :solana, etc.)
     # @param logger [Logger, nil] Custom logger instance
     def initialize(wallet_address = nil, primary_chain: :ethereum, logger: nil)
@@ -61,7 +61,7 @@ module MagnumOpus
     end
 
     # ---------------------------------------------------------------------
-    # Public API – Balance helpers
+    # Public API  Balance helpers
     # ---------------------------------------------------------------------
     def get_eth_balance
       usd_rate = fetch_market_rate('ethereum')
@@ -95,7 +95,7 @@ module MagnumOpus
       }
     end
 
-    # Generic token balance (ERC‑20, SPL, etc.)
+    # Generic token balance (ERC20, SPL, etc.)
     # @param symbol [String] token ticker (e.g. 'DAI')
     # @param contract_address [String] token contract address on the primary chain
     def get_token_balance(symbol, contract_address)
@@ -116,7 +116,7 @@ module MagnumOpus
     end
 
     # ---------------------------------------------------------------------
-    # Public API – Market data helpers
+    # Public API  Market data helpers
     # ---------------------------------------------------------------------
     def get_exchange_rate(symbol = 'eth')
       sym_str = symbol.to_s.downcase.strip
@@ -134,183 +134,220 @@ module MagnumOpus
     end
 
     # ---------------------------------------------------------------------
-    # Public API – Conversion utilities
+    # Public API  NFT helpers
     # ---------------------------------------------------------------------
-    def convert(amount, from, to)
-      dec_amount = BigDecimal(amount.to_s)
-      raise ArgumentError, 'Conversion amount must be strictly positive' unless dec_amount.positive?
-
-      from_sym = from.to_s.downcase.strip
-      to_sym   = to.to_s.downcase.strip
-
-      from_rate = fetch_market_rate(from_sym)
-      to_rate   = fetch_market_rate(to_sym)
-
-      raise ArgumentError, "Zero conversion rate encountered for target #{to_sym}" if to_rate.zero?
-
-      usd_from   = (dec_amount * from_rate).round(4)
-      converted  = (usd_from / to_rate).round(6)
-      spread_bps = 15 # Simulated 0.15% DEX routing fee
-      fee_amount = (converted * BigDecimal(spread_bps) / BigDecimal('10000')).round(6)
-      net_received = converted - fee_amount
-
+    def get_nft_balance(contract_address)
+      raise ArgumentError, 'contract_address required' if contract_address.to_s.empty?
+      nfts = @wallet_address ? query_nft_balance_internal(@wallet_address, contract_address) : []
       {
         success: true,
-        from: from_sym.upcase,
-        to: to_sym.upcase,
-        amount: dec_amount.to_s('F'),
-        converted: converted.to_s('F'),
-        fee_bps: spread_bps,
-        fee_amount: fee_amount.to_s('F'),
-        net_received: net_received.to_s('F'),
-        rate_used: from_rate.to_f,
+        chain: @primary_chain,
+        contract_address: contract_address,
+        nft_count: nfts.size,
+        nfts: nfts,
         timestamp: Time.now.utc.iso8601
       }
     end
 
     # ---------------------------------------------------------------------
-    # Public API – Portfolio aggregation
+    # Public API  DeFi helpers
     # ---------------------------------------------------------------------
-    def portfolio_summary
-      assets = []
-      # Native chain asset
-      assets << get_eth_balance if @primary_chain == :ethereum
-      assets << get_usdt_balance if @primary_chain == :ethereum
-      # Add more assets here as needed (e.g., DAI, SOL, MATIC)
-
-      total_usd = assets.map { |a| a[:usd_value] }.reduce(0.0, :+)
+    def get_liquidity_pool_balance(pool_address)
+      raise ArgumentError, 'pool_address required' if pool_address.to_s.empty?
+      balance = @wallet_address ? query_liquidity_pool_balance_internal(@wallet_address, pool_address) : BigDecimal('0')
       {
         success: true,
-        wallet_address: @wallet_address,
-        primary_chain: @primary_chain,
-        assets: assets,
-        total_usd_value: total_usd.round(2),
+        chain: @primary_chain,
+        pool_address: pool_address,
+        balance: balance.to_s('F'),
         timestamp: Time.now.utc.iso8601
       }
     end
 
     # ---------------------------------------------------------------------
-    # Public API – Transaction relay (placeholder implementation)
+    # Private API  Internal methods
     # ---------------------------------------------------------------------
-    # @param signed_tx [String] raw signed transaction hex
-    # @param chain [Symbol] target chain (:ethereum, :solana, etc.)
-    # @return [Hash]
-    def broadcast_transaction(signed_tx, chain = @primary_chain)
-      raise ArgumentError, 'signed_tx must be a non‑empty hex string' if signed_tx.to_s.strip.empty?
-      raise ArgumentError, "Unsupported chain #{chain}" unless SUPPORTED_CHAINS.include?(chain)
-
-      # In a real implementation this would POST to an RPC endpoint or a relayer service.
-      # Here we simulate a successful broadcast with a mock tx hash.
-      mock_tx_hash = SecureRandom.hex(32)
-      @logger.info "Broadcasted transaction on #{chain}: #{mock_tx_hash}"
-      {
-        success: true,
-        chain: chain,
-        tx_hash: "0x#{mock_tx_hash}",
-        raw: signed_tx,
-        timestamp: Time.now.utc.iso8601
-      }
-    end
-
     private
 
-    # ---------------------------------------------------------------------
-    # Private helpers – Address handling
-    # ---------------------------------------------------------------------
     def validate_and_normalize_address(address)
-      return nil if address.nil? || address.strip.empty?
-      addr = address.strip
-      if addr.start_with?('0x') && addr.length == 42
-        addr.downcase
-      elsif addr.match?(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/) # naive Solana Base58 check
-        addr
+      return nil unless address
+
+      case @primary_chain
+      when :ethereum
+        address = address.downcase
+        unless address.match?(/^0x[a-fA-F0-9]{40}$/)
+          raise ArgumentError, 'Invalid Ethereum address format'
+        end
+      when :solana
+        unless address.match?(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)
+          raise ArgumentError, 'Invalid Solana address format'
+        end
       else
-        raise ArgumentError, "Invalid wallet address format: #{address}"
+        raise ArgumentError, "Unsupported chain: #{@primary_chain}"
       end
+
+      address
     end
 
-    # ---------------------------------------------------------------------
-    # Private helpers – Market data fetching & caching
-    # ---------------------------------------------------------------------
     def fetch_market_rate(symbol)
-      sym = symbol.downcase
-      now = Time.now.utc
-      cached = @cache[sym]
-      if cached && cached[:expires_at] > now
-        return cached[:rate]
+      sym_str = symbol.to_s.downcase.strip
+      return FALLBACK_RATES[sym_str] unless @wallet_address
+
+      cache_key = "rate:#{sym_str}"
+      if cache_hit?(cache_key)
+        @logger.debug "Using cached rate for #{sym_str}"
+        return @cache[cache_key][:value]
       end
 
-      begin
-        uri = BASE_COINGECKO_URI + "/simple/price?ids=#{coingecko_id(sym)}&vs_currencies=usd"
-        response = request_with_retry(uri)
-        data = JSON.parse(response.body)
-        rate = BigDecimal(data[coingecko_id(sym)]['usd'].to_s)
-      rescue StandardError => e
-        @logger.warn "Failed to fetch market rate for #{sym}: #{e.message}. Using fallback."
-        rate = FALLBACK_RATES[sym] || BigDecimal('0')
-      end
-
-      @cache[sym] = { rate: rate, expires_at: now + DEFAULT_CACHE_TTL_SEC }
+      rate = fetch_coingecko_rate(sym_str)
+      rate ||= FALLBACK_RATES[sym_str] || BigDecimal('0.0')
+      update_cache(cache_key, rate)
       rate
     end
 
-    def cache_hit?(symbol)
-      sym = symbol.downcase
-      cached = @cache[sym]
-      cached && cached[:expires_at] > Time.now.utc
-    end
-
-    def coingecko_id(symbol)
-      # Mapping common tickers to CoinGecko IDs – extend as needed
-      mapping = {
-        'eth' => 'ethereum',
-        'ethereum' => 'ethereum',
-        'btc' => 'bitcoin',
-        'bitcoin' => 'bitcoin',
-        'sol' => 'solana',
-        'solana' => 'solana',
-        'matic' => 'polygon',
-        'polygon' => 'polygon',
-        'usdt' => 'tether',
-        'tether' => 'tether',
-        'usdc' => 'usd-coin',
-        'usd-coin' => 'usd-coin',
-        'mag' => 'magnum',
-        'magnum' => 'magnum'
+    def fetch_coingecko_rate(symbol)
+      uri = URI.join(BASE_COINGECKO_URI, 'simple/price')
+      params = {
+        ids: symbol,
+        vs_currencies: 'usd'
       }
-      mapping[symbol] || symbol
+      uri.query = URI.encode_www_form(params)
+
+      response = make_http_request(uri)
+      return nil unless response.is_a?(Net::HTTPSuccess)
+
+      data = JSON.parse(response.body)
+      data.dig(symbol, 'usd')&.to_d
     end
 
-    def request_with_retry(uri, attempts = MAX_RETRY_ATTEMPTS)
-      attempts.times do |i|
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = (uri.scheme == 'https')
-        http.read_timeout = DEFAULT_TIMEOUT_SEC
-        request = Net::HTTP::Get.new(uri)
-        request['Accept'] = 'application/json'
-        response = http.request(request)
-        return response if response.is_a?(Net::HTTPSuccess)
-        @logger.warn "Request to #{uri} returned #{response.code}, attempt #{i + 1}"
+    def query_chain_balance(address, chain)
+      case chain
+      when :eth
+        uri = URI('https://api.etherscan.io/api')
+        params = {
+          module: 'account',
+          action: 'balance',
+          address: address,
+          tag: 'latest',
+          apikey: ENV['ETHERSCAN_API_KEY']
+        }
+        uri.query = URI.encode_www_form(params)
+
+        response = make_http_request(uri)
+        return nil unless response.is_a?(Net::HTTPSuccess)
+
+        data = JSON.parse(response.body)
+        data['result']&.to_d&.div(1e18)
+      else
+        raise ArgumentError, "Unsupported chain: #{chain}"
       end
-      raise "Failed to fetch #{uri} after #{MAX_RETRY_ATTEMPTS} attempts"
-    end
-
-    # ---------------------------------------------------------------------
-    # Private helpers – Chain interaction (mock implementations)
-    # ---------------------------------------------------------------------
-    def query_chain_balance(address, chain_symbol)
-      # In a production system this would call an RPC endpoint (e.g., eth_getBalance).
-      # Here we return a deterministic pseudo‑random balance for demo purposes.
-      seed = address.bytes.sum + chain_symbol.to_s.bytes.sum
-      rng = Random.new(seed)
-      BigDecimal(rng.rand * 10 + 1).round(8) # between 1 and 11 ETH
     end
 
     def query_token_balance_internal(address, contract_address)
-      # Mock token balance – deterministic based on address & contract
-      seed = address.bytes.sum + contract_address.bytes.sum
-      rng = Random.new(seed)
-      BigDecimal(rng.rand * 1000).round(4) # up to 1000 tokens
+      case @primary_chain
+      when :ethereum
+        uri = URI('https://api.etherscan.io/api')
+        params = {
+          module: 'account',
+          action: 'tokenbalance',
+          contractaddress: contract_address,
+          address: address,
+          tag: 'latest',
+          apikey: ENV['ETHERSCAN_API_KEY']
+        }
+        uri.query = URI.encode_www_form(params)
+
+        response = make_http_request(uri)
+        return nil unless response.is_a?(Net::HTTPSuccess)
+
+        data = JSON.parse(response.body)
+        data['result']&.to_d&.div(1e18)
+      else
+        raise ArgumentError, "Unsupported chain: #{@primary_chain}"
+      end
+    end
+
+    def query_nft_balance_internal(address, contract_address)
+      case @primary_chain
+      when :ethereum
+        uri = URI('https://api.etherscan.io/api')
+        params = {
+          module: 'account',
+          action: 'tokennfttx',
+          contractaddress: contract_address,
+          address: address,
+          startblock: 0,
+          endblock: 'latest',
+          sort: 'asc',
+          apikey: ENV['ETHERSCAN_API_KEY']
+        }
+        uri.query = URI.encode_www_form(params)
+
+        response = make_http_request(uri)
+        return [] unless response.is_a?(Net::HTTPSuccess)
+
+        data = JSON.parse(response.body)
+        data['result']&.map { |nft| { token_id: nft['tokenID'], token_name: nft['tokenName'], token_symbol: nft['tokenSymbol'] } } || []
+      else
+        raise ArgumentError, "Unsupported chain: #{@primary_chain}"
+      end
+    end
+
+    def query_liquidity_pool_balance_internal(address, pool_address)
+      case @primary_chain
+      when :ethereum
+        uri = URI('https://api.etherscan.io/api')
+        params = {
+          module: 'account',
+          action: 'tokenbalance',
+          contractaddress: pool_address,
+          address: address,
+          tag: 'latest',
+          apikey: ENV['ETHERSCAN_API_KEY']
+        }
+        uri.query = URI.encode_www_form(params)
+
+        response = make_http_request(uri)
+        return nil unless response.is_a?(Net::HTTPSuccess)
+
+        data = JSON.parse(response.body)
+        data['result']&.to_d&.div(1e18)
+      else
+        raise ArgumentError, "Unsupported chain: #{@primary_chain}"
+      end
+    end
+
+    def make_http_request(uri, attempts = 0)
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = true
+      http.open_timeout = DEFAULT_TIMEOUT_SEC
+      http.read_timeout = DEFAULT_TIMEOUT_SEC
+
+      request = Net::HTTP::Get.new(uri)
+      request['Accept'] = 'application/json'
+
+      response = http.request(request)
+
+      if response.is_a?(Net::HTTPTooManyRequests) && attempts < MAX_RETRY_ATTEMPTS
+        retry_after = response['Retry-After'].to_i
+        retry_after = 1 if retry_after <= 0
+        @logger.warn "Rate limited. Retrying after #{retry_after} seconds (attempt #{attempts + 1}/#{MAX_RETRY_ATTEMPTS})"
+        sleep(retry_after)
+        make_http_request(uri, attempts + 1)
+      else
+        response
+      end
+    end
+
+    def cache_hit?(key)
+      @cache.key?(key) && @cache[key][:expires_at] > Time.now
+    end
+
+    def update_cache(key, value)
+      @cache[key] = {
+        value: value,
+        expires_at: Time.now + DEFAULT_CACHE_TTL_SEC
+      }
     end
   end
 end
