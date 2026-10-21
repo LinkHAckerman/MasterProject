@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     gas_price NUMERIC(38,18),
     gas_used BIGINT,
     status tx_status NOT NULL DEFAULT 'pending',
-    transaction_type VARCHAR(50) CHECK (transaction_type IN ('transfer','swap','stake','unstake','mint','burn','approve','deposit','withdraw','claim','liquidate','other')),
+    transaction_type VARCHAR(50) CHECK (transaction_type IN ('transfer','swap','stake','unstake','mint','burn','approve','deposit','withdraw','claim','liquidate')),
     metadata JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -139,157 +139,71 @@ BEFORE UPDATE ON transactions
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
--- Smart Contract Events
-CREATE TABLE IF NOT EXISTS contract_events (
-    event_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tx_id UUID NOT NULL REFERENCES transactions(tx_id) ON DELETE CASCADE,
-    contract_address VARCHAR(42) NOT NULL,
-    event_name VARCHAR(100) NOT NULL,
-    event_data JSONB NOT NULL,
-    block_number BIGINT NOT NULL,
-    log_index BIGINT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (tx_id, contract_address, event_name, log_index)
-);
-
--- DeFi Protocol Data
-CREATE TABLE IF NOT EXISTS defi_protocols (
-    protocol_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(100) NOT NULL,
-    description TEXT,
-    website_url VARCHAR(255),
-    logo_url VARCHAR(255),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TRIGGER trg_defi_protocols_updated_at
-BEFORE UPDATE ON defi_protocols
-FOR EACH ROW
-EXECUTE FUNCTION set_updated_at();
-
--- Protocol Contracts
-CREATE TABLE IF NOT EXISTS protocol_contracts (
+-- Smart Contract Deployments
+CREATE TABLE IF NOT EXISTS smart_contracts (
     contract_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    protocol_id UUID NOT NULL REFERENCES defi_protocols(protocol_id) ON DELETE CASCADE,
-    contract_address VARCHAR(42) NOT NULL,
-    network VARCHAR(30) NOT NULL,
-    contract_type VARCHAR(50) NOT NULL,
-    abi JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (contract_address, network),
-    CONSTRAINT chk_protocol_network CHECK (network IN ('Ethereum','Polygon','BinanceSmartChain','Solana','Avalanche','PolygonZK','Arbitrum','Optimism','Base','Mantle'))
-);
-
-CREATE TRIGGER trg_protocol_contracts_updated_at
-BEFORE UPDATE ON protocol_contracts
-FOR EACH ROW
-EXECUTE FUNCTION set_updated_at();
-
--- Protocol Transactions
-CREATE TABLE IF NOT EXISTS protocol_transactions (
-    protocol_tx_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tx_id UUID NOT NULL REFERENCES transactions(tx_id) ON DELETE CASCADE,
-    protocol_id UUID NOT NULL REFERENCES defi_protocols(protocol_id) ON DELETE CASCADE,
-    contract_id UUID NOT NULL REFERENCES protocol_contracts(contract_id) ON DELETE CASCADE,
-    action VARCHAR(50) NOT NULL,
-    action_data JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (tx_id, protocol_id, contract_id)
-);
-
--- Staking Positions
-CREATE TABLE IF NOT EXISTS staking_positions (
-    position_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     wallet_id UUID NOT NULL REFERENCES wallets(wallet_id) ON DELETE CASCADE,
-    protocol_id UUID NOT NULL REFERENCES defi_protocols(protocol_id) ON DELETE CASCADE,
-    contract_id UUID NOT NULL REFERENCES protocol_contracts(contract_id) ON DELETE CASCADE,
-    asset_id UUID NOT NULL REFERENCES assets(asset_id) ON DELETE RESTRICT,
-    amount NUMERIC(38,18) NOT NULL,
-    start_date TIMESTAMPTZ NOT NULL,
-    end_date TIMESTAMPTZ,
-    status VARCHAR(20) NOT NULL DEFAULT 'active',
-    rewards_earned NUMERIC(38,18) NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_staking_status CHECK (status IN ('active','claimed','withdrawn','liquidated'))
-);
-
-CREATE TRIGGER trg_staking_positions_updated_at
-BEFORE UPDATE ON staking_positions
-FOR EACH ROW
-EXECUTE FUNCTION set_updated_at();
-
--- Staking Rewards
-CREATE TABLE IF NOT EXISTS staking_rewards (
-    reward_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    position_id UUID NOT NULL REFERENCES staking_positions(position_id) ON DELETE CASCADE,
-    asset_id UUID NOT NULL REFERENCES assets(asset_id) ON DELETE RESTRICT,
-    amount NUMERIC(38,18) NOT NULL,
-    reward_date TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Liquidity Pools
-CREATE TABLE IF NOT EXISTS liquidity_pools (
-    pool_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    protocol_id UUID NOT NULL REFERENCES defi_protocols(protocol_id) ON DELETE CASCADE,
-    contract_id UUID NOT NULL REFERENCES protocol_contracts(contract_id) ON DELETE CASCADE,
+    contract_address VARCHAR(42) NOT NULL UNIQUE,
+    contract_type VARCHAR(50) NOT NULL CHECK (contract_type IN ('ERC20','ERC721','ERC1155','DEX','Staking','Governance','Lending','Borrowing','YieldFarming','NFTMarketplace')),
     name VARCHAR(100) NOT NULL,
-    description TEXT,
+    symbol VARCHAR(10),
+    decimals SMALLINT,
+    total_supply NUMERIC(38,18),
+    metadata JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TRIGGER trg_liquidity_pools_updated_at
-BEFORE UPDATE ON liquidity_pools
+CREATE TRIGGER trg_smart_contracts_updated_at
+BEFORE UPDATE ON smart_contracts
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
--- Pool Assets
-CREATE TABLE IF NOT EXISTS pool_assets (
-    pool_asset_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    pool_id UUID NOT NULL REFERENCES liquidity_pools(pool_id) ON DELETE CASCADE,
-    asset_id UUID NOT NULL REFERENCES assets(asset_id) ON DELETE RESTRICT,
-    weight NUMERIC(10,8) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (pool_id, asset_id)
-);
-
-CREATE TRIGGER trg_pool_assets_updated_at
-BEFORE UPDATE ON pool_assets
-FOR EACH ROW
-EXECUTE FUNCTION set_updated_at();
-
--- Liquidity Positions
-CREATE TABLE IF NOT EXISTS liquidity_positions (
-    position_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+-- DeFi Protocol Interactions
+CREATE TABLE IF NOT EXISTS defi_interactions (
+    interaction_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     wallet_id UUID NOT NULL REFERENCES wallets(wallet_id) ON DELETE CASCADE,
-    pool_id UUID NOT NULL REFERENCES liquidity_pools(pool_id) ON DELETE CASCADE,
+    contract_id UUID NOT NULL REFERENCES smart_contracts(contract_id) ON DELETE CASCADE,
+    interaction_type VARCHAR(50) NOT NULL CHECK (interaction_type IN ('deposit','withdraw','borrow','repay','stake','unstake','claim','liquidate','swap','approve')),
     amount NUMERIC(38,18) NOT NULL,
-    start_date TIMESTAMPTZ NOT NULL,
-    end_date TIMESTAMPTZ,
-    status VARCHAR(20) NOT NULL DEFAULT 'active',
-    rewards_earned NUMERIC(38,18) NOT NULL DEFAULT 0,
+    metadata JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_liquidity_status CHECK (status IN ('active','withdrawn','liquidated'))
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TRIGGER trg_liquidity_positions_updated_at
-BEFORE UPDATE ON liquidity_positions
+CREATE TRIGGER trg_defi_interactions_updated_at
+BEFORE UPDATE ON defi_interactions
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
--- Liquidity Rewards
-CREATE TABLE IF NOT EXISTS liquidity_rewards (
-    reward_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    position_id UUID NOT NULL REFERENCES liquidity_positions(position_id) ON DELETE CASCADE,
-    asset_id UUID NOT NULL REFERENCES assets(asset_id) ON DELETE RESTRICT,
-    amount NUMERIC(38,18) NOT NULL,
-    reward_date TIMESTAMPTZ NOT NULL,
+-- NFT Marketplace Transactions
+CREATE TABLE IF NOT EXISTS nft_marketplace_transactions (
+    transaction_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    wallet_id UUID NOT NULL REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+    token_id VARCHAR(66) NOT NULL REFERENCES nft_tokens(token_id) ON DELETE CASCADE,
+    transaction_type VARCHAR(20) NOT NULL CHECK (transaction_type IN ('list','delist','buy','sell','bid','accept_bid','cancel_bid')),
+    price NUMERIC(38,18) NOT NULL,
+    currency VARCHAR(10) NOT NULL,
+    marketplace VARCHAR(50),
+    metadata JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TRIGGER trg_nft_marketplace_transactions_updated_at
+BEFORE UPDATE ON nft_marketplace_transactions
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+-- Audit Log for Security and Compliance
+CREATE TABLE IF NOT EXISTS audit_log (
+    log_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    wallet_id UUID REFERENCES wallets(wallet_id) ON DELETE SET NULL,
+    action VARCHAR(50) NOT NULL,
+    details TEXT,
+    ip_address VARCHAR(45),
+    user_agent TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

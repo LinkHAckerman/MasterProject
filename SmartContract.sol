@@ -7,6 +7,9 @@ pragma solidity ^0.8.24;
  * Part of the MAGNUM OPUS Platform.
  */
 
+// ---------------------------------------------------------------
+// ERC20 Interface
+// ---------------------------------------------------------------
 interface IERC20 {
     function totalSupply() external view returns (uint256);
     function balanceOf(address account) external view returns (uint256);
@@ -19,9 +22,9 @@ interface IERC20 {
     event Approval(address indexed owner, address indexed spender, uint256 value);
 }
 
-/**
- * @dev Basic ERC20 implementation used as the platform's native token.
- */
+// ---------------------------------------------------------------
+// ERC20 Implementation – Platform Native Token
+// ---------------------------------------------------------------
 contract MagnumOpusToken is IERC20 {
     string public name = "Magnum Opus Protocol";
     string public symbol = "MOPUS";
@@ -127,10 +130,9 @@ contract MagnumOpusToken is IERC20 {
     }
 }
 
-/**
- * @title MagnumOpusStakingVault
- * @notice Simple ERC20 staking vault that distributes reward tokens proportionally to stake.
- */
+// ---------------------------------------------------------------
+// Staking Vault – Distributes reward tokens proportionally to stake
+// ---------------------------------------------------------------
 contract MagnumOpusStakingVault {
     IERC20 public immutable stakingToken;
     IERC20 public immutable rewardToken;
@@ -139,19 +141,14 @@ contract MagnumOpusStakingVault {
     uint256 public rewardRate; // reward tokens distributed per second
     uint256 public lastUpdateTime;
     uint256 public rewardPerTokenStored;
-    uint256 public totalStaked;
 
     mapping(address => uint256) public userRewardPerTokenPaid;
     mapping(address => uint256) public rewards;
-
-    event Staked(address indexed user, uint256 amount);
-    event Withdrawn(address indexed user, uint256 amount);
-    event RewardPaid(address indexed user, uint256 reward);
-    event RewardRateUpdated(uint256 newRate);
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    uint256 private _totalSupply;
+    mapping(address => uint256) private _balances;
 
     modifier onlyOwner() {
-        require(msg.sender == owner, "StakingVault: caller is not the owner");
+        require(msg.sender == owner, "MagnumOpusStakingVault: caller is not the owner");
         _;
     }
 
@@ -165,81 +162,99 @@ contract MagnumOpusStakingVault {
         _;
     }
 
-    constructor(address _stakingToken, address _rewardToken, uint256 _initialRewardRate) {
-        require(_stakingToken != address(0) && _rewardToken != address(0), "StakingVault: token address zero");
-        owner = msg.sender;
+    constructor(address _stakingToken, address _rewardToken, uint256 _rewardRate) {
         stakingToken = IERC20(_stakingToken);
         rewardToken = IERC20(_rewardToken);
-        rewardRate = _initialRewardRate;
+        owner = msg.sender;
+        rewardRate = _rewardRate;
         lastUpdateTime = block.timestamp;
     }
 
-    /**
-     * @dev Returns reward per token accumulated up to the current block timestamp.
-     */
+    function setRewardRate(uint256 _rewardRate) external onlyOwner updateReward(address(0)) {
+        rewardRate = _rewardRate;
+    }
+
+    function totalSupply() external view returns (uint256) {
+        return _totalSupply;
+    }
+
+    function balanceOf(address account) external view returns (uint256) {
+        return _balances[account];
+    }
+
     function rewardPerToken() public view returns (uint256) {
-        if (totalStaked == 0) {
+        if (_totalSupply == 0) {
             return rewardPerTokenStored;
         }
-        uint256 timeDelta = block.timestamp - lastUpdateTime;
-        return rewardPerTokenStored + ((timeDelta * rewardRate * 1e18) / totalStaked);
+        return rewardPerTokenStored + ((block.timestamp - lastUpdateTime) * rewardRate * 1e18 / _totalSupply);
     }
 
-    /**
-     * @dev Calculates the earned reward for an account.
-     */
     function earned(address account) public view returns (uint256) {
-        uint256 perToken = rewardPerToken() - userRewardPerTokenPaid[account];
-        return (stakingToken.balanceOf(account) * perToken) / 1e18 + rewards[account];
+        return (_balances[account] * (rewardPerToken() - userRewardPerTokenPaid[account]) / 1e18) + rewards[account];
     }
 
-    /**
-     * @notice Stake a specific amount of the staking token.
-     */
     function stake(uint256 amount) external updateReward(msg.sender) {
-        require(amount > 0, "StakingVault: cannot stake 0");
-        totalStaked += amount;
-        require(stakingToken.transferFrom(msg.sender, address(this), amount), "StakingVault: transfer failed");
+        require(amount > 0, "MagnumOpusStakingVault: cannot stake 0");
+        _totalSupply += amount;
+        _balances[msg.sender] += amount;
+        require(stakingToken.transferFrom(msg.sender, address(this), amount), "MagnumOpusStakingVault: stake transfer failed");
         emit Staked(msg.sender, amount);
     }
 
-    /**
-     * @notice Withdraw staked tokens.
-     */
     function withdraw(uint256 amount) external updateReward(msg.sender) {
-        require(amount > 0, "StakingVault: cannot withdraw 0");
-        require(stakingToken.balanceOf(msg.sender) >= amount, "StakingVault: insufficient balance");
-        totalStaked -= amount;
-        require(stakingToken.transfer(msg.sender, amount), "StakingVault: transfer failed");
+        require(amount > 0, "MagnumOpusStakingVault: cannot withdraw 0");
+        _totalSupply -= amount;
+        _balances[msg.sender] -= amount;
+        require(stakingToken.transfer(msg.sender, amount), "MagnumOpusStakingVault: withdraw transfer failed");
         emit Withdrawn(msg.sender, amount);
     }
 
-    /**
-     * @notice Claim accumulated rewards.
-     */
     function getReward() external updateReward(msg.sender) {
         uint256 reward = rewards[msg.sender];
         if (reward > 0) {
             rewards[msg.sender] = 0;
-            require(rewardToken.transfer(msg.sender, reward), "StakingVault: reward transfer failed");
+            require(rewardToken.transfer(msg.sender, reward), "MagnumOpusStakingVault: reward transfer failed");
             emit RewardPaid(msg.sender, reward);
         }
     }
 
-    /**
-     * @notice Allows the owner to update the reward distribution rate.
-     */
-    function setRewardRate(uint256 _newRate) external onlyOwner updateReward(address(0)) {
-        rewardRate = _newRate;
-        emit RewardRateUpdated(_newRate);
+    function exit() external {
+        withdraw(_balances[msg.sender]);
+        getReward();
     }
 
-    /**
-     * @notice Transfer contract ownership.
-     */
-    function transferOwnership(address newOwner) external onlyOwner {
-        require(newOwner != address(0), "StakingVault: new owner is zero address");
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
+    event Staked(address indexed user, uint256 amount);
+    event Withdrawn(address indexed user, uint256 amount);
+    event RewardPaid(address indexed user, uint256 reward);
+}
+
+// ---------------------------------------------------------------
+// NFT Collection – Simple ERC721 using OpenZeppelin
+// ---------------------------------------------------------------
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+
+contract MagnumOpusNFT is ERC721, Ownable {
+    using Counters for Counters.Counter;
+    Counters.Counter private _tokenIdTracker;
+    string private _baseTokenURI;
+
+    constructor(string memory baseURI) ERC721("Magnum Opus NFT", "MOPNFT") {
+        _baseTokenURI = baseURI;
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    function setBaseURI(string memory baseURI) external onlyOwner {
+        _baseTokenURI = baseURI;
+    }
+
+    function mint(address to) external onlyOwner {
+        _tokenIdTracker.increment();
+        uint256 tokenId = _tokenIdTracker.current();
+        _safeMint(to, tokenId);
     }
 }
