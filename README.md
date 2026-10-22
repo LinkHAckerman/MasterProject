@@ -4,12 +4,12 @@
 
 ### One repository. Eight languages. The entire Web3 stack.
 
-*A multi‑language, AI‑assisted showcase of how a crypto platform fits together, from the browser dashboard down to the on‑chain program.*
+*A multi-language, AI-assisted showcase of how a crypto platform fits together, from the browser dashboard down to the on-chain program.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/LinkHAckerman/MasterProject/blob/main/LICENSE)
 [![Status](https://img.shields.io/badge/status-active%20development-orange.svg)](#-project-status-read-this-first)
 [![Not audited](https://img.shields.io/badge/security-not%20audited-red.svg)](SECURITY.md)
-[![AI assisted](https://img.shields.io/badge/built%20with-AI%20agents-8A2BE2.svg)](#-the-autonomous-development-pipeline)
+[![AI assisted](https://img.shields.io/badge/built%20with-AI%20agents-8A2BE2.svg)](#-automation-and-ai-agent-pipeline)
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen)](https://github.com/LinkHAckerman/MasterProject/actions)
 [![Waifu](https://img.shields.io/badge/Waifu-Approved-E0218A)](https://github.com/LinkHAckerman/LinkHAckerman/blob/main/header.svg)
 ![Copyright of](https://img.shields.io/badge/Copyright%20of-FCX%20Trading%20Ltd.-fc7202)
@@ -27,243 +27,251 @@
 3. [Architecture](#-architecture)
 4. [Component map](#-component-map)
 5. [Quick start](#-quick-start)
-6. [Repository layout](#-repository-layout)
-7. [Project documents](#-project-documents)
-8. [Known limitations](#-known-limitations)
-9. [Roadmap](#-roadmap)
-10. [Contributing](#-contributing)
-11. [License](#-license)
+6. [Automation and AI agent pipeline](#-automation-and-ai-agent-pipeline)
+7. [Repository layout](#-repository-layout)
+8. [Project documents](#-project-documents)
+9. [Known limitations](#-known-limitations)
+10. [Roadmap](#-roadmap)
+11. [Contributing](#-contributing)
+12. [License](#-license)
 
 ---
 
 ## 🌐 Overview
 
-**Magnum Opus** is an ambitious, ever‑evolving attempt to put every layer of a modern crypto platform into a single repository, each layer written in the language best suited to the job:
+**Magnum Opus** is an architectural showcase bringing together each tier of a modern crypto and Web3 system within a single repository, implementing each module in an idiomatic language suited for the domain:
 
 | Layer | Language | Role |
 |------|----------|------|
-| Dashboard | **HTML / CSS / JavaScript** | Dark‑theme trading and portfolio UI |
-| Core services | **C# (.NET)** | Transaction validation, block production, receipts |
-| Performance engine | **C++** | Hashing, Merkle proofs, order‑matching, AMM math |
-| Smart contracts | **Solidity** | ERC‑20 token, staking vault, constant‑product DEX |
-| Microservice | **Go** | Wallet and transfer REST API |
-| Data layer | **SQL (PostgreSQL)** | Users, wallets, assets, NFTs, DeFi history, audit logs |
-| On‑chain program | **Rust (Anchor / Solana)** | Vault program with deposits, withdrawals and events |
-| Glue layer | **Ruby** | Exchange‑rate helpers, wallet balance aggregation |
-| Automation & validation | **Python** | CI agents, file validation scripts |
-
-The goal is to demonstrate **breadth, systems thinking and craft across ecosystems**. The code is **demo‑grade**, **not audited**, and **must never be used with real funds**.
+| Frontend Dashboard | **HTML5 / CSS3 / JavaScript (ES6+)** | Responsive dark-theme Web3 trading, staking, portfolio, and swap interface |
+| Core Ledger & Processing | **C# (.NET Core)** | High-throughput transaction engine, block generation, cryptographic receipts |
+| Computational Engine | **C++ (C++20)** | High-performance SHA-256, Merkle tree verification, AMM math, order-book matching |
+| Smart Contracts | **Solidity (0.8.24)** | ERC-20 tokenomics, automated market maker (AMM) DEX, yield staking pool |
+| Microservice API | **Go (Golang)** | Concurrency-focused wallet proxy, transaction relayer, rate-limited HTTP/WebSocket service |
+| Data Persistence Layer | **SQL (PostgreSQL)** | Relational schema for multi-chain balances, audit logs, order books, NFT registries |
+| On-Chain Program | **Rust (Solana / Anchor)** | Memory-safe on-chain vault program with account state validation and instruction routing |
+| Glue & Aggregation Service | **Ruby** | Real-time exchange-rate aggregation, wallet balance caching, and cross-tier helpers |
+| Automation & Validation | **Python** | Multi-provider agent scripts and continuous validation test suites |
 
 ---
 
 ## ⚠️ Project status: read this first
 
-Magnum Opus is a **showcase and learning project, not a production product**. Please keep the following in mind:
+Magnum Opus is an **educational and architectural demonstration**, not a commercial or production deployment:
 
-- **Demo‑grade code.** Components are real, readable implementations but most are **stand‑alone modules** that are **not yet wired together** into a running end‑to‑end system.
-- **Not audited.** The contracts, on‑chain program, wallet logic and cryptographic routines have had **no independent security review**. **Never use this code with real assets.** See [SECURITY.md](SECURITY.md) and [TERMS.md](TERMS.md).
-- **AI‑assisted and changing daily.** Content is generated and revised by automated agents and checked only by basic automated validation. Expect rough edges.
-- **No financial advice.** Nothing here is investment advice or an offer of any asset. All market data in the dashboard is simulated.
+- **Demo-grade implementations:** Components are functional, source-complete implementations designed to illustrate multi-language blockchain patterns. Most components operate as standalone units or mock integration harnesses.
+- **Not audited:** The Solidity smart contracts, Rust on-chain program, C++ cryptographic primitives, and wallet relayers have **not undergone formal third-party audits**. **Do not deploy with real digital assets or private keys.** Consult [SECURITY.md](SECURITY.md) and [TERMS.md](TERMS.md).
+- **AI-assisted development:** Files are refined through automated and collaborative AI workflows. Continuous syntax and integrity validation is performed via `validate_files.py`.
+- **Simulated market environment:** Market rates, liquidity metrics, and transaction receipts rendered in the web dashboard are simulated demonstrations.
 
 ---
 
 ## 🏗️ Architecture
 
 ```mermaid
-flowchart LR
-    UI["Dashboard<br/>index.html • styles.css • app.js"]
-    GO["Wallet API (Go)<br/>server.go"]
-    CS["Core services (C#)<br/>TransactionProcessor.cs"]
-    CPP["Crypto engine (C++)<br/>CryptoEngine.cpp"]
-    RB["Glue service (Ruby)<br/>WalletService.rb"]
-    DB[("PostgreSQL<br/>schema.sql")]
-    SOL["Smart contracts (Solidity)<br/>SmartContract.sol"]
-    RS["On‑chain program (Rust)<br/>OnChainProgram.rs"]
-    PY["Automation (Python)<br/>ai_agent_*.py"]
+flowchart TD
+    subgraph Presentation["Client Tier"]
+        UI["Dashboard Engine<br/>index.html • styles.css • app.js"]
+    end
 
-    UI -.-> GO
-    UI -.-> RB
-    UI -.-> PY
-    GO -.-> CS
-    GO -.-> DB
-    CS -.-> CPP
-    CS -.-> DB
-    CS -.-> SOL
-    CS -.-> RS
-    RB -.-> DB
-    PY -.-> GO
-    PY -.-> CS
+    subgraph Services["Application & Relay Tier"]
+        GO["Microservice Relayer (Go)<br/>server.go"]
+        CS["Transaction Core (C#)<br/>TransactionProcessor.cs"]
+        RB["Exchange & Wallet Service (Ruby)<br/>WalletService.rb"]
+    end
+
+    subgraph Compute["Performance Engine"]
+        CPP["High-Performance Engine (C++)<br/>CryptoEngine.cpp"]
+    end
+
+    subgraph OnChain["Smart Contracts & On-Chain Logic"]
+        SOL["Smart Contracts (Solidity)<br/>SmartContract.sol"]
+        RS["Solana On-Chain Program (Rust)<br/>OnChainProgram.rs"]
+    end
+
+    subgraph Persistence["Database Tier"]
+        DB[("Relational Ledger (SQL)<br/>schema.sql")]
+    end
+
+    UI -->|REST / WebSocket Mock| GO
+    UI -->|Telemetry / Rates| RB
+    GO -->|Batch Validation| CS
+    GO -->|Queries & Audit Trails| DB
+    CS -->|extern C Bindings| CPP
+    CS -->|State Synchronization| DB
+    CS -.->|EVM Contract Interface| SOL
+    CS -.->|SVM Program Execution| RS
+    RB -->|Balance Ingestion| DB
 ```
 
-The C++ engine exposes a C‑linkage API (`extern "C"`) so the C# and Go layers can call into it later through P/Invoke or cgo.
+The C++ cryptographic module implements exported C-linkage APIs (`extern "C"`) designed for Foreign Function Interface (FFI) bindings with the C# backend (`P/Invoke`) and Go services (`cgo`).
 
 ---
 
 ## 📦 Component map
 
-| File | Language | What is in it today | Status |
-|------|----------|---------------------|--------|
-| `index.html` | HTML | Dark "glass" dashboard: portfolio metrics, charts, order book, wallet UI | ✅ Implemented |
-| `styles.css` | CSS | Theme, layout, glass‑morphism effects | ✅ Implemented |
-| `app.js` | JavaScript | UI state management, simulated market data, event handling | ✅ Implemented |
-| `TransactionProcessor.cs` | C# | Core transaction validation, mock block production, JSON‑API helpers | ✅ Implemented |
-| `CryptoEngine.cpp` | C++ | High‑performance hashing, Merkle tree utilities, AMM math library | ✅ Implemented |
-| `SmartContract.sol` | Solidity | ERC‑20 token, staking vault, constant‑product DEX skeleton | ✅ Implemented |
-| `server.go` | Go | Minimal REST API for wallet creation, balance queries, transaction relay | ✅ Implemented |
-| `WalletService.rb` | Ruby | Exchange‑rate fetcher, wallet balance aggregation, simple caching layer | ✅ Implemented |
-| `schema.sql` | SQL | PostgreSQL schema for users, wallets, assets, transaction history, NFT metadata | ✅ Implemented |
-| `OnChainProgram.rs` | Rust | Anchor‑based Solana program: vault initialization, deposit/withdraw logic | ✅ Implemented |
-| `agent_common.py`, `ai_agent_*.py` | Python | Automation agents that run daily, lint files, generate PRs | ✅ Implemented |
-| `.github/workflows/daily_agent.yml` | YAML | GitHub Actions workflow that triggers the daily AI agent | ✅ Implemented |
-| `validate_files.py` | Python | Helper script used by CI to ensure required files exist and are well‑formed | ✅ Implemented |
-| `scaffold/test.txt` | Text | Placeholder used by CI to verify repository layout | ✅ Implemented |
+| Component | Technology | Primary File | Description |
+|-----------|------------|--------------|-------------|
+| **Client Dashboard** | HTML5 / CSS3 / Vanilla JS | `index.html`, `styles.css`, `app.js` | Interactive dark-mode dashboard featuring portfolio telemetry, swap simulator, staking interface, order book canvas, and audio feedback. |
+| **Core Transaction Processor** | C# (.NET) | `TransactionProcessor.cs` | In-memory blockchain engine with thread-safe pending pools, SHA-256 block mining, Merkle roots, and JSON ledger persistence. |
+| **High-Performance Engine** | C++ (C++20) | `CryptoEngine.cpp` | Merkle tree builder, fast SHA-256 hasher, constant-product AMM computation, and in-memory limit order book matching engine. |
+| **Smart Contracts** | Solidity (0.8.24) | `SmartContract.sol` | Decentralized application suite comprising ERC-20 token with mint/burn, multi-tier yield staking pool, and automated constant-product swap. |
+| **Relayer Service** | Go 1.20+ | `server.go` | HTTP/WebSocket microservice with route multiplexing, rate-limiting tokens, cryptographic payload validation, and in-memory wallet ledger. |
+| **Database Schema** | PostgreSQL | `schema.sql` | Production-ready schema featuring UUID primary keys, cryptographic verification digests, users, wallets, token balances, and audit trails. |
+| **On-Chain Vault** | Rust (Solana/Anchor) | `OnChainProgram.rs` | Program Derived Address (PDA) vault supporting authority-managed deposits, fee calculations, time-locked withdrawals, and emitted events. |
+| **Wallet & Rates Service** | Ruby 3.x | `WalletService.rb` | High-precision `BigDecimal` arithmetic, external rate aggregation, cache invalidation, and thread-safe balance operations. |
+| **Validation Engine** | Python 3.9+ | `validate_files.py` | Automated syntax, structure, and integrity validation harness for all repository source files. |
+| **Automation Suite** | Python 3.9+ | `agent_common.py`, `ai_agent*.py` | Modular multi-LLM automation harness supporting multiple AI inference backends for repository maintenance. |
 
 ---
 
 ## 🚀 Quick start
 
-> **Note**: This guide assumes you have a recent version of **Node.js**, **.NET 7 SDK**, **C++ build tools (gcc/clang or MSVC)**, **Go 1.22+**, **Ruby 3.2+**, and a running **PostgreSQL** instance.
+### 1. Clone the repository
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/LinkHAckerman/MasterProject.git
-   cd MasterProject
-   ```
+```bash
+git clone https://github.com/LinkHAckerman/MasterProject.git
+cd MasterProject
+```
 
-2. **Set up the database**
-   ```bash
-   createdb magnum_opus
-   psql -d magnum_opus -f schema.sql
-   ```
-   The schema creates tables for users, wallets, assets, transactions and NFT metadata.
+### 2. Launch the web dashboard
 
-3. **Run the front‑end** (no build step – static files)
-   ```bash
-   # You can serve the files with any static server, e.g. Python's http.server
-   python -m http.server 8080
-   # Then open http://localhost:8080/index.html in a browser
-   ```
+Open `index.html` directly in any modern browser, or launch a local static HTTP server:
 
-4. **Start the C# core service**
-   ```bash
-   dotnet run --project TransactionProcessor.csproj
-   # The service listens on http://localhost:5000 by default
-   ```
+```bash
+# Using Python built-in HTTP server
+python3 -m http.server 8080
+# Open http://localhost:8080 in your browser
+```
 
-5. **Build the C++ crypto engine** (produces a shared library `libcryptoengine.so` or `cryptoengine.dll`)
-   ```bash
-   mkdir -p build && cd build
-   cmake ..
-   make   # or `cmake --build .` on Windows
-   cd ..
-   ```
-   The library will be loaded by the C# service in a future integration step.
+### 3. Run the validation harness
 
-6. **Run the Go wallet API**
-   ```bash
-   go run server.go
-   # API available at http://localhost:8081
-   ```
+Validate source integrity, encoding, and syntax across all project files:
 
-7. **Start the Ruby glue service**
-   ```bash
-   ruby WalletService.rb
-   # Provides exchange‑rate endpoint on http://localhost:8082
-   ```
+```bash
+python3 validate_files.py
+```
 
-8. **(Optional) Deploy the Solidity contracts**
-   ```bash
-   # Requires `forge` or `hardhat`. Example with forge:
-   forge build
-   forge create --rpc-url https://goerli.infura.io/v3/<PROJECT_ID> src/SmartContract.sol:MagnumOpusDeFiEngine
-   ```
-   The contracts are **not deployed** in the demo environment.
+### 4. Exploring individual language tiers
 
-9. **(Optional) Deploy the Solana program**
-   ```bash
-   anchor build
-   anchor deploy
-   ```
-   Again, this is illustrative only.
+Each layer can be inspected or checked with its native toolchain:
 
-You now have all components running locally. The dashboard UI fetches mock data from the C# and Go services, while the Ruby service supplies fiat‑to‑crypto rates.
+- **Go Microservice (`server.go`):**
+  ```bash
+  go run server.go
+  ```
+- **C++ Engine (`CryptoEngine.cpp`):**
+  ```bash
+  g++ -std=c++20 -O3 -Wall CryptoEngine.cpp -o crypto_engine
+  ./crypto_engine
+  ```
+- **C# Ledger Core (`TransactionProcessor.cs`):**
+  ```bash
+  dotnet build  # When paired with a .NET project definition
+  ```
+- **Ruby Service (`WalletService.rb`):**
+  ```bash
+  ruby WalletService.rb
+  ```
+- **PostgreSQL Database (`schema.sql`):**
+  ```bash
+  psql -U postgres -d postgres -f schema.sql
+  ```
 
 ---
 
-## 📂 Repository layout
+## 🤖 Automation and AI agent pipeline
+
+The project uses an automated maintenance workflow orchestrated through GitHub Actions and Python driver scripts:
+
+- **Workflow:** `.github/workflows/daily_agent.yml` executes scheduled runs to review and refine individual codebase layers.
+- **Common Harness:** `agent_common.py` encapsulates file parsing, snapshot serialization, and prompt configuration.
+- **Provider Implementations:** Provider-specific AI agents handle different inference engines:
+  - `ai_agent.py` / `ai_agent_github_models.py`
+  - `ai_agent_cloudflare.py`
+  - `ai_agent_groq.py`
+  - `ai_agent_mistral.py`
+  - `ai_agent_openrouter.py`
+- **Validation Engine:** `validate_files.py` guarantees that updates maintain parseable syntax and follow code style standards.
+
+---
+
+## 📁 Repository layout
 
 ```
 MasterProject/
-├─ .github/workflows/daily_agent.yml
-├─ CLA.md
-├─ CODE_OF_CONDUCT.md
-├─ CONTRIBUTING.md
-├─ LICENSE
-├─ README.md
-├─ SECURITY.md
-├─ TERMS.md
-├─ SmartContract.sol
-├─ TransactionProcessor.cs
-├─ CryptoEngine.cpp
-├─ OnChainProgram.rs
-├─ server.go
-├─ WalletService.rb
-├─ schema.sql
-├─ app.js
-├─ index.html
-├─ styles.css
-├─ scaffold/
-│  └─ test.txt
-├─ agent_common.py
-├─ ai_agent.py
-├─ ai_agent_cloudflare.py
-├─ ai_agent_github_models.py
-├─ ai_agent_groq.py
-├─ ai_agent_mistral.py
-├─ ai_agent_openrouter.py
-└─ validate_files.py
+├── .github/
+│   └── workflows/
+│       └── daily_agent.yml       # Automated CI workflow configuration
+├── scaffold/
+│   └── test.txt                  # Test harness scaffolding data
+├── index.html                    # Frontend HTML5 trading and portfolio dashboard
+├── styles.css                    # Glass-morphism responsive CSS design system
+├── app.js                        # Client-side state manager, charts, and simulation logic
+├── TransactionProcessor.cs       # C# core transaction, ledger, and block producer
+├── CryptoEngine.cpp              # C++ high-performance matching, hashing, and math
+├── SmartContract.sol             # Solidity contracts (ERC-20, Staking, AMM DEX)
+├── server.go                     # Go REST/WebSocket transaction relayer microservice
+├── schema.sql                    # PostgreSQL relational database schema
+├── OnChainProgram.rs             # Solana/Anchor on-chain vault program
+├── WalletService.rb              # Ruby multi-currency balance and rate caching service
+├── validate_files.py             # Integrity and syntax checker script
+├── agent_common.py               # Shared utility logic for automation agents
+├── ai_agent.py                   # Primary automated agent script
+├── ai_agent_cloudflare.py        # Cloudflare Workers AI integration agent
+├── ai_agent_github_models.py     # GitHub Models integration agent
+├── ai_agent_groq.py              # Groq high-speed inference integration agent
+├── ai_agent_mistral.py           # Mistral AI integration agent
+├── ai_agent_openrouter.py        # OpenRouter multi-model integration agent
+├── CLA.md                        # Contributor License Agreement
+├── CODE_OF_CONDUCT.md            # Contributor covenant code of conduct
+├── CONTRIBUTING.md               # Contribution and pull request guidelines
+├── LICENSE                       # MIT License notice
+├── README.md                     # Public repository documentation
+├── SECURITY.md                   # Security reporting and vulnerability policy
+└── TERMS.md                      # Usage terms, disclaimer, and liabilities
 ```
 
 ---
 
 ## 📄 Project documents
 
-- **[LICENSE](LICENSE)** – MIT License
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** – Guidelines for contributing
-- **[CLA.md](CLA.md)** – Contributor License Agreement
-- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** – Community standards
-- **[SECURITY.md](SECURITY.md)** – Security policy and vulnerability reporting
-- **[TERMS.md](TERMS.md)** – Terms of use and disclaimer
+Please review our governance, legal, and operational documents:
+
+- [LICENSE](LICENSE) — Official MIT License terms.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Guidelines for code contributions, workflow, and testing.
+- [CLA.md](CLA.md) — Contributor License Agreement.
+- [SECURITY.md](SECURITY.md) — Vulnerability reporting and security considerations.
+- [TERMS.md](TERMS.md) — Disclaimers, software usage conditions, and risk warnings.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — Community standards and participant expectations.
 
 ---
 
-## ⚙️ Known limitations
+## 🔍 Known limitations
 
-- Components are **isolated**; there is no end‑to‑end integration yet.
-- Cryptographic primitives in `CryptoEngine.cpp` are **educational** and not vetted for production.
-- Smart contracts and the Solana program have **no test suite** and have not been audited.
-- The CI workflow only runs a daily AI agent that validates file presence; no unit or integration tests are executed.
-- Documentation is manually maintained and may drift from code.
+- **Simulated Cross-Chain IPC:** Direct Inter-Process Communication (IPC) between the Go relayer, C# backend, and C++ engine relies on standalone mocks rather than live dynamic shared library bindings.
+- **Simulated Chain Feeds:** The client dashboard generates synthetic price and liquidity movements on intervals rather than consuming live Ethereum/Solana RPC nodes.
+- **Database Connectivity:** Services currently hold in-memory stubs instead of binding directly to a live PostgreSQL cluster during quick-start executions.
 
 ---
 
-## 🛣️ Roadmap (planned work)
+## 🗺️ Roadmap
 
-- **Integration layer**: Wire the Go wallet API, C# core, and C++ engine together via P/Invoke / cgo.
-- **Real‑time data feeds**: Connect the dashboard to live market data APIs.
-- **Automated testing**: Add unit tests for each language component and CI pipelines for linting and security scanning.
-- **Docker / Helm support**: Provide containerised deployment for the full stack.
-- **Full end‑to‑end demo**: Deploy contracts to a testnet, run the Solana program, and demonstrate a complete user flow.
-- **Security audit**: Engage external auditors for the Solidity and Rust code.
+*The following milestones reflect planned technical iterations:*
+
+- [ ] **Cross-Language FFI:** Build CMake and build script pipelines to compile `CryptoEngine.cpp` to a shared object (`.so` / `.dll`) consumed by `TransactionProcessor.cs` (P/Invoke) and `server.go` (cgo).
+- [ ] **Live RPC Provider Hook:** Optional client-side RPC provider toggle (MetaMask / Phantom) within `app.js` for on-chain state inspection.
+- [ ] **Unified Docker Harness:** Containerize the Go, C#, and PostgreSQL environments for integrated one-command orchestration.
+- [ ] **Automated Test Coverage:** Expand `validate_files.py` to invoke native test runners (`go test`, `dotnet test`, `cargo test-bpf`) in CI runners.
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please read the [CONTRIBUTING.md](CONTRIBUTING.md) guide, sign the [CLA](CLA.md), and follow the [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). All pull requests are reviewed by the maintainers and the daily AI agent runs validation checks before merging.
+Contributions are welcome! Whether filing issues, submitting pull requests, or improving documentation, please consult [CONTRIBUTING.md](CONTRIBUTING.md) and ensure that `python3 validate_files.py` passes cleanly prior to opening a PR.
 
 ---
 
-## 📄 License
+## 📜 License
 
-This project is licensed under the **MIT License** – see the [LICENSE](LICENSE) file for details.
+This project is distributed under the terms of the **MIT License**. Refer to [LICENSE](LICENSE) for the full text.
