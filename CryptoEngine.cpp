@@ -141,7 +141,7 @@ namespace MagnumOpus {
         }
     };
 
-    // Definitions of round constants & rotation matrix for Keccak-256
+    // Definitions of Keccak-256 round constants & rotation matrix
     const uint64_t Keccak256::RC[24] = {
         0x0000000000000001ULL, 0x0000000000008082ULL, 0x800000000000808aULL,
         0x8000000080008000ULL, 0x000000000000808bULL, 0x0000000080000001ULL,
@@ -154,402 +154,439 @@ namespace MagnumOpus {
     };
 
     const int Keccak256::ROTC[5][5] = {
-        { 0, 36,  3, 41, 18},
-        { 1, 44, 10, 45,  2},
-        {62,  6, 43, 15, 61},
-        {28, 55, 25, 21, 56},
-        {27, 20, 39,  8, 14}
+        {  0, 36,  3, 41, 18 },
+        {  1, 44, 10, 45,  2 },
+        { 62,  6, 43, 15, 39 },
+        { 28, 55, 25, 21, 56 },
+        { 27, 20, 39,  8, 14 }
     };
 
-    // Merkle Tree implementation for high-speed transaction validation
+    // =========================================================================
+    // 2. MERKLE TREE ENGINE & PROOF VERIFIER
+    // =========================================================================
+
+    struct MerkleNode {
+        std::string hash;
+        std::shared_ptr<MerkleNode> left;
+        std::shared_ptr<MerkleNode> right;
+
+        MerkleNode(const std::string& h) : hash(h), left(nullptr), right(nullptr) {}
+        MerkleNode(const std::string& h, std::shared_ptr<MerkleNode> l, std::shared_ptr<MerkleNode> r)
+            : hash(h), left(l), right(r) {}
+    };
+
     class MerkleTree {
     private:
-        std::vector<std::string> leaves_;
-        std::vector<std::vector<std::string>> tree_;
+        std::shared_ptr<MerkleNode> root;
+        std::vector<std::string> leaves;
 
-    public:
-        explicit MerkleTree(const std::vector<std::string>& leaves) : leaves_(leaves) {
-            BuildTree();
+        std::shared_ptr<MerkleNode> BuildSubtree(const std::vector<std::shared_ptr<MerkleNode>>& nodes) {
+            if (nodes.empty()) return nullptr;
+            if (nodes.size() == 1) return nodes[0];
+
+            std::vector<std::shared_ptr<MerkleNode>> parentLevel;
+            for (size_t i = 0; i < nodes.size(); i += 2) {
+                if (i + 1 < nodes.size()) {
+                    std::string combined = Keccak256::ComputeHash(nodes[i]->hash + nodes[i + 1]->hash);
+                    parentLevel.push_back(std::make_shared<MerkleNode>(combined, nodes[i], nodes[i + 1]));
+                } else {
+                    // Duplicate odd node for balance
+                    std::string combined = Keccak256::ComputeHash(nodes[i]->hash + nodes[i]->hash);
+                    parentLevel.push_back(std::make_shared<MerkleNode>(combined, nodes[i], nodes[i]));
+                }
+            }
+            return BuildSubtree(parentLevel);
         }
 
-        void BuildTree() {
-            if (leaves_.empty()) return;
-            tree_.clear();
-            std::vector<std::string> currentLevel = leaves_;
-            tree_.push_back(currentLevel);
-
-            while (currentLevel.size() > 1) {
-                if (currentLevel.size() % 2 != 0) {
-                    currentLevel.push_back(currentLevel.back());
-                }
-                std::vector<std::string> nextLevel;
-                for (size_t i = 0; i < currentLevel.size(); i += 2) {
-                    std::string combined = Keccak256::ComputeHash(currentLevel[i] + currentLevel[i + 1]);
-                    nextLevel.push_back(combined);
-                }
-                tree_.push_back(nextLevel);
-                currentLevel = nextLevel;
+    public:
+        explicit MerkleTree(const std::vector<std::string>& transactions) {
+            leaves.clear();
+            std::vector<std::shared_ptr<MerkleNode>> leafNodes;
+            for (const auto& tx : transactions) {
+                std::string leafHash = Keccak256::ComputeHash(tx);
+                leaves.push_back(leafHash);
+                leafNodes.push_back(std::make_shared<MerkleNode>(leafHash));
+            }
+            if (leafNodes.empty()) {
+                root = std::make_shared<MerkleNode>(Keccak256::ComputeHash(""));
+            } else {
+                root = BuildSubtree(leafNodes);
             }
         }
 
-        std::string GetRoot() const {
-            if (tree_.empty() || tree_.back().empty()) return "0x0";
-            return tree_.back()[0];
+        std::string GetRootHash() const {
+            return root ? root->hash : "";
         }
 
-        std::vector<std::string> GetProof(size_t index) const {
-            std::vector<std::string> proof;
-            if (index >= leaves_.size()) return proof;
+        struct ProofStep {
+            std::string siblingHash;
+            bool isLeft;
+        };
 
-            size_t idx = index;
-            for (size_t level = 0; level < tree_.size() - 1; ++level) {
-                const auto& currentLevel = tree_[level];
-                size_t pairIdx = (idx % 2 == 0) ? idx + 1 : idx - 1;
-                if (pairIdx < currentLevel.size()) {
-                    proof.push_back(currentLevel[pairIdx]);
-                } else {
-                    proof.push_back(currentLevel[idx]);
+        std::vector<ProofStep> GenerateProof(size_t index) const {
+            std::vector<ProofStep> proof;
+            if (index >= leaves.size()) return proof;
+
+            // Internal traverse for proof generation
+            std::vector<std::string> currentHashes = leaves;
+            size_t currIdx = index;
+
+            while (currentHashes.size() > 1) {
+                std::vector<std::string> nextLevel;
+                for (size_t i = 0; i < currentHashes.size(); i += 2) {
+                    size_t pairIdx = (i + 1 < currentHashes.size()) ? (i + 1) : i;
+                    if (i == currIdx || pairIdx == currIdx) {
+                        size_t siblingIdx = (currIdx % 2 == 0) ? pairIdx : i;
+                        bool isLeft = (currIdx % 2 != 0);
+                        proof.push_back({ currentHashes[siblingIdx], isLeft });
+                    }
+                    std::string combined = Keccak256::ComputeHash(currentHashes[i] + currentHashes[pairIdx]);
+                    nextLevel.push_back(combined);
                 }
-                idx /= 2;
+                currIdx /= 2;
+                currentHashes = nextLevel;
             }
             return proof;
         }
 
-        static bool VerifyProof(const std::string& leaf, const std::vector<std::string>& proof, const std::string& root, size_t index) {
-            std::string currentHash = leaf;
-            size_t idx = index;
-            for (const auto& sibling : proof) {
-                if (idx % 2 == 0) {
-                    currentHash = Keccak256::ComputeHash(currentHash + sibling);
+        static bool VerifyProof(const std::string& leafHash, const std::vector<ProofStep>& proof, const std::string& expectedRoot) {
+            std::string currentHash = leafHash;
+            for (const auto& step : proof) {
+                if (step.isLeft) {
+                    currentHash = Keccak256::ComputeHash(step.siblingHash + currentHash);
                 } else {
-                    currentHash = Keccak256::ComputeHash(sibling + currentHash);
+                    currentHash = Keccak256::ComputeHash(currentHash + step.siblingHash);
                 }
-                idx /= 2;
             }
-            return currentHash == root;
+            return currentHash == expectedRoot;
         }
     };
 
     // =========================================================================
-    // 2. BLOCK VERIFICATION & CONSENSUS ENGINE (PoW / PoS)
+    // 3. HIGH-THROUGHPUT ORDER BOOK MATCHING ENGINE
     // =========================================================================
 
-    struct Transaction {
-        std::string id;
-        std::string sender;
-        std::string recipient;
-        double amount;
-        uint64_t nonce;
-        std::string signature;
+    enum class OrderSide { BUY, SELL };
+    enum class OrderType { LIMIT, MARKET };
 
-        std::string Serialize() const {
-            std::stringstream ss;
-            ss << id << ":" << sender << ":" << recipient << ":" << amount << ":" << nonce;
-            return ss.str();
-        }
-    };
-
-    struct Block {
-        uint64_t index;
-        uint64_t timestamp;
-        std::string previousHash;
-        std::string merkleRoot;
-        std::string blockHash;
-        uint64_t nonce;
-        uint32_t difficulty;
-        std::string validator;
-        std::vector<Transaction> transactions;
-
-        std::string CalculateHash() const {
-            std::stringstream ss;
-            ss << index << ":" << timestamp << ":" << previousHash << ":" << merkleRoot << ":" << nonce << ":" << validator;
-            return Sha256::ComputeHash(ss.str());
-        }
-    };
-
-    class ConsensusEngine {
-    public:
-        // Proof of Work Mining Simulator
-        static Block MineBlock(Block block, uint32_t targetDifficulty) {
-            block.difficulty = targetDifficulty;
-            std::string targetPrefix(targetDifficulty, '0');
-            block.nonce = 0;
-            
-            std::vector<std::string> txHashes;
-            for (const auto& tx : block.transactions) {
-                txHashes.push_back(Keccak256::ComputeHash(tx.Serialize()));
-            }
-            MerkleTree merkle(txHashes);
-            block.merkleRoot = merkle.GetRoot();
-
-            while (true) {
-                block.blockHash = block.CalculateHash();
-                // Check sub-prefix pattern target verification
-                if (block.blockHash.substr(2, targetDifficulty) == targetPrefix) {
-                    break;
-                }
-                block.nonce++;
-            }
-            return block;
-        }
-
-        // Proof of Stake Validator Engine
-        static bool VerifyPoSBlock(const Block& block, const std::unordered_map<std::string, double>& validatorStakes, double totalStake) {
-            auto it = validatorStakes.find(block.validator);
-            if (it == validatorStakes.end()) return false;
-            
-            double stakeWeight = it->second / totalStake;
-            std::string checkSeed = block.previousHash + block.validator + std::to_string(block.timestamp);
-            std::string seedHash = Keccak256::ComputeHash(checkSeed);
-            
-            // Stake-weighted VRF verification threshold test
-            uint64_t hashVal = std::stoull(seedHash.substr(2, 8), nullptr, 16);
-            double normalizedVal = static_cast<double>(hashVal) / static_cast<double>(0xFFFFFFFF);
-            return normalizedVal <= (stakeWeight * 2.0); // 2x probability factor boost
-        }
-    };
-
-    // =========================================================================
-    // 3. DEX & AUTOMATED MARKET MAKER (AMM) MATH ENGINE
-    // =========================================================================
-
-    class AMMMath {
-    public:
-        // Constant Product Formula x * y = k
-        static double CalculateSwapOutput(double inputAmount, double inputReserve, double outputReserve, double feePercent = 0.3) {
-            if (inputAmount <= 0.0 || inputReserve <= 0.0 || outputReserve <= 0.0) return 0.0;
-            double inputAmountWithFee = inputAmount * (1.0 - (feePercent / 100.0));
-            double numerator = inputAmountWithFee * outputReserve;
-            double denominator = inputReserve + inputAmountWithFee;
-            return numerator / denominator;
-        }
-
-        // Slippage Calculation
-        static double CalculatePriceImpact(double inputAmount, double inputReserve, double outputReserve) {
-            double spotPrice = outputReserve / inputReserve;
-            double expectedOutput = inputAmount * spotPrice;
-            double actualOutput = CalculateSwapOutput(inputAmount, inputReserve, outputReserve);
-            if (expectedOutput <= 0) return 0.0;
-            return ((expectedOutput - actualOutput) / expectedOutput) * 100.0;
-        }
-
-        // Stableswap invariant invariant simulator A * n^n * sum(x_i) + D = A * D * n^n + D^(n+1) / (n^n * prod(x_i))
-        static double CalculateStableSwapOutput(double x, double y, double dx, double A = 100.0) {
-            double newX = x + dx;
-            double D = x + y;
-            // Newton-Raphson approximation for StableSwap invariant curve
-            double newY = y;
-            for (int i = 0; i < 25; ++i) {
-                double yPrev = newY;
-                double c = (D * D) / (4.0 * newX);
-                newY = (newY * newY + c) / (2.0 * newY + D / A - D);
-                if (std::abs(newY - yPrev) < 1e-6) break;
-            }
-            return std::max(0.0, y - newY);
-        }
-    };
-
-    // High-Frequency Trading Limit Orderbook Engine
     struct Order {
         uint64_t id;
         std::string trader;
-        bool isBuy;
+        OrderSide side;
+        OrderType type;
         double price;
-        double quantity;
+        double amount;
+        uint64_t timestamp;
+    };
+
+    struct TradeMatch {
+        uint64_t buyOrderId;
+        uint64_t sellOrderId;
+        std::string buyer;
+        std::string seller;
+        double price;
+        double amount;
+        uint64_t timestamp;
     };
 
     class OrderBookEngine {
     private:
-        std::map<double, std::vector<Order>, std::greater<double>> buyOrders_;
-        std::map<double, std::vector<Order>, std::less<double>> sellOrders_;
-        std::atomic<uint64_t> nextOrderId_{1};
-        std::mutex bookMutex_;
+        // Price-time priority queues using std::map
+        // Bids: descending price, ascending timestamp
+        std::map<double, std::vector<Order>, std::greater<double>> bids;
+        // Asks: ascending price, ascending timestamp
+        std::map<double, std::vector<Order>, std::less<double>> asks;
+        
+        mutable std::mutex bookMutex;
+        std::atomic<uint64_t> nextOrderId{1};
+        std::vector<TradeMatch> tradeHistory;
 
     public:
-        uint64_t PlaceOrder(const std::string& trader, bool isBuy, double price, double quantity) {
-            std::lock_guard<std::mutex> lock(bookMutex_);
-            uint64_t orderId = nextOrderId_++;
-            Order order{orderId, trader, isBuy, price, quantity};
+        OrderBookEngine() = default;
 
-            if (isBuy) {
-                MatchBuyOrder(order);
-                if (order.quantity > 0) {
-                    buyOrders_[price].push_back(order);
-                }
-            } else {
-                MatchSellOrder(order);
-                if (order.quantity > 0) {
-                    sellOrders_[price].push_back(order);
-                }
-            }
+        uint64_t PlaceOrder(const std::string& trader, OrderSide side, OrderType type, double price, double amount) {
+            std::lock_guard<std::mutex> lock(bookMutex);
+            uint64_t orderId = nextOrderId++;
+            uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+            ).count();
+
+            Order order{ orderId, trader, side, type, price, amount, now };
+            MatchOrders(order);
             return orderId;
         }
 
-        void MatchBuyOrder(Order& buyOrder) {
-            auto it = sellOrders_.begin();
-            while (it != sellOrders_.end() && it->first <= buyOrder.price && buyOrder.quantity > 0) {
-                auto& ordersAtPrice = it->second;
-                for (auto orderIt = ordersAtPrice.begin(); orderIt != ordersAtPrice.end();) {
-                    double matchQty = std::min(buyOrder.quantity, orderIt->quantity);
-                    buyOrder.quantity -= matchQty;
-                    orderIt->quantity -= matchQty;
+    private:
+        void MatchOrders(Order& incoming) {
+            if (incoming.side == OrderSide::BUY) {
+                while (incoming.amount > 1e-8 && !asks.empty()) {
+                    auto bestAskIt = asks.begin();
+                    double bestAskPrice = bestAskIt->first;
 
-                    if (orderIt->quantity <= 0) {
-                        orderIt = ordersAtPrice.erase(orderIt);
-                    } else {
-                        ++orderIt;
+                    if (incoming.type == OrderType::LIMIT && incoming.price < bestAskPrice) {
+                        break; // No match possible
                     }
-                    if (buyOrder.quantity <= 0) break;
+
+                    auto& queue = bestAskIt->second;
+                    while (!queue.empty() && incoming.amount > 1e-8) {
+                        Order& restingAsk = queue.front();
+                        double tradeAmount = std::min(incoming.amount, restingAsk.amount);
+                        double tradePrice = restingAsk.price;
+
+                        incoming.amount -= tradeAmount;
+                        restingAsk.amount -= tradeAmount;
+
+                        tradeHistory.push_back({
+                            incoming.id, restingAsk.id,
+                            incoming.trader, restingAsk.trader,
+                            tradePrice, tradeAmount,
+                            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::system_clock::now().time_since_epoch()).count())
+                        });
+
+                        if (restingAsk.amount <= 1e-8) {
+                            queue.erase(queue.begin());
+                        }
+                    }
+
+                    if (queue.empty()) {
+                        asks.erase(bestAskIt);
+                    }
                 }
-                if (ordersAtPrice.empty()) {
-                    it = sellOrders_.erase(it);
-                } else {
-                    ++it;
+
+                if (incoming.amount > 1e-8 && incoming.type == OrderType::LIMIT) {
+                    bids[incoming.price].push_back(incoming);
+                }
+            } else {
+                // Sell order matching
+                while (incoming.amount > 1e-8 && !bids.empty()) {
+                    auto bestBidIt = bids.begin();
+                    double bestBidPrice = bestBidIt->first;
+
+                    if (incoming.type == OrderType::LIMIT && incoming.price > bestBidPrice) {
+                        break; // No match possible
+                    }
+
+                    auto& queue = bestBidIt->second;
+                    while (!queue.empty() && incoming.amount > 1e-8) {
+                        Order& restingBid = queue.front();
+                        double tradeAmount = std::min(incoming.amount, restingBid.amount);
+                        double tradePrice = restingBid.price;
+
+                        incoming.amount -= tradeAmount;
+                        restingBid.amount -= tradeAmount;
+
+                        tradeHistory.push_back({
+                            restingBid.id, incoming.id,
+                            restingBid.trader, incoming.trader,
+                            tradePrice, tradeAmount,
+                            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::system_clock::now().time_since_epoch()).count())
+                        });
+
+                        if (restingBid.amount <= 1e-8) {
+                            queue.erase(queue.begin());
+                        }
+                    }
+
+                    if (queue.empty()) {
+                        bids.erase(bestBidIt);
+                    }
+                }
+
+                if (incoming.amount > 1e-8 && incoming.type == OrderType::LIMIT) {
+                    asks[incoming.price].push_back(incoming);
                 }
             }
         }
 
-        void MatchSellOrder(Order& sellOrder) {
-            auto it = buyOrders_.begin();
-            while (it != buyOrders_.end() && it->first >= sellOrder.price && sellOrder.quantity > 0) {
-                auto& ordersAtPrice = it->second;
-                for (auto orderIt = ordersAtPrice.begin(); orderIt != ordersAtPrice.end();) {
-                    double matchQty = std::min(sellOrder.quantity, orderIt->quantity);
-                    sellOrder.quantity -= matchQty;
-                    orderIt->quantity -= matchQty;
-
-                    if (orderIt->quantity <= 0) {
-                        orderIt = ordersAtPrice.erase(orderIt);
-                    } else {
-                        ++orderIt;
-                    }
-                    if (sellOrder.quantity <= 0) break;
-                }
-                if (ordersAtPrice.empty()) {
-                    it = buyOrders_.erase(it);
-                } else {
-                    ++it;
-                }
-            }
+    public:
+        std::pair<double, double> GetSpread() const {
+            std::lock_guard<std::mutex> lock(bookMutex);
+            double highestBid = bids.empty() ? 0.0 : bids.begin()->first;
+            double lowestAsk = asks.empty() ? 0.0 : asks.begin()->first;
+            return { highestBid, lowestAsk };
         }
 
-        std::pair<double, double> GetSpread() {
-            std::lock_guard<std::mutex> lock(bookMutex_);
-            double highestBid = buyOrders_.empty() ? 0.0 : buyOrders_.begin()->first;
-            double lowestAsk = sellOrders_.empty() ? 0.0 : sellOrders_.begin()->first;
-            return {highestBid, lowestAsk};
+        std::vector<TradeMatch> GetRecentTrades(size_t limit = 50) const {
+            std::lock_guard<std::mutex> lock(bookMutex);
+            if (tradeHistory.size() <= limit) return tradeHistory;
+            return std::vector<TradeMatch>(tradeHistory.end() - limit, tradeHistory.end());
         }
     };
 
     // =========================================================================
-    // 4. ZERO-KNOWLEDGE PROOF (ZKP) SIMULATOR ENGINE
+    // 4. AUTOMATED MARKET MAKER (AMM) CONSTANT PRODUCT ENGINE
     // =========================================================================
 
-    class ZkProofSimulator {
+    class ConstantProductAMM {
+    private:
+        double reserveA;
+        double reserveB;
+        double feeRatio; // e.g., 0.003 for 0.3%
+        mutable std::mutex ammMutex;
+
     public:
-        struct Proof {
-            std::string piA;
-            std::string piB;
-            std::string piC;
-            std::string publicInputHash;
+        ConstantProductAMM(double initialA, double initialB, double fee = 0.003)
+            : reserveA(initialA), reserveB(initialB), feeRatio(fee) {}
+
+        struct SwapResult {
+            double amountOut;
+            double newReserveA;
+            double newReserveB;
+            double priceImpact;
+            double feePaid;
         };
 
-        static Proof GenerateRangeProof(uint64_t secretValue, uint64_t minBound, uint64_t maxBound) {
-            assert(secretValue >= minBound && secretValue <= maxBound);
-            std::string rawData = std::to_string(secretValue) + ":" + std::to_string(minBound) + ":" + std::to_string(maxBound);
-            std::string hA = Keccak256::ComputeHash("G1_" + rawData);
-            std::string hB = Keccak256::ComputeHash("G2_" + rawData);
-            std::string hC = Keccak256::ComputeHash("G3_" + rawData);
-            std::string pubHash = Sha256::ComputeHash(std::to_string(minBound) + ":" + std::to_string(maxBound));
-            return Proof{hA, hB, hC, pubHash};
+        SwapResult SwapAForB(double amountAIn) {
+            std::lock_guard<std::mutex> lock(ammMutex);
+            double amountInWithFee = amountAIn * (1.0 - feeRatio);
+            double numerator = amountInWithFee * reserveB;
+            double denominator = reserveA + amountInWithFee;
+            double amountBOut = numerator / denominator;
+
+            double initialPrice = reserveB / reserveA;
+            reserveA += amountAIn;
+            reserveB -= amountBOut;
+            double finalPrice = reserveB / reserveA;
+            double priceImpact = std::abs((finalPrice - initialPrice) / initialPrice);
+
+            return { amountBOut, reserveA, reserveB, priceImpact, amountAIn * feeRatio };
         }
 
-        static bool VerifyRangeProof(const Proof& proof, uint64_t minBound, uint64_t maxBound) {
-            std::string expectedPubHash = Sha256::ComputeHash(std::to_string(minBound) + ":" + std::to_string(maxBound));
-            if (proof.publicInputHash != expectedPubHash) return false;
-            return !proof.piA.empty() && !proof.piB.empty() && !proof.piC.empty();
+        SwapResult SwapBForA(double amountBIn) {
+            std::lock_guard<std::mutex> lock(ammMutex);
+            double amountInWithFee = amountBIn * (1.0 - feeRatio);
+            double numerator = amountInWithFee * reserveA;
+            double denominator = reserveB + amountInWithFee;
+            double amountAOut = numerator / denominator;
+
+            double initialPrice = reserveA / reserveB;
+            reserveB += amountBIn;
+            reserveA -= amountAOut;
+            double finalPrice = reserveA / reserveB;
+            double priceImpact = std::abs((finalPrice - initialPrice) / initialPrice);
+
+            return { amountAOut, reserveA, reserveB, priceImpact, amountBIn * feeRatio };
+        }
+
+        std::pair<double, double> GetReserves() const {
+            std::lock_guard<std::mutex> lock(ammMutex);
+            return { reserveA, reserveB };
         }
     };
 
     // =========================================================================
-    // 5. CROSS-CHAIN BRIDGE RELAYER VERIFIER
+    // 5. BLOCKCHAIN MEMPOOL & BLOCK PROOF-OF-WORK / POS ENGINE
     // =========================================================================
 
-    class CrossChainBridgeRelayer {
-    public:
-        struct BridgeMessage {
-            uint32_t sourceChainId;
-            uint32_t targetChainId;
-            std::string sender;
-            std::string recipient;
-            double amount;
-            uint64_t nonce;
-        };
+    struct Transaction {
+        std::string sender;
+        std::string recipient;
+        double amount;
+        double fee;
+        uint64_t nonce;
+        std::string signature;
+        std::string txHash;
 
-        static bool VerifyCrossChainMessage(const BridgeMessage& msg, const std::vector<std::string>& signatures, size_t requiredSignatures) {
-            if (signatures.size() < requiredSignatures) return false;
+        void CalculateHash() {
             std::stringstream ss;
-            ss << msg.sourceChainId << ">" << msg.targetChainId << ":" << msg.sender << ":" << msg.recipient << ":" << msg.amount << ":" << msg.nonce;
-            std::string msgHash = Keccak256::ComputeHash(ss.str());
-            
-            size_t validSigs = 0;
-            for (const auto& sig : signatures) {
-                if (!sig.empty() && sig.substr(0, 2) == "0x") {
-                    validSigs++;
-                }
-            }
-            return validSigs >= requiredSignatures;
+            ss << sender << ":" << recipient << ":" << amount << ":" << fee << ":" << nonce;
+            txHash = Sha256::ComputeHash(ss.str());
         }
     };
-}
 
-// =========================================================================
-// MAIN EXECUTION & PERFORMANCE BENCHMARK SUITE
-// =========================================================================
+    struct BlockHeader {
+        uint64_t index;
+        std::string previousHash;
+        std::string merkleRoot;
+        uint64_t timestamp;
+        uint32_t difficulty;
+        uint64_t nonce;
+    };
+
+    struct Block {
+        BlockHeader header;
+        std::vector<Transaction> transactions;
+        std::string blockHash;
+    };
+
+    class BlockEngine {
+    public:
+        static std::string ComputeBlockHash(const BlockHeader& header) {
+            std::stringstream ss;
+            ss << header.index << header.previousHash << header.merkleRoot
+               << header.timestamp << header.difficulty << header.nonce;
+            return Keccak256::ComputeHash(ss.str());
+        }
+
+        static Block MineBlock(uint64_t index, const std::string& prevHash, const std::vector<Transaction>& txs, uint32_t targetZeros) {
+            std::vector<std::string> txHashes;
+            for (const auto& tx : txs) {
+                txHashes.push_back(tx.txHash);
+            }
+            MerkleTree merkleTree(txHashes);
+
+            Block block;
+            block.header.index = index;
+            block.header.previousHash = prevHash;
+            block.header.merkleRoot = merkleTree.GetRootHash();
+            block.header.timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            block.header.difficulty = targetZeros;
+            block.header.nonce = 0;
+            block.transactions = txs;
+
+            std::string prefix(targetZeros, '0');
+            std::string fullPrefix = "0x" + prefix;
+
+            while (true) {
+                std::string hash = ComputeBlockHash(block.header);
+                if (hash.rfind(fullPrefix, 0) == 0 || targetZeros == 0) {
+                    block.blockHash = hash;
+                    break;
+                }
+                block.header.nonce++;
+            }
+            return block;
+        }
+    };
+
+} // namespace MagnumOpus
+
 int main() {
-    std::cout << "===============================================================" << std::endl;
-    std::cout << "   MAGNUM OPUS // CRYPTO HIGH-PERFORMANCE ENGINE ACTIVE         " << std::endl;
-    std::cout << "===============================================================" << std::endl;
+    std::cout << "===================================================\n";
+    std::cout << " MAGNUM OPUS // Cryptographic Engine Initialized   \n";
+    std::cout << "===================================================\n\n";
 
-    // 1. Keccak & Sha256 Verification
-    std::string samplePayload = "MagnumOpusDeFiWeb3BlockchainNexus2025";
-    std::string shaHash = MagnumOpus::Sha256::ComputeHash(samplePayload);
-    std::string keccakHash = MagnumOpus::Keccak256::ComputeHash(samplePayload);
-    
-    std::cout << "[+] SHA-256 Hash : " << shaHash << std::endl;
-    std::cout << "[+] Keccak-256   : " << keccakHash << std::endl;
+    // Test Hashing
+    std::string testMsg = "MagnumOpusWeb3DeFiEngine2025";
+    std::cout << "[+] SHA256 Hash  : " << MagnumOpus::Sha256::ComputeHash(testMsg) << "\n";
+    std::cout << "[+] Keccak256 Hash: " << MagnumOpus::Keccak256::ComputeHash(testMsg) << "\n\n";
 
-    // 2. Merkle Tree & Proof
-    std::vector<std::string> txList = {"tx1_alice_bob", "tx2_carol_dave", "tx3_eve_frank", "tx4_grace_heidi"};
-    MagnumOpus::MerkleTree merkle(txList);
-    std::string root = merkle.GetRoot();
-    std::cout << "[+] Merkle Root  : " << root << std::endl;
-    
-    auto proof = merkle.GetProof(1);
-    bool isValid = MagnumOpus::MerkleTree::VerifyProof(txList[1], proof, root, 1);
-    std::cout << "[+] Merkle Proof Valid for TX2: " << (isValid ? "TRUE" : "FALSE") << std::endl;
+    // Test Merkle Tree
+    std::vector<std::string> txs = { "tx1_alice_bob_100", "tx2_carol_dave_50", "tx3_eve_mallory_25" };
+    MagnumOpus::MerkleTree merkle(txs);
+    std::cout << "[+] Merkle Root   : " << merkle.GetRootHash() << "\n\n";
 
-    // 3. DEX AMM Swap Simulation
-    double outputETH = MagnumOpus::AMMMath::CalculateSwapOutput(10000.0, 1000000.0, 300.0, 0.3);
-    double priceImpact = MagnumOpus::AMMMath::CalculatePriceImpact(10000.0, 1000000.0, 300.0);
-    std::cout << "[+] Swap 10k USDC -> ETH Output : " << outputETH << " ETH" << std::endl;
-    std::cout << "[+] Estimated Price Impact      : " << priceImpact << "%" << std::endl;
+    // Test AMM Engine
+    MagnumOpus::ConstantProductAMM amm(1000000.0, 3000000000.0); // 1,000,000 ETH / 3,000,000,000 USDC
+    auto res = amm.SwapAForB(100.0);
+    std::cout << "[+] AMM Swap 100 ETH -> Received USDC: " << res.amountOut 
+              << " (Price Impact: " << res.priceImpact * 100.0 << "%)\n\n";
 
-    // 4. Order Book High Frequency Engine Benchmark
-    MagnumOpus::OrderBookEngine ob;
-    ob.PlaceOrder("TraderA", false, 3000.50, 10.0); // Sell 10 ETH @ 3000.50
-    ob.PlaceOrder("TraderB", true, 3001.00, 5.0);   // Buy 5 ETH @ 3001.00 (Crosses spread!)
-    auto spread = ob.GetSpread();
-    std::cout << "[+] OrderBook Spread -> Bid: " << spread.first << " | Ask: " << spread.second << std::endl;
+    // Test Mining Engine
+    std::vector<MagnumOpus::Transaction> mempoolTx;
+    MagnumOpus::Transaction tx1{ "0xAlice", "0xBob", 10.5, 0.001, 1, "sig1", "" };
+    tx1.CalculateHash();
+    mempoolTx.push_back(tx1);
 
-    // 5. Zero Knowledge Proof Test
-    auto zkProof = MagnumOpus::ZkProofSimulator::GenerateRangeProof(500, 0, 1000);
-    bool zkValid = MagnumOpus::ZkProofSimulator::VerifyRangeProof(zkProof, 0, 1000);
-    std::cout << "[+] ZK Range Proof Verified     : " << (zkValid ? "TRUE" : "FALSE") << std::endl;
-
-    std::cout << "===============================================================" << std::endl;
-    std::cout << "   ALL ENGINE MODULES OPERATIONAL & BENCHMARKED SUCCESSFULLY   " << std::endl;
-    std::cout << "===============================================================" << std::endl;
+    std::cout << "[+] Mining Block #1 (Difficulty 2)...\n";
+    MagnumOpus::Block minedBlock = MagnumOpus::BlockEngine::MineBlock(
+        1, "0x0000000000000000000000000000000000000000000000000000000000000000", mempoolTx, 2
+    );
+    std::cout << "[+] Block Mined! Hash: " << minedBlock.blockHash 
+              << " | Nonce: " << minedBlock.header.nonce << "\n";
 
     return 0;
 }
