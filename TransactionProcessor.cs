@@ -170,253 +170,243 @@ namespace MagnumOpus.Backend.Core
     public sealed class NodeStats
     {
         public long ChainHeight { get; set; }
-        public int PeerCount { get; set; }
-        public decimal AvgBlockTimeSeconds { get; set; }
-        public decimal TxPerSecond { get; set; }
-        public DateTime LastBlockTimestamp { get; set; }
+        public int PendingTransactions { get; set; }
+        public int ActiveNodes { get; set; }
+        public decimal TotalSupply { get; set; }
+        public decimal CirculatingSupply { get; set; }
+        public decimal MarketCap { get; set; }
+        public decimal Price { get; set; }
+        public decimal Volume24h { get; set; }
+        public decimal Change24h { get; set; }
     }
 
-    /// <summary>
-    /// Core transaction processing engine. Handles validation, signature verification,
-    /// mem‑pool management and block creation in a thread‑safe manner.
-    /// </summary>
-    public sealed class TransactionProcessor : IDisposable
+    public interface ITransactionProcessor
     {
-        private readonly ConcurrentDictionary<string, Wallet> _wallets = new();
-        private readonly ConcurrentDictionary<string, Transaction> _pendingTx = new();
-        private readonly ConcurrentQueue<string> _txQueue = new();
-        private readonly List<Block> _chain = new();
-        private readonly CancellationTokenSource _cts = new();
-        private readonly Task _backgroundTask;
-        private readonly TimeSpan _blockInterval = TimeSpan.FromSeconds(10);
-        private readonly object _blockLock = new();
-        private long _nextBlockIndex = 0;
-        private string _lastBlockHash = string.Empty;
+        Task<TransactionReceipt> ProcessTransactionAsync(Transaction transaction, CancellationToken cancellationToken = default);
+        Task<Block> MineBlockAsync(CancellationToken cancellationToken = default);
+        Task<Wallet> GetWalletAsync(string address, CancellationToken cancellationToken = default);
+        Task<Token> GetTokenAsync(string symbol, CancellationToken cancellationToken = default);
+        Task<NodeStats> GetNodeStatsAsync(CancellationToken cancellationToken = default);
+    }
 
-        public TransactionProcessor()
+    public sealed class TransactionProcessor : ITransactionProcessor
+    {
+        private readonly ConcurrentDictionary<string, Wallet> _wallets = new ConcurrentDictionary<string, Wallet>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, Token> _tokens = new ConcurrentDictionary<string, Token>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentQueue<Transaction> _pendingTransactions = new ConcurrentQueue<Transaction>();
+        private readonly ConcurrentDictionary<long, Block> _blocks = new ConcurrentDictionary<long, Block>();
+        private readonly ConcurrentDictionary<string, TransactionReceipt> _transactionReceipts = new ConcurrentDictionary<string, TransactionReceipt>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, Transaction> _transactionPool = new ConcurrentDictionary<string, Transaction>(StringComparer.OrdinalIgnoreCase);
+        private readonly object _blockchainLock = new object();
+        private readonly object _walletLock = new object();
+        private readonly object _tokenLock = new object();
+        private readonly object _statsLock = new object();
+        private readonly SHA256 _sha256 = SHA256.Create();
+        private readonly Random _random = new Random();
+        private readonly NodeStats _nodeStats = new NodeStats();
+
+        public async Task<TransactionReceipt> ProcessTransactionAsync(Transaction transaction, CancellationToken cancellationToken = default)
         {
-            // Genesis block
-            var genesis = new Block
+            if (transaction == null)
             {
-                Index = 0,
-                Timestamp = DateTime.UtcNow,
-                PreviousHash = "0",
-                Nonce = 0,
-                Difficulty = 1,
-                Transactions = new List<Transaction>()
-            };
-            genesis.Hash = CryptoUtils.ComputeHash(genesis);
-            _chain.Add(genesis);
-            _nextBlockIndex = 1;
-            _lastBlockHash = genesis.Hash;
-
-            _backgroundTask = Task.Run(ProcessLoopAsync);
-        }
-
-        /// <summary>
-        /// Submit a new transaction to the mem‑pool.
-        /// </summary>
-        public async Task<TransactionReceipt> SubmitTransactionAsync(Transaction tx)
-        {
-            // Basic validation
-            var validation = ValidateTransaction(tx);
-            if (!validation.isValid)
-            {
-                return new TransactionReceipt
-                {
-                    TransactionId = tx.Id,
-                    Status = TransactionStatus.Rejected,
-                    ExecutionMessage = validation.errorMessage,
-                    Timestamp = DateTime.UtcNow
-                };
+                throw new ArgumentNullException(nameof(transaction));
             }
 
-            // Ensure uniqueness
-            if (!_pendingTx.TryAdd(tx.Id, tx))
+            if (string.IsNullOrWhiteSpace(transaction.Id))
             {
-                return new TransactionReceipt
-                {
-                    TransactionId = tx.Id,
-                    Status = TransactionStatus.Rejected,
-                    ExecutionMessage = "Duplicate transaction ID",
-                    Timestamp = DateTime.UtcNow
-                };
+                transaction.Id = GenerateTransactionId(transaction);
             }
 
-            _txQueue.Enqueue(tx.Id);
-            return new TransactionReceipt
+            if (_transactionPool.ContainsKey(transaction.Id))
             {
-                TransactionId = tx.Id,
+                throw new InvalidOperationException("Transaction already exists in the pool.");
+            }
+
+            if (!_transactionPool.TryAdd(transaction.Id, transaction))
+            {
+                throw new InvalidOperationException("Failed to add transaction to the pool.");
+            }
+
+            _pendingTransactions.Enqueue(transaction);
+
+            var receipt = new TransactionReceipt
+            {
+                TransactionId = transaction.Id,
                 Status = TransactionStatus.Pending,
-                ExecutionMessage = "Accepted into mem‑pool",
                 Timestamp = DateTime.UtcNow
             };
+
+            _transactionReceipts.TryAdd(transaction.Id, receipt);
+
+            return receipt;
         }
 
-        private (bool isValid, string errorMessage) ValidateTransaction(Transaction tx)
+        public async Task<Block> MineBlockAsync(CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrWhiteSpace(tx.Id))
-                return (false, "Transaction ID missing");
-            if (string.IsNullOrWhiteSpace(tx.Sender) || string.IsNullOrWhiteSpace(tx.Recipient))
-                return (false, "Sender or recipient missing");
-            if (tx.Amount <= 0)
-                return (false, "Amount must be positive");
-            if (!_wallets.ContainsKey(tx.Sender))
-                return (false, "Sender wallet not found");
-            if (!_wallets.ContainsKey(tx.Recipient))
-                return (false, "Recipient wallet not found");
-            if (!_wallets[tx.Sender].TokenBalances.TryGetValue(tx.TokenSymbol, out var senderBal) || senderBal < tx.Amount + tx.Fee)
-                return (false, "Insufficient balance");
-            if (!CryptoUtils.VerifySignature(tx.GetRawPayloadBytes(), tx.Signature, _wallets[tx.Sender].PublicKey))
-                return (false, "Invalid signature");
-            return (true, string.Empty);
-        }
-
-        private async Task ProcessLoopAsync()
-        {
-            while (!_cts.IsCancellationRequested)
+            var transactions = new List<Transaction>();
+            while (_pendingTransactions.TryDequeue(out var transaction))
             {
-                var nextBlockTime = DateTime.UtcNow + _blockInterval;
-                await CreateBlockIfPendingAsync();
-                var delay = nextBlockTime - DateTime.UtcNow;
-                if (delay > TimeSpan.Zero)
-                    await Task.Delay(delay, _cts.Token);
-            }
-        }
-
-        private async Task CreateBlockIfPendingAsync()
-        {
-            if (_txQueue.IsEmpty)
-                return;
-
-            var blockTxs = new List<Transaction>();
-            while (blockTxs.Count < 100 && _txQueue.TryDequeue(out var txId))
-            {
-                if (_pendingTx.TryRemove(txId, out var tx))
-                {
-                    // Apply state changes atomically
-                    ApplyTransaction(tx);
-                    blockTxs.Add(tx);
-                }
+                transactions.Add(transaction);
             }
 
-            if (blockTxs.Count == 0)
-                return;
-
-            var newBlock = new Block
+            if (transactions.Count == 0)
             {
-                Index = Interlocked.Read(ref _nextBlockIndex),
+                return null;
+            }
+
+            var block = new Block
+            {
+                Index = _blocks.Count + 1,
                 Timestamp = DateTime.UtcNow,
-                PreviousHash = _lastBlockHash,
-                Transactions = blockTxs,
-                Difficulty = 2, // simplified static difficulty
-                Nonce = 0,
-                MinerAddress = "MAGNUM-OPUS-MINER"
+                Transactions = transactions,
+                PreviousHash = _blocks.Count == 0 ? "0" : _blocks[_blocks.Count - 1].Hash,
+                Nonce = (ulong)_random.Next(),
+                MinerAddress = "0xMinerAddress",
+                Difficulty = 4
             };
 
-            // Simple proof‑of‑work
-            while (!newBlock.Hash.StartsWith(new string('0', newBlock.Difficulty)))
+            block.MerkleRoot = CalculateMerkleRoot(transactions);
+            block.Hash = CalculateBlockHash(block);
+
+            lock (_blockchainLock)
             {
-                newBlock.Nonce++;
-                newBlock.Hash = CryptoUtils.ComputeHash(newBlock);
+                _blocks.TryAdd(block.Index, block);
+                _nodeStats.ChainHeight = block.Index;
             }
 
-            lock (_blockLock)
+            foreach (var transaction in transactions)
             {
-                _chain.Add(newBlock);
-                Interlocked.Increment(ref _nextBlockIndex);
-                _lastBlockHash = newBlock.Hash;
+                var receipt = _transactionReceipts[transaction.Id];
+                receipt.BlockIndex = block.Index;
+                receipt.BlockHash = block.Hash;
+                receipt.Status = TransactionStatus.Confirmed;
+                receipt.Timestamp = DateTime.UtcNow;
+
+                _transactionReceipts[transaction.Id] = receipt;
+                _transactionPool.TryRemove(transaction.Id, out _);
+            }
+
+            return block;
+        }
+
+        public async Task<Wallet> GetWalletAsync(string address, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(address))
+            {
+                throw new ArgumentException("Value cannot be null or whitespace.", nameof(address));
+            }
+
+            if (_wallets.TryGetValue(address, out var wallet))
+            {
+                return wallet;
+            }
+
+            wallet = new Wallet
+            {
+                Address = address,
+                PublicKey = GeneratePublicKey(address),
+                Balance = 0,
+                Nonce = 0,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            lock (_walletLock)
+            {
+                _wallets.TryAdd(address, wallet);
+            }
+
+            return wallet;
+        }
+
+        public async Task<Token> GetTokenAsync(string symbol, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(symbol))
+            {
+                throw new ArgumentException("Value cannot be null or whitespace.", nameof(symbol));
+            }
+
+            if (_tokens.TryGetValue(symbol, out var token))
+            {
+                return token;
+            }
+
+            token = new Token
+            {
+                Symbol = symbol,
+                Name = symbol,
+                Decimals = 18,
+                TotalSupply = 0,
+                Owner = "0xTokenOwner"
+            };
+
+            lock (_tokenLock)
+            {
+                _tokens.TryAdd(symbol, token);
+            }
+
+            return token;
+        }
+
+        public async Task<NodeStats> GetNodeStatsAsync(CancellationToken cancellationToken = default)
+        {
+            lock (_statsLock)
+            {
+                return _nodeStats;
             }
         }
 
-        private void ApplyTransaction(Transaction tx)
+        private string GenerateTransactionId(Transaction transaction)
         {
-            var senderWallet = _wallets[tx.Sender];
-            var recipientWallet = _wallets[tx.Recipient];
-
-            // Deduct amount + fee from sender
-            senderWallet.TokenBalances[tx.TokenSymbol] -= (tx.Amount + tx.Fee);
-            senderWallet.Nonce = Math.Max(senderWallet.Nonce, tx.Nonce + 1);
-
-            // Credit amount to recipient
-            if (!recipientWallet.TokenBalances.ContainsKey(tx.TokenSymbol))
-                recipientWallet.TokenBalances[tx.TokenSymbol] = 0;
-            recipientWallet.TokenBalances[tx.TokenSymbol] += tx.Amount;
+            var payloadBytes = transaction.GetRawPayloadBytes();
+            var hashBytes = _sha256.ComputeHash(payloadBytes);
+            return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
         }
 
-        /// <summary>
-        /// Register a wallet. In a real system this would be persisted.
-        /// </summary>
-        public void RegisterWallet(Wallet wallet)
+        private string CalculateMerkleRoot(List<Transaction> transactions)
         {
-            _wallets[wallet.Address] = wallet;
-        }
-
-        /// <summary>
-        /// Retrieve the current blockchain as an immutable list.
-        /// </summary>
-        public IReadOnlyList<Block> GetChain()
-        {
-            lock (_blockLock)
+            if (transactions.Count == 0)
             {
-                return _chain.ToImmutableArray();
+                return string.Empty;
             }
+
+            var hashes = transactions.Select(t => GenerateTransactionId(t)).ToList();
+
+            while (hashes.Count > 1)
+            {
+                var newHashes = new List<string>();
+
+                for (var i = 0; i < hashes.Count; i += 2)
+                {
+                    var left = hashes[i];
+                    var right = i + 1 < hashes.Count ? hashes[i + 1] : hashes[i];
+
+                    var combined = left + right;
+                    var combinedBytes = Encoding.UTF8.GetBytes(combined);
+                    var hashBytes = _sha256.ComputeHash(combinedBytes);
+                    var hash = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+
+                    newHashes.Add(hash);
+                }
+
+                hashes = newHashes;
+            }
+
+            return hashes[0];
         }
 
-        public void Dispose()
+        private string CalculateBlockHash(Block block)
         {
-            _cts.Cancel();
-            try
-            {
-                _backgroundTask.Wait();
-            }
-            catch (AggregateException) { }
-            _cts.Dispose();
-        }
-    }
-
-    /// <summary>
-    /// Cryptographic helper utilities for hashing and ECDSA signature verification.
-    /// </summary>
-    public static class CryptoUtils
-    {
-        public static string ComputeHash(Block block)
-        {
-            var sb = new StringBuilder();
-            sb.Append(block.Index);
-            sb.Append(block.Timestamp.ToUniversalTime().ToString("o"));
-            sb.Append(block.PreviousHash);
-            sb.Append(block.Nonce);
-            sb.Append(block.Difficulty);
-            foreach (var tx in block.Transactions)
-            {
-                sb.Append(tx.Id);
-            }
-            using var sha = SHA256.Create();
-            var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(sb.ToString()));
-            return BitConverter.ToString(bytes).Replace("-", string.Empty).ToLowerInvariant();
+            var blockData = $"{block.Index}:{block.Timestamp:O}:{block.PreviousHash}:{block.MerkleRoot}:{block.Nonce}:{block.MinerAddress}:{block.Difficulty}";
+            var blockBytes = Encoding.UTF8.GetBytes(blockData);
+            var hashBytes = _sha256.ComputeHash(blockBytes);
+            return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
         }
 
-        public static string ComputeHash(Transaction tx)
+        private string GeneratePublicKey(string address)
         {
-            using var sha = SHA256.Create();
-            var bytes = sha.ComputeHash(tx.GetRawPayloadBytes());
-            return BitConverter.ToString(bytes).Replace("-", string.Empty).ToLowerInvariant();
-        }
-
-        public static bool VerifySignature(byte[] payload, string signatureBase64, string publicKeyPem)
-        {
-            try
-            {
-                var signature = Convert.FromBase64String(signatureBase64);
-                using var ecdsa = ECDsa.Create();
-                ecdsa.ImportFromPem(publicKeyPem);
-                return ecdsa.VerifyData(payload, signature, HashAlgorithmName.SHA256);
-            }
-            catch
-            {
-                return false;
-            }
+            var addressBytes = Encoding.UTF8.GetBytes(address);
+            var hashBytes = _sha256.ComputeHash(addressBytes);
+            return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
         }
     }
 }

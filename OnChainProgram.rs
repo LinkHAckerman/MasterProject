@@ -1,4 +1,6 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program::invoke;
+use anchor_lang::solana_program::system_instruction;
 
 declare_id!("MagnumOpus1111111111111111111111111111111111");
 
@@ -118,131 +120,120 @@ pub mod on_chain_program {
     // ---------------------------------------------------------------------
     // Staking Operations
     // ---------------------------------------------------------------------
-    /// Stake lamports from the vault into the DeFi staking pool.
+    /// Stake a specific amount of lamports from the user's vault into the global pool.
     pub fn stake(ctx: Context<Stake>, amount: u64) -> Result<()> {
-        let vault = &mut ctx.accounts.vault;
-        let staking_pool = &mut ctx.accounts.staking_pool;
-        require!(vault.authority == *ctx.accounts.authority.key, ErrorCode::Unauthorized);
-        require!(!staking_pool.paused, ErrorCode::PoolPaused);
+        require!(!ctx.accounts.staking_pool.paused, ErrorCode::PoolPaused);
         require!(amount > 0, ErrorCode::InvalidAmount);
+        // Update pool rewards before mutating state.
+        update_pool(&mut ctx.accounts.staking_pool)?;
+        // Load user stake account (or create if empty).
+        let user_stake = &mut ctx.accounts.user_stake;
+        // Pull lamports from user's vault.
+        let vault = &mut ctx.accounts.vault;
         require!(vault.balance >= amount, ErrorCode::InsufficientFunds);
-
-        // Update global pool rewards first.
-        update_pool_rewards(staking_pool)?;
-
-        // Update user pending rewards before changing stake.
-        update_user_rewards(vault, staking_pool)?;
-
-        // Move lamports from free balance to staked balance.
         vault.balance = vault.balance.checked_sub(amount).ok_or(ErrorCode::Underflow)?;
         vault.staked_balance = vault.staked_balance.checked_add(amount).ok_or(ErrorCode::Overflow)?;
-        vault.reward_debt = vault
-            .staked_balance
-            .checked_mul(staking_pool.reward_per_token)
+        // Update user stake accounting.
+        user_stake.owner = *ctx.accounts.authority.key;
+        user_stake.amount = user_stake.amount.checked_add(amount).ok_or(ErrorCode::Overflow)?;
+        // Calculate new reward debt.
+        user_stake.reward_debt = (user_stake.amount as u128)
+            .checked_mul(ctx.accounts.staking_pool.reward_per_token as u128)
             .ok_or(ErrorCode::Overflow)?;
-        vault.reward_per_token_paid = staking_pool.reward_per_token;
-
-        // Update global pool state.
-        staking_pool.total_staked = staking_pool.total_staked.checked_add(amount).ok_or(ErrorCode::Overflow)?;
-        emit!(StakedEvent { authority: vault.authority, amount, new_total_staked: staking_pool.total_staked });
+        // Update global totals.
+        ctx.accounts.staking_pool.total_staked = ctx.accounts.staking_pool.total_staked.checked_add(amount).ok_or(ErrorCode::Overflow)?;
+        emit!(Staked {
+            user: user_stake.owner,
+            amount,
+            total_staked: ctx.accounts.staking_pool.total_staked,
+        });
         Ok(())
     }
 
-    /// Unstake lamports back to the vault.
+    /// Unstake a specific amount of lamports, returning them to the user's vault.
     pub fn unstake(ctx: Context<Unstake>, amount: u64) -> Result<()> {
-        let vault = &mut ctx.accounts.vault;
-        let staking_pool = &mut ctx.accounts.staking_pool;
-        require!(vault.authority == *ctx.accounts.authority.key, ErrorCode::Unauthorized);
-        require!(!staking_pool.paused, ErrorCode::PoolPaused);
+        require!(!ctx.accounts.staking_pool.paused, ErrorCode::PoolPaused);
         require!(amount > 0, ErrorCode::InvalidAmount);
-        require!(vault.staked_balance >= amount, ErrorCode::InsufficientFunds);
-
-        // Update global pool rewards first.
-        update_pool_rewards(staking_pool)?;
-        // Update user pending rewards before changing stake.
-        update_user_rewards(vault, staking_pool)?;
-
-        // Move lamports from staked balance back to free balance.
-        vault.staked_balance = vault.staked_balance.checked_sub(amount).ok_or(ErrorCode::Underflow)?;
-        vault.balance = vault.balance.checked_add(amount).ok_or(ErrorCode::Overflow)?;
-        vault.reward_debt = vault
-            .staked_balance
-            .checked_mul(staking_pool.reward_per_token)
+        update_pool(&mut ctx.accounts.staking_pool)?;
+        let user_stake = &mut ctx.accounts.user_stake;
+        require!(user_stake.amount >= amount, ErrorCode::InsufficientStaked);
+        // Claim pending rewards before changing stake.
+        claim_rewards_internal(&mut ctx.accounts.staking_pool, user_stake)?;
+        // Update balances.
+        user_stake.amount = user_stake.amount.checked_sub(amount).ok_or(ErrorCode::Underflow)?;
+        user_stake.reward_debt = (user_stake.amount as u128)
+            .checked_mul(ctx.accounts.staking_pool.reward_per_token as u128)
             .ok_or(ErrorCode::Overflow)?;
-        vault.reward_per_token_paid = staking_pool.reward_per_token;
-
-        // Update global pool state.
-        staking_pool.total_staked = staking_pool.total_staked.checked_sub(amount).ok_or(ErrorCode::Underflow)?;
-        emit!(UnstakedEvent { authority: vault.authority, amount, new_total_staked: staking_pool.total_staked });
-        Ok(())
-    }
-
-    /// Claim accumulated rewards for the vault.
-    pub fn claim_rewards(ctx: Context<ClaimRewards>) -> Result<()> {
+        ctx.accounts.staking_pool.total_staked = ctx.accounts.staking_pool.total_staked.checked_sub(amount).ok_or(ErrorCode::Underflow)?;
+        // Return lamports to vault.
         let vault = &mut ctx.accounts.vault;
-        let staking_pool = &mut ctx.accounts.staking_pool;
-        require!(vault.authority == *ctx.accounts.authority.key, ErrorCode::Unauthorized);
-        require!(!staking_pool.paused, ErrorCode::PoolPaused);
+        vault.balance = vault.balance.checked_add(amount).ok_or(ErrorCode::Overflow)?;
+        vault.staked_balance = vault.staked_balance.checked_sub(amount).ok_or(ErrorCode::Underflow)?;
+        emit!(Unstaked {
+            user: user_stake.owner,
+            amount,
+            total_staked: ctx.accounts.staking_pool.total_staked,
+        });
+        Ok(())
+    }
 
-        // Bring pool up-to‑date and compute user rewards.
-        update_pool_rewards(staking_pool)?;
-        update_user_rewards(vault, staking_pool)?;
-
-        let rewards = vault.pending_rewards;
-        require!(rewards > 0, ErrorCode::InvalidAmount);
-
-        // Reset pending rewards.
-        vault.pending_rewards = 0;
-        vault.last_action_slot = Clock::get()?.slot;
-
-        // Transfer rewards (simulated as lamports from pool PDA).
-        **ctx.accounts.staking_pool.to_account_info().try_borrow_mut_lamports()? -= rewards;
-        **ctx.accounts.authority.to_account_info().try_borrow_mut_lamports()? += rewards;
-        staking_pool.total_rewards_distributed = staking_pool.total_rewards_distributed.checked_add(rewards).ok_or(ErrorCode::Overflow)?;
-        emit!(RewardsClaimed { authority: vault.authority, amount: rewards });
+    /// Claim accumulated rewards for the user.
+    pub fn claim_rewards(ctx: Context<ClaimRewards>) -> Result<()> {
+        require!(!ctx.accounts.staking_pool.paused, ErrorCode::PoolPaused);
+        update_pool(&mut ctx.accounts.staking_pool)?;
+        let user_stake = &mut ctx.accounts.user_stake;
+        claim_rewards_internal(&mut ctx.accounts.staking_pool, user_stake)?;
         Ok(())
     }
 
     // ---------------------------------------------------------------------
-    // Internal Helper Functions
+    // Internal Helpers
     // ---------------------------------------------------------------------
-    fn update_pool_rewards(pool: &mut Account<StakingPool>) -> Result<()> {
-        let clock = Clock::get()?;
+    fn update_pool(pool: &mut Account<StakingPool>) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        if now <= pool.last_update_time {
+            return Ok(());
+        }
         if pool.total_staked == 0 {
-            pool.last_update_time = clock.unix_timestamp;
+            pool.last_update_time = now;
             return Ok(());
         }
-        let time_delta = clock.unix_timestamp.saturating_sub(pool.last_update_time) as u64;
-        if time_delta == 0 {
-            return Ok(());
-        }
-        let reward_accumulated = time_delta
-            .checked_mul(pool.reward_rate_per_second)
+        let elapsed = (now - pool.last_update_time) as u64;
+        let reward = (elapsed as u128)
+            .checked_mul(pool.reward_rate_per_second as u128)
             .ok_or(ErrorCode::Overflow)?;
-        let reward_growth = (reward_accumulated as u128)
+        // reward_per_token = reward_per_token + reward * REWARD_PRECISION / total_staked
+        let added_rpt = reward
             .checked_mul(REWARD_PRECISION)
             .ok_or(ErrorCode::Overflow)?
             .checked_div(pool.total_staked as u128)
-            .ok_or(ErrorCode::MathError)? as u64;
-        pool.reward_per_token = pool.reward_per_token.checked_add(reward_growth).ok_or(ErrorCode::Overflow)?;
-        pool.last_update_time = clock.unix_timestamp;
+            .ok_or(ErrorCode::DivisionByZero)?;
+        pool.reward_per_token = pool.reward_per_token.checked_add(added_rpt).ok_or(ErrorCode::Overflow)?;
+        pool.last_update_time = now;
+        pool.total_rewards_distributed = pool.total_rewards_distributed.checked_add(reward as u64).ok_or(ErrorCode::Overflow)?;
         Ok(())
     }
 
-    fn update_user_rewards(vault: &mut Account<Vault>, pool: &Account<StakingPool>) -> Result<()> {
-        // Calculate accrued rewards since last checkpoint.
-        let accrued = vault
-            .staked_balance
-            .checked_mul(pool.reward_per_token)
+    fn claim_rewards_internal(pool: &mut Account<StakingPool>, user: &mut Account<UserStake>) -> Result<()> {
+        // pending = user.amount * pool.reward_per_token / REWARD_PRECISION - user.reward_debt
+        let accrued = (user.amount as u128)
+            .checked_mul(pool.reward_per_token as u128)
             .ok_or(ErrorCode::Overflow)?
-            .checked_sub(vault.reward_debt)
-            .ok_or(ErrorCode::Underflow)?;
-        // Convert from precision.
-        let pending = accrued / REWARD_PRECISION as u64;
-        vault.pending_rewards = vault.pending_rewards.checked_add(pending).ok_or(ErrorCode::Overflow)?;
-        // Update reward debt to current pool state.
-        vault.reward_debt = vault.staked_balance.checked_mul(pool.reward_per_token).ok_or(ErrorCode::Overflow)?;
-        vault.reward_per_token_paid = pool.reward_per_token;
+            .checked_div(REWARD_PRECISION)
+            .ok_or(ErrorCode::DivisionByZero)?;
+        let pending = accrued.checked_sub(user.reward_debt).ok_or(ErrorCode::Underflow)?;
+        if pending > 0 {
+            // In a real implementation, transfer reward tokens here.
+            // For demo, we just emit an event.
+            emit!(RewardsClaimed {
+                user: user.owner,
+                amount: pending as u64,
+            });
+        }
+        // Update reward debt to current.
+        user.reward_debt = (user.amount as u128)
+            .checked_mul(pool.reward_per_token as u128)
+            .ok_or(ErrorCode::Overflow)?;
         Ok(())
     }
 }
@@ -254,11 +245,11 @@ pub mod on_chain_program {
 pub struct Vault {
     pub authority: Pubkey,
     pub bump: u8,
-    pub balance: u64,               // Free lamports in the vault.
-    pub staked_balance: u64,        // Lamports currently staked.
-    pub reward_debt: u128,          // Used for reward accounting.
-    pub pending_rewards: u64,       // Accumulated rewards not yet claimed.
-    pub reward_per_token_paid: u64, // Last recorded reward per token.
+    pub balance: u64,
+    pub staked_balance: u64,
+    pub reward_debt: u128,
+    pub pending_rewards: u64,
+    pub reward_per_token_paid: u128,
     pub created_at: i64,
     pub last_action_slot: u64,
 }
@@ -268,20 +259,26 @@ pub struct StakingPool {
     pub authority: Pubkey,
     pub bump: u8,
     pub total_staked: u64,
-    pub reward_per_token: u64, // Scaled by REWARD_PRECISION.
+    pub reward_per_token: u128,
     pub last_update_time: i64,
     pub reward_rate_per_second: u64,
     pub total_rewards_distributed: u64,
     pub paused: bool,
 }
 
+#[account]
+pub struct UserStake {
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub reward_debt: u128,
+}
+
 // -------------------------------------------------------------------------
-// Contexts (Instruction Accounts)
+// Contexts
 // -------------------------------------------------------------------------
 #[derive(Accounts)]
-#[instruction(bump: u8)]
 pub struct Initialize<'info> {
-    #[account(init, payer = authority, space = 8 + std::mem::size_of::<Vault>() as u64, seeds = [b"vault", authority.key().as_ref()], bump)]
+    #[account(init, payer = authority, space = 8 + std::mem::size_of::<Vault>())]
     pub vault: Account<'info, Vault>,
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -290,7 +287,7 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 pub struct Deposit<'info> {
-    #[account(mut, has_one = authority, seeds = [b"vault", authority.key().as_ref()], bump = vault.bump)]
+    #[account(mut, has_one = authority)]
     pub vault: Account<'info, Vault>,
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -298,7 +295,7 @@ pub struct Deposit<'info> {
 
 #[derive(Accounts)]
 pub struct Withdraw<'info> {
-    #[account(mut, has_one = authority, seeds = [b"vault", authority.key().as_ref()], bump = vault.bump)]
+    #[account(mut, has_one = authority)]
     pub vault: Account<'info, Vault>,
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -306,7 +303,7 @@ pub struct Withdraw<'info> {
 
 #[derive(Accounts)]
 pub struct SetAuthority<'info> {
-    #[account(mut, has_one = authority, seeds = [b"vault", authority.key().as_ref()], bump = vault.bump)]
+    #[account(mut, has_one = authority)]
     pub vault: Account<'info, Vault>,
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -315,7 +312,7 @@ pub struct SetAuthority<'info> {
 #[derive(Accounts)]
 #[instruction(bump: u8)]
 pub struct InitializeStakingPool<'info> {
-    #[account(init, payer = authority, space = 8 + std::mem::size_of::<StakingPool>() as u64, seeds = [b"staking_pool"], bump)]
+    #[account(init, payer = authority, space = 8 + std::mem::size_of::<StakingPool>(), seeds = [b"staking_pool"], bump)]
     pub staking_pool: Account<'info, StakingPool>,
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -324,7 +321,7 @@ pub struct InitializeStakingPool<'info> {
 
 #[derive(Accounts)]
 pub struct PausePool<'info> {
-    #[account(mut, has_one = authority, seeds = [b"staking_pool"], bump = staking_pool.bump)]
+    #[account(mut, has_one = authority)]
     pub staking_pool: Account<'info, StakingPool>,
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -332,7 +329,7 @@ pub struct PausePool<'info> {
 
 #[derive(Accounts)]
 pub struct ResumePool<'info> {
-    #[account(mut, has_one = authority, seeds = [b"staking_pool"], bump = staking_pool.bump)]
+    #[account(mut, has_one = authority)]
     pub staking_pool: Account<'info, StakingPool>,
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -340,32 +337,60 @@ pub struct ResumePool<'info> {
 
 #[derive(Accounts)]
 pub struct Stake<'info> {
-    #[account(mut, has_one = authority, seeds = [b"vault", authority.key().as_ref()], bump = vault.bump)]
+    #[account(mut, has_one = authority)]
     pub vault: Account<'info, Vault>,
     #[account(mut, seeds = [b"staking_pool"], bump = staking_pool.bump)]
     pub staking_pool: Account<'info, StakingPool>,
+    #[account(init_if_needed, payer = authority, space = 8 + std::mem::size_of::<UserStake>(), seeds = [b"user_stake", authority.key().as_ref()], bump)]
+    pub user_stake: Account<'info, UserStake>,
     #[account(mut)]
     pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct Unstake<'info> {
-    #[account(mut, has_one = authority, seeds = [b"vault", authority.key().as_ref()], bump = vault.bump)]
+    #[account(mut, has_one = authority)]
     pub vault: Account<'info, Vault>,
     #[account(mut, seeds = [b"staking_pool"], bump = staking_pool.bump)]
     pub staking_pool: Account<'info, StakingPool>,
+    #[account(mut, seeds = [b"user_stake", authority.key().as_ref()], bump = user_stake.bump)]
+    pub user_stake: Account<'info, UserStake>,
     #[account(mut)]
     pub authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
 pub struct ClaimRewards<'info> {
-    #[account(mut, has_one = authority, seeds = [b"vault", authority.key().as_ref()], bump = vault.bump)]
-    pub vault: Account<'info, Vault>,
     #[account(mut, seeds = [b"staking_pool"], bump = staking_pool.bump)]
     pub staking_pool: Account<'info, StakingPool>,
+    #[account(mut, seeds = [b"user_stake", authority.key().as_ref()], bump = user_stake.bump)]
+    pub user_stake: Account<'info, UserStake>,
     #[account(mut)]
     pub authority: Signer<'info>,
+}
+
+// -------------------------------------------------------------------------
+// Errors
+// -------------------------------------------------------------------------
+#[error_code]
+pub enum ErrorCode {
+    #[msg("Invalid amount supplied.")]
+    InvalidAmount,
+    #[msg("Overflow occurred during calculation.")]
+    Overflow,
+    #[msg("Underflow occurred during calculation.")]
+    Underflow,
+    #[msg("Division by zero.")]
+    DivisionByZero,
+    #[msg("Insufficient funds in vault.")]
+    InsufficientFunds,
+    #[msg("Unauthorized action.")]
+    Unauthorized,
+    #[msg("Pool is currently paused.")]
+    PoolPaused,
+    #[msg("User does not have enough staked balance.")]
+    InsufficientStaked,
 }
 
 // -------------------------------------------------------------------------
@@ -405,26 +430,6 @@ pub struct StakingPoolInitialized {
 }
 
 #[event]
-pub struct StakedEvent {
-    pub authority: Pubkey,
-    pub amount: u64,
-    pub new_total_staked: u64,
-}
-
-#[event]
-pub struct UnstakedEvent {
-    pub authority: Pubkey,
-    pub amount: u64,
-    pub new_total_staked: u64,
-}
-
-#[event]
-pub struct RewardsClaimed {
-    pub authority: Pubkey,
-    pub amount: u64,
-}
-
-#[event]
 pub struct PoolPaused {
     pub authority: Pubkey,
     pub timestamp: i64,
@@ -436,23 +441,22 @@ pub struct PoolResumed {
     pub timestamp: i64,
 }
 
-// -------------------------------------------------------------------------
-// Error Codes
-// -------------------------------------------------------------------------
-#[error_code]
-pub enum ErrorCode {
-    #[msg("Amount must be greater than zero.")]
-    InvalidAmount,
-    #[msg("Arithmetic overflow occurred.")]
-    Overflow,
-    #[msg("Arithmetic underflow occurred.")]
-    Underflow,
-    #[msg("Insufficient funds for operation.")]
-    InsufficientFunds,
-    #[msg("Mathematical operation failed (division by zero or similar).")]
-    MathError,
-    #[msg("The staking pool is currently paused.")]
-    PoolPaused,
-    #[msg("Caller is not authorized for this action.")]
-    Unauthorized,
+#[event]
+pub struct Staked {
+    pub user: Pubkey,
+    pub amount: u64,
+    pub total_staked: u64,
+}
+
+#[event]
+pub struct Unstaked {
+    pub user: Pubkey,
+    pub amount: u64,
+    pub total_staked: u64,
+}
+
+#[event]
+pub struct RewardsClaimed {
+    pub user: Pubkey,
+    pub amount: u64,
 }
