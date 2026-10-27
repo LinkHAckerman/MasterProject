@@ -136,10 +136,10 @@
             gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
             osc.connect(gain);
             gain.connect(audioCtx.destination);
-            osc.start();
+            osc.start(audioCtx.currentTime);
             osc.stop(audioCtx.currentTime + duration);
-        } catch (e) {
-            console.error('Audio synthesis failed:', e);
+        } catch (error) {
+            console.error('Audio synthesis failed:', error);
         }
     }
 
@@ -147,16 +147,18 @@
      * Initialize the application
      */
     function init() {
+        // Cache DOM elements
         cacheDomElements();
-        renderInitialState();
-        setupEventListeners();
+        // Initialize UI components
+        initUI();
+        // Initialize event listeners
+        initEventListeners();
+        // Start engine tickers
         startEngineTickers();
-        initializeChart();
-        initializeOrderBook();
-        initializeWallet();
-        initializeStaking();
-        initializeNotifications();
-        initializeSettings();
+        // Load initial data
+        loadInitialData();
+        // Initialize Web Audio context
+        initAudioContext();
     }
 
     /**
@@ -164,151 +166,490 @@
      */
     function cacheDomElements() {
         DOM = {
-            wallet: {
-                connectButton: document.getElementById('connect-wallet'),
-                address: document.getElementById('wallet-address'),
-                balanceEth: document.getElementById('balance-eth'),
-                balanceUsdt: document.getElementById('balance-usdt'),
-                balanceBtc: document.getElementById('balance-btc'),
-                balanceSol: document.getElementById('balance-sol'),
-                network: document.getElementById('network-name'),
-                tokens: document.getElementById('token-list')
-            },
-            market: {
-                pairSelector: document.getElementById('pair-selector'),
-                price: document.getElementById('market-price'),
-                change24h: document.getElementById('market-change-24h'),
-                volume24h: document.getElementById('market-volume-24h'),
-                high24h: document.getElementById('market-high-24h'),
-                low24h: document.getElementById('market-low-24h'),
-                chart: document.getElementById('market-chart')
-            },
-            orderBook: {
-                bids: document.getElementById('orderbook-bids'),
-                asks: document.getElementById('orderbook-asks'),
-                depthSlider: document.getElementById('orderbook-depth')
-            },
-            transactions: document.getElementById('transaction-history'),
-            portfolio: document.getElementById('portfolio-assets'),
-            staking: {
-                stakedOpus: document.getElementById('staked-opus'),
-                rewardRate: document.getElementById('reward-rate'),
-                pendingRewards: document.getElementById('pending-rewards'),
-                lastClaimed: document.getElementById('last-claimed'),
-                claimButton: document.getElementById('claim-rewards')
-            },
-            notifications: document.getElementById('notifications'),
-            settings: {
-                theme: document.getElementById('theme-selector'),
-                currency: document.getElementById('currency-selector'),
-                language: document.getElementById('language-selector'),
-                slippage: document.getElementById('slippage-tolerance'),
-                sounds: document.getElementById('enable-sounds'),
-                refresh: document.getElementById('auto-refresh')
-            }
+            walletConnectBtn: document.getElementById('wallet-connect-btn'),
+            walletAddress: document.getElementById('wallet-address'),
+            walletBalanceEth: document.getElementById('wallet-balance-eth'),
+            walletBalanceUsdt: document.getElementById('wallet-balance-usdt'),
+            walletBalanceBtc: document.getElementById('wallet-balance-btc'),
+            walletBalanceSol: document.getElementById('wallet-balance-sol'),
+            marketPrice: document.getElementById('market-price'),
+            marketChange24h: document.getElementById('market-change-24h'),
+            marketVolume24h: document.getElementById('market-volume-24h'),
+            marketHigh24h: document.getElementById('market-high-24h'),
+            marketLow24h: document.getElementById('market-low-24h'),
+            marketChart: document.getElementById('market-chart'),
+            orderBookBids: document.getElementById('order-book-bids'),
+            orderBookAsks: document.getElementById('order-book-asks'),
+            transactionsList: document.getElementById('transactions-list'),
+            portfolioList: document.getElementById('portfolio-list'),
+            stakingStakedOpus: document.getElementById('staking-staked-opus'),
+            stakingRewardRateApy: document.getElementById('staking-reward-rate-apy'),
+            stakingPendingRewards: document.getElementById('staking-pending-rewards'),
+            stakingLastClaimed: document.getElementById('staking-last-claimed'),
+            notificationsList: document.getElementById('notifications-list'),
+            settingsForm: document.getElementById('settings-form'),
+            settingsTheme: document.getElementById('settings-theme'),
+            settingsCurrency: document.getElementById('settings-currency'),
+            settingsLanguage: document.getElementById('settings-language'),
+            settingsSlippageTolerance: document.getElementById('settings-slippage-tolerance'),
+            settingsEnableSounds: document.getElementById('settings-enable-sounds'),
+            settingsAutoRefreshInterval: document.getElementById('settings-auto-refresh-interval')
         };
     }
 
     /**
-     * Render initial state to the DOM
+     * Initialize UI components
      */
-    function renderInitialState() {
-        renderWallet();
-        renderMarket();
-        renderOrderBook();
-        renderTransactions();
-        renderPortfolio();
-        renderStaking();
-        renderSettings();
+    function initUI() {
+        // Initialize market chart
+        initMarketChart();
+        // Update UI with initial state
+        updateUI();
     }
 
     /**
-     * Setup event listeners for user interactions
+     * Initialize event listeners
      */
-    function setupEventListeners() {
-        // Wallet
-        DOM.wallet.connectButton.addEventListener('click', connectWallet);
-
-        // Market
-        DOM.market.pairSelector.addEventListener('change', changeMarketPair);
-
-        // Order Book
-        DOM.orderBook.depthSlider.addEventListener('input', updateOrderBookDepth);
-
-        // Staking
-        DOM.staking.claimButton.addEventListener('click', claimRewards);
-
-        // Settings
-        DOM.settings.theme.addEventListener('change', changeTheme);
-        DOM.settings.currency.addEventListener('change', changeCurrency);
-        DOM.settings.language.addEventListener('change', changeLanguage);
-        DOM.settings.slippage.addEventListener('change', changeSlippageTolerance);
-        DOM.settings.sounds.addEventListener('change', toggleSounds);
-        DOM.settings.refresh.addEventListener('change', changeAutoRefresh);
+    function initEventListeners() {
+        // Wallet connect button
+        DOM.walletConnectBtn.addEventListener('click', connectWallet);
+        // Settings form
+        DOM.settingsForm.addEventListener('submit', saveSettings);
     }
 
     /**
-     * Start engine tickers for real-time updates
+     * Start engine tickers
      */
     function startEngineTickers() {
+        // Market data ticker
         marketInterval = setInterval(updateMarketData, state.settings.autoRefreshInterval);
+        // Gas price ticker
         gasInterval = setInterval(updateGasPrices, state.settings.autoRefreshInterval * 2);
+        // Order book ticker
         orderBookInterval = setInterval(updateOrderBook, state.settings.autoRefreshInterval);
-        stakingInterval = setInterval(updateStaking, state.settings.autoRefreshInterval * 3);
+        // Staking ticker
+        stakingInterval = setInterval(updateStakingData, state.settings.autoRefreshInterval * 3);
     }
 
     /**
-     * Initialize the market chart
+     * Load initial data
      */
-    function initializeChart() {
-        // Implementation for canvas chart rendering
-        // This would use the chartData in state.market
+    function loadInitialData() {
+        // Load market data
+        updateMarketData();
+        // Load gas prices
+        updateGasPrices();
+        // Load order book
+        updateOrderBook();
+        // Load transactions
+        updateTransactions();
+        // Load portfolio
+        updatePortfolio();
+        // Load staking data
+        updateStakingData();
     }
 
     /**
-     * Initialize the order book
+     * Initialize Web Audio context
      */
-    function initializeOrderBook() {
-        // Implementation for order book rendering
-        // This would use the bids and asks in state.orderBook
+    function initAudioContext() {
+        try {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (error) {
+            console.error('Web Audio API is not supported in this browser:', error);
+        }
     }
 
     /**
-     * Initialize the wallet
+     * Connect wallet
      */
-    function initializeWallet() {
-        // Implementation for wallet initialization
-        // This would check for existing wallet connections
+    function connectWallet() {
+        // Simulate wallet connection
+        state.wallet.connected = true;
+        state.wallet.address = '0x123...456';
+        // Update UI
+        updateUI();
+        // Play sound
+        playAudioTone(440, 'sine', 0.1, 0.1);
     }
 
     /**
-     * Initialize the staking section
+     * Save settings
      */
-    function initializeStaking() {
-        // Implementation for staking initialization
-        // This would calculate initial staking rewards
+    function saveSettings(event) {
+        event.preventDefault();
+        // Update state with form values
+        state.settings.theme = DOM.settingsTheme.value;
+        state.settings.currency = DOM.settingsCurrency.value;
+        state.settings.language = DOM.settingsLanguage.value;
+        state.settings.slippageTolerance = parseFloat(DOM.settingsSlippageTolerance.value);
+        state.settings.enableSounds = DOM.settingsEnableSounds.checked;
+        state.settings.autoRefreshInterval = parseInt(DOM.settingsAutoRefreshInterval.value);
+        // Update UI
+        updateUI();
+        // Restart engine tickers with new interval
+        clearInterval(marketInterval);
+        clearInterval(gasInterval);
+        clearInterval(orderBookInterval);
+        clearInterval(stakingInterval);
+        startEngineTickers();
+        // Play sound
+        playAudioTone(523.25, 'sine', 0.1, 0.1);
     }
 
     /**
-     * Initialize the notifications system
+     * Update UI with current state
      */
-    function initializeNotifications() {
-        // Implementation for notifications system
-        // This would set up event listeners for new notifications
+    function updateUI() {
+        // Update wallet section
+        updateWalletSection();
+        // Update market section
+        updateMarketSection();
+        // Update order book section
+        updateOrderBookSection();
+        // Update transactions section
+        updateTransactionsSection();
+        // Update portfolio section
+        updatePortfolioSection();
+        // Update staking section
+        updateStakingSection();
+        // Update notifications section
+        updateNotificationsSection();
+        // Update settings form
+        updateSettingsForm();
     }
 
     /**
-     * Initialize the settings
+     * Update wallet section
      */
-    function initializeSettings() {
-        // Implementation for settings initialization
-        // This would load saved settings from localStorage
+    function updateWalletSection() {
+        if (state.wallet.connected) {
+            DOM.walletConnectBtn.textContent = 'Disconnect';
+            DOM.walletAddress.textContent = state.wallet.address;
+            DOM.walletBalanceEth.textContent = state.wallet.balanceEth.toFixed(4);
+            DOM.walletBalanceUsdt.textContent = state.wallet.balanceUsdt.toFixed(2);
+            DOM.walletBalanceBtc.textContent = state.wallet.balanceBtc.toFixed(6);
+            DOM.walletBalanceSol.textContent = state.wallet.balanceSol.toFixed(2);
+        } else {
+            DOM.walletConnectBtn.textContent = 'Connect Wallet';
+            DOM.walletAddress.textContent = 'Not connected';
+            DOM.walletBalanceEth.textContent = '0.0000';
+            DOM.walletBalanceUsdt.textContent = '0.00';
+            DOM.walletBalanceBtc.textContent = '0.000000';
+            DOM.walletBalanceSol.textContent = '0.00';
+        }
     }
 
-    // Additional functions for rendering, updating, and handling user interactions
-    // would be implemented here
+    /**
+     * Update market section
+     */
+    function updateMarketSection() {
+        DOM.marketPrice.textContent = state.market.price.toFixed(2);
+        DOM.marketChange24h.textContent = state.market.change24h.toFixed(2) + '%';
+        DOM.marketVolume24h.textContent = formatNumber(state.market.volume24h);
+        DOM.marketHigh24h.textContent = state.market.high24h.toFixed(2);
+        DOM.marketLow24h.textContent = state.market.low24h.toFixed(2);
+        // Update market chart
+        updateMarketChart();
+    }
 
-    // Initialize the application when the DOM is fully loaded
-    document.addEventListener('DOMContentLoaded', init);
+    /**
+     * Update order book section
+     */
+    function updateOrderBookSection() {
+        // Clear order book
+        DOM.orderBookBids.innerHTML = '';
+        DOM.orderBookAsks.innerHTML = '';
+        // Add bids
+        state.orderBook.bids.forEach(bid => {
+            const bidElement = document.createElement('div');
+            bidElement.className = 'order-book-item';
+            bidElement.innerHTML = `
+                <span class="order-book-price">${bid.price.toFixed(2)}</span>
+                <span class="order-book-amount">${bid.amount.toFixed(4)}</span>
+                <span class="order-book-total">${bid.total.toFixed(4)}</span>
+            `;
+            DOM.orderBookBids.appendChild(bidElement);
+        });
+        // Add asks
+        state.orderBook.asks.forEach(ask => {
+            const askElement = document.createElement('div');
+            askElement.className = 'order-book-item';
+            askElement.innerHTML = `
+                <span class="order-book-price">${ask.price.toFixed(2)}</span>
+                <span class="order-book-amount">${ask.amount.toFixed(4)}</span>
+                <span class="order-book-total">${ask.total.toFixed(4)}</span>
+            `;
+            DOM.orderBookAsks.appendChild(askElement);
+        });
+    }
 
+    /**
+     * Update transactions section
+     */
+    function updateTransactionsSection() {
+        // Clear transactions list
+        DOM.transactionsList.innerHTML = '';
+        // Add transactions
+        state.transactions.forEach(transaction => {
+            const transactionElement = document.createElement('div');
+            transactionElement.className = 'transaction-item';
+            transactionElement.innerHTML = `
+                <span class="transaction-hash">${transaction.hash}</span>
+                <span class="transaction-type">${transaction.type}</span>
+                <span class="transaction-description">${transaction.description}</span>
+                <span class="transaction-amount">${transaction.amount}</span>
+                <span class="transaction-status">${transaction.status}</span>
+                <span class="transaction-timestamp">${new Date(transaction.timestamp).toLocaleString()}</span>
+                <span class="transaction-block-number">${transaction.blockNumber}</span>
+            `;
+            DOM.transactionsList.appendChild(transactionElement);
+        });
+    }
+
+    /**
+     * Update portfolio section
+     */
+    function updatePortfolioSection() {
+        // Clear portfolio list
+        DOM.portfolioList.innerHTML = '';
+        // Add portfolio items
+        state.portfolio.forEach(item => {
+            const portfolioItemElement = document.createElement('div');
+            portfolioItemElement.className = 'portfolio-item';
+            portfolioItemElement.innerHTML = `
+                <span class="portfolio-symbol">${item.symbol}</span>
+                <span class="portfolio-name">${item.name}</span>
+                <span class="portfolio-balance">${item.balance.toFixed(4)}</span>
+                <span class="portfolio-price">${item.price.toFixed(2)}</span>
+                <span class="portfolio-value">${item.value.toFixed(2)}</span>
+                <span class="portfolio-allocation">${item.allocation.toFixed(1)}%</span>
+            `;
+            DOM.portfolioList.appendChild(portfolioItemElement);
+        });
+    }
+
+    /**
+     * Update staking section
+     */
+    function updateStakingSection() {
+        DOM.stakingStakedOpus.textContent = state.staking.stakedOpus.toFixed(2);
+        DOM.stakingRewardRateApy.textContent = state.staking.rewardRateApy.toFixed(2) + '%';
+        DOM.stakingPendingRewards.textContent = state.staking.pendingRewards.toFixed(2);
+        DOM.stakingLastClaimed.textContent = new Date(state.staking.lastClaimed).toLocaleString();
+    }
+
+    /**
+     * Update notifications section
+     */
+    function updateNotificationsSection() {
+        // Clear notifications list
+        DOM.notificationsList.innerHTML = '';
+        // Add notifications
+        state.notifications.forEach(notification => {
+            const notificationElement = document.createElement('div');
+            notificationElement.className = 'notification-item';
+            notificationElement.innerHTML = `
+                <span class="notification-message">${notification.message}</span>
+                <span class="notification-timestamp">${new Date(notification.timestamp).toLocaleString()}</span>
+            `;
+            DOM.notificationsList.appendChild(notificationElement);
+        });
+    }
+
+    /**
+     * Update settings form
+     */
+    function updateSettingsForm() {
+        DOM.settingsTheme.value = state.settings.theme;
+        DOM.settingsCurrency.value = state.settings.currency;
+        DOM.settingsLanguage.value = state.settings.language;
+        DOM.settingsSlippageTolerance.value = state.settings.slippageTolerance;
+        DOM.settingsEnableSounds.checked = state.settings.enableSounds;
+        DOM.settingsAutoRefreshInterval.value = state.settings.autoRefreshInterval;
+    }
+
+    /**
+     * Initialize market chart
+     */
+    function initMarketChart() {
+        // Initialize chart data
+        state.market.chartData.labels = Array.from({ length: 60 }, (_, i) => i);
+        state.market.chartData.prices = Array.from({ length: 60 }, () => state.market.price);
+        state.market.chartData.candles = Array.from({ length: 60 }, () => ({
+            open: state.market.price,
+            high: state.market.price,
+            low: state.market.price,
+            close: state.market.price
+        }));
+        // Draw initial chart
+        drawMarketChart();
+    }
+
+    /**
+     * Update market chart
+     */
+    function updateMarketChart() {
+        // Update chart data
+        state.market.chartData.labels.push(state.market.chartData.labels.length);
+        state.market.chartData.prices.push(state.market.price);
+        state.market.chartData.candles.push({
+            open: state.market.price,
+            high: state.market.price,
+            low: state.market.price,
+            close: state.market.price
+        });
+        // Keep chart data length within limits
+        if (state.market.chartData.labels.length > 60) {
+            state.market.chartData.labels.shift();
+            state.market.chartData.prices.shift();
+            state.market.chartData.candles.shift();
+        }
+        // Draw chart
+        drawMarketChart();
+    }
+
+    /**
+     * Draw market chart
+     */
+    function drawMarketChart() {
+        const ctx = DOM.marketChart.getContext('2d');
+        const width = DOM.marketChart.width;
+        const height = DOM.marketChart.height;
+        const padding = 20;
+        const chartWidth = width - padding * 2;
+        const chartHeight = height - padding * 2;
+
+        // Clear canvas
+        ctx.clearRect(0, 0, width, height);
+
+        // Draw grid
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let i = 0; i <= 5; i++) {
+            const y = padding + (chartHeight / 5) * i;
+            ctx.moveTo(padding, y);
+            ctx.lineTo(width - padding, y);
+        }
+        for (let i = 0; i <= 10; i++) {
+            const x = padding + (chartWidth / 10) * i;
+            ctx.moveTo(x, padding);
+            ctx.lineTo(x, height - padding);
+        }
+        ctx.stroke();
+
+        // Draw chart
+        ctx.strokeStyle = '#4f46e5';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        const minPrice = Math.min(...state.market.chartData.prices);
+        const maxPrice = Math.max(...state.market.chartData.prices);
+        const priceRange = maxPrice - minPrice;
+        state.market.chartData.prices.forEach((price, index) => {
+            const x = padding + (chartWidth / (state.market.chartData.prices.length - 1)) * index;
+            const y = height - padding - ((price - minPrice) / priceRange) * chartHeight;
+            if (index === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        });
+        ctx.stroke();
+    }
+
+    /**
+     * Update market data
+     */
+    function updateMarketData() {
+        // Simulate market data update
+        const pair = PAIR_RATES[state.market.selectedPair];
+        const change = (Math.random() - 0.5) * 0.1;
+        state.market.price = pair.price * (1 + change);
+        state.market.change24h = change * 100;
+        state.market.volume24h += Math.random() * 1000000;
+        state.market.high24h = Math.max(state.market.high24h, state.market.price);
+        state.market.low24h = Math.min(state.market.low24h, state.market.price);
+        // Update UI
+        updateUI();
+    }
+
+    /**
+     * Update gas prices
+     */
+    function updateGasPrices() {
+        // Simulate gas price update
+        state.gas.slow = Math.max(10, state.gas.slow + (Math.random() - 0.5) * 2);
+        state.gas.standard = Math.max(15, state.gas.standard + (Math.random() - 0.5) * 3);
+        state.gas.fast = Math.max(20, state.gas.fast + (Math.random() - 0.5) * 4);
+        state.gas.current = state.gas.standard;
+        // Update UI
+        updateUI();
+    }
+
+    /**
+     * Update order book
+     */
+    function updateOrderBook() {
+        // Simulate order book update
+        state.orderBook.bids = [];
+        state.orderBook.asks = [];
+        const pair = PAIR_RATES[state.market.selectedPair];
+        const basePrice = pair.price;
+        const decimals = pair.decimals;
+        // Generate bids
+        for (let i = 0; i < state.orderBook.maxDepth; i++) {
+            const price = basePrice - (i * 0.01);
+            const amount = Math.random() * 10;
+            const total = price * amount;
+            state.orderBook.bids.push({ price, amount, total });
+        }
+        // Generate asks
+        for (let i = 0; i < state.orderBook.maxDepth; i++) {
+            const price = basePrice + (i * 0.01);
+            const amount = Math.random() * 10;
+            const total = price * amount;
+            state.orderBook.asks.push({ price, amount, total });
+        }
+        // Update UI
+        updateUI();
+    }
+
+    /**
+     * Update transactions
+     */
+    function updateTransactions() {
+        // Simulate transactions update
+        // Update UI
+        updateUI();
+    }
+
+    /**
+     * Update portfolio
+     */
+    function updatePortfolio() {
+        // Simulate portfolio update
+        // Update UI
+        updateUI();
+    }
+
+    /**
+     * Update staking data
+     */
+    function updateStakingData() {
+        // Simulate staking data update
+        state.staking.pendingRewards += state.staking.stakedOpus * (state.staking.rewardRateApy / 100 / 365);
+        // Update UI
+        updateUI();
+    }
+
+    /**
+     * Format number with commas
+     */
+    function formatNumber(num) {
+        return num.toString().replace(/(\d)(?=(\d{3})+(?!\d))/g, '$1,');
+    }
+
+    // Initialize the application
+    init();
 })();

@@ -181,93 +181,50 @@ interface IERC20Metadata is IERC20 {
     function decimals() external view returns (uint8);
 }
 
-interface IERC721 {
-    function balanceOf(address owner) external view returns (uint256 balance);
-    function ownerOf(uint256 tokenId) external view returns (address owner);
-    function safeTransferFrom(address from, address to, uint256 tokenId, bytes calldata data) external;
-    function safeTransferFrom(address from, address to, uint256 tokenId) external;
-    function transferFrom(address from, address to, uint256 tokenId) external;
-    function approve(address to, uint256 tokenId) external;
-    function setApprovalForAll(address operator, bool _approved) external;
-    function getApproved(uint256 tokenId) external view returns (address operator);
-    function isApprovedForAll(address owner, address operator) external view returns (bool);
-
-    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
-    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
-    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
-}
-
 interface IERC721Receiver {
     function onERC721Received(address operator, address from, uint256 tokenId, bytes calldata data) external returns (bytes4);
 }
 
 interface IFlashLoanReceiver {
-    function executeOperation(
-        address asset,
-        uint256 amount,
-        uint256 premium,
-        address initiator,
-        bytes calldata params
-    ) external returns (bool);
+    function executeOperation(address token, uint256 amount, uint256 fee, bytes calldata params) external returns (bool);
 }
 
 // -----------------------------------------------------------------------------
-// MagnumToken: Core ERC20 Token with EIP-2612 Permit Capabilities
+// Core Token: Magnum Opus Token (MGM)
 // -----------------------------------------------------------------------------
 contract MagnumToken is Context, IERC20, IERC20Metadata, Ownable {
-    mapping(address => uint256) private _balances;
-    mapping(address => mapping(address => uint256)) private _allowances;
-    mapping(address => uint256) public nonces;
-
-    uint256 private _totalSupply;
     string private _name;
     string private _symbol;
-    uint8 private constant _DECIMALS = 18;
+    uint8 private constant _decimals = 18;
+    uint256 private _totalSupply;
 
-    bytes32 public DOMAIN_SEPARATOR;
-    // bytes32 public constant PERMIT_TYPEHASH = keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
-    bytes32 public constant PERMIT_TYPEHASH = 0x6e71ed727dd870300fee744e88d3d50125039a341353a042cf3b2d402d5a8b0e;
+    mapping(address => uint256) private _balances;
+    mapping(address => mapping(address => uint256)) private _allowances;
+    mapping(address => bool) private _minters;
 
-    constructor(string memory name_, string memory symbol_, uint256 initialMint) Ownable(msg.sender) {
-        _name = name_;
-        _symbol = symbol_;
-        if (initialMint > 0) {
-            _mint(_msgSender(), initialMint);
-        }
+    event MinterStatusChanged(address indexed minter, bool status);
 
-        uint256 chainId;
-        assembly {
-            chainId := chainid()
-        }
-        DOMAIN_SEPARATOR = keccak256(
-            abi.encode(
-                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-                keccak256(bytes(name_)),
-                keccak256(bytes("1")),
-                chainId,
-                address(this)
-            )
-        );
+    modifier onlyMinter() {
+        if (!_minters[_msgSender()] && owner() != _msgSender()) revert Unauthorized();
+        _;
     }
 
-    function name() public view override returns (string memory) {
-        return _name;
+    constructor(uint256 initialSupply) Ownable(msg.sender) {
+        _name = "Magnum Opus Token";
+        _symbol = "MGM";
+        _mint(msg.sender, initialSupply * (10 ** _decimals));
     }
 
-    function symbol() public view override returns (string memory) {
-        return _symbol;
-    }
+    function name() public view override returns (string memory) { return _name; }
+    function symbol() public view override returns (string memory) { return _symbol; }
+    function decimals() public view override returns (uint8) { return _decimals; }
+    function totalSupply() public view override returns (uint256) { return _totalSupply; }
+    function balanceOf(address account) public view override returns (uint256) { return _balances[account]; }
 
-    function decimals() public pure override returns (uint8) {
-        return _DECIMALS;
-    }
-
-    function totalSupply() public view override returns (uint256) {
-        return _totalSupply;
-    }
-
-    function balanceOf(address account) public view override returns (uint256) {
-        return _balances[account];
+    function setMinter(address minter, bool status) external onlyOwner {
+        if (minter == address(0)) revert ZeroAddress();
+        _minters[minter] = status;
+        emit MinterStatusChanged(minter, status);
     }
 
     function transfer(address recipient, uint256 amount) public override returns (bool) {
@@ -275,8 +232,8 @@ contract MagnumToken is Context, IERC20, IERC20Metadata, Ownable {
         return true;
     }
 
-    function allowance(address owner, address spender) public view override returns (uint256) {
-        return _allowances[owner][spender];
+    function allowance(address ownerAddress, address spender) public view override returns (uint256) {
+        return _allowances[ownerAddress][spender];
     }
 
     function approve(address spender, uint256 amount) public override returns (bool) {
@@ -296,33 +253,12 @@ contract MagnumToken is Context, IERC20, IERC20Metadata, Ownable {
         return true;
     }
 
-    function mint(address to, uint256 amount) external onlyOwner {
-        _mint(to, amount);
+    function mint(address account, uint256 amount) external onlyMinter {
+        _mint(account, amount);
     }
 
     function burn(uint256 amount) external {
         _burn(_msgSender(), amount);
-    }
-
-    function permit(
-        address owner,
-        address spender,
-        uint256 value,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) external {
-        if (block.timestamp > deadline) revert SignatureExpired();
-
-        bytes32 structHash = keccak256(
-            abi.encode(PERMIT_TYPEHASH, owner, spender, value, nonces[owner]++, deadline)
-        );
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
-        address recoveredAddress = ecrecover(digest, v, r, s);
-
-        if (recoveredAddress == address(0) || recoveredAddress != owner) revert InvalidSignature();
-        _approve(owner, spender, value);
     }
 
     function _transfer(address sender, address recipient, uint256 amount) internal {
@@ -354,176 +290,39 @@ contract MagnumToken is Context, IERC20, IERC20Metadata, Ownable {
         emit Transfer(account, address(0), amount);
     }
 
-    function _approve(address owner, address spender, uint256 amount) internal {
-        if (owner == address(0) || spender == address(0)) revert ZeroAddress();
-        _allowances[owner][spender] = amount;
-        emit Approval(owner, spender, amount);
+    function _approve(address ownerAddress, address spender, uint256 amount) internal {
+        if (ownerAddress == address(0) || spender == address(0)) revert ZeroAddress();
+        _allowances[ownerAddress][spender] = amount;
+        emit Approval(ownerAddress, spender, amount);
     }
 }
 
 // -----------------------------------------------------------------------------
-// MagnumNFT: Royalty-Compliant ERC721 Digital Asset Suite
+// DEX Automated Market Maker (Constant Product AMM)
 // -----------------------------------------------------------------------------
-contract MagnumNFT is Context, IERC721, Ownable {
-    string private _name;
-    string private _symbol;
-    uint256 public constant MAX_SUPPLY = 10000;
-    uint256 private _totalMinted;
-
-    address public royaltyReceiver;
-    uint96 public royaltyBps = 250; // 2.5%
-
-    mapping(uint256 => address) private _owners;
-    mapping(address => uint256) private _balances;
-    mapping(uint256 => address) private _tokenApprovals;
-    mapping(address => mapping(address => bool)) private _operatorApprovals;
-    mapping(uint256 => string) private _tokenURIs;
-
-    constructor(string memory name_, string memory symbol_, address initialRoyaltyReceiver) Ownable(msg.sender) {
-        _name = name_;
-        _symbol = symbol_;
-        royaltyReceiver = initialRoyaltyReceiver == address(0) ? msg.sender : initialRoyaltyReceiver;
-    }
-
-    function name() external view returns (string memory) {
-        return _name;
-    }
-
-    function symbol() external view returns (string memory) {
-        return _symbol;
-    }
-
-    function totalSupply() external view returns (uint256) {
-        return _totalMinted;
-    }
-
-    function balanceOf(address owner) external view override returns (uint256) {
-        if (owner == address(0)) revert ZeroAddress();
-        return _balances[owner];
-    }
-
-    function ownerOf(uint256 tokenId) public view override returns (address) {
-        address owner = _owners[tokenId];
-        if (owner == address(0)) revert TokenDoesNotExist();
-        return owner;
-    }
-
-    function tokenURI(uint256 tokenId) external view returns (string memory) {
-        if (_owners[tokenId] == address(0)) revert TokenDoesNotExist();
-        return _tokenURIs[tokenId];
-    }
-
-    function mint(address to, string calldata uri) external onlyOwner returns (uint256) {
-        if (_totalMinted >= MAX_SUPPLY) revert MaxSupplyReached();
-        uint256 tokenId = ++_totalMinted;
-        _owners[tokenId] = to;
-        _balances[to] += 1;
-        _tokenURIs[tokenId] = uri;
-
-        emit Transfer(address(0), to, tokenId);
-        return tokenId;
-    }
-
-    function setRoyaltyInfo(address receiver, uint96 bps) external onlyOwner {
-        if (receiver == address(0)) revert ZeroAddress();
-        if (bps > 10000) revert InvalidRoyaltyPercentage();
-        royaltyReceiver = receiver;
-        royaltyBps = bps;
-    }
-
-    function royaltyInfo(uint256, uint256 salePrice) external view returns (address, uint256) {
-        uint256 royaltyAmount = (salePrice * royaltyBps) / 10000;
-        return (royaltyReceiver, royaltyAmount);
-    }
-
-    function approve(address to, uint256 tokenId) external override {
-        address owner = ownerOf(tokenId);
-        if (to == owner) revert IdenticalAddresses();
-        if (_msgSender() != owner && !isApprovedForAll(owner, _msgSender())) revert Unauthorized();
-
-        _tokenApprovals[tokenId] = to;
-        emit Approval(owner, to, tokenId);
-    }
-
-    function getApproved(uint256 tokenId) public view override returns (address) {
-        if (_owners[tokenId] == address(0)) revert TokenDoesNotExist();
-        return _tokenApprovals[tokenId];
-    }
-
-    function setApprovalForAll(address operator, bool approved) external override {
-        if (operator == _msgSender()) revert IdenticalAddresses();
-        _operatorApprovals[_msgSender()][operator] = approved;
-        emit ApprovalForAll(_msgSender(), operator, approved);
-    }
-
-    function isApprovedForAll(address owner, address operator) public view override returns (bool) {
-        return _operatorApprovals[owner][operator];
-    }
-
-    function transferFrom(address from, address to, uint256 tokenId) public override {
-        if (!_isApprovedOrOwner(_msgSender(), tokenId)) revert Unauthorized();
-        _transfer(from, to, tokenId);
-    }
-
-    function safeTransferFrom(address from, address to, uint256 tokenId) external override {
-        safeTransferFrom(from, to, tokenId, "");
-    }
-
-    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory data) public override {
-        transferFrom(from, to, tokenId);
-        if (to.code.length > 0) {
-            try IERC721Receiver(to).onERC721Received(_msgSender(), from, tokenId, data) returns (bytes4 retval) {
-                if (retval != IERC721Receiver.onERC721Received.selector) revert Unauthorized();
-            } catch {
-                revert Unauthorized();
-            }
-        }
-    }
-
-    function _isApprovedOrOwner(address spender, uint256 tokenId) internal view returns (bool) {
-        address owner = ownerOf(tokenId);
-        return (spender == owner || getApproved(tokenId) == spender || isApprovedForAll(owner, spender));
-    }
-
-    function _transfer(address from, address to, uint256 tokenId) internal {
-        if (ownerOf(tokenId) != from) revert Unauthorized();
-        if (to == address(0)) revert ZeroAddress();
-
-        delete _tokenApprovals[tokenId];
-        _balances[from] -= 1;
-        _balances[to] += 1;
-        _owners[tokenId] = to;
-
-        emit Transfer(from, to, tokenId);
-    }
-}
-
-// -----------------------------------------------------------------------------
-// MagnumDEX: Constant-Product AMM Liquidity Pool & Flash Loan Provider
-// -----------------------------------------------------------------------------
-contract MagnumDEX is Context, ReentrancyGuard, Pausable, Ownable {
-    using MagnumMath for uint256;
-
-    IERC20 private immutable _token0;
-    IERC20 private immutable _token1;
+contract MagnumDEXPair is ReentrancyGuard, Ownable {
+    address public token0;
+    address public token1;
 
     uint112 private reserve0;
     uint112 private reserve1;
     uint32 private blockTimestampLast;
 
-    uint256 public totalLpSupply;
-    mapping(address => uint256) public lpBalances;
+    uint256 public constant MINIMUM_LIQUIDITY = 1000;
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
 
     event Mint(address indexed sender, uint256 amount0, uint256 amount1);
     event Burn(address indexed sender, uint256 amount0, uint256 amount1, address indexed to);
     event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to);
     event Sync(uint112 reserve0, uint112 reserve1);
+    event FlashLoan(address indexed borrower, address indexed token, uint256 amount, uint256 fee);
 
-    constructor(address token0_, address token1_) Ownable(msg.sender) {
-        if (token0_ == address(0) || token1_ == address(0)) revert ZeroAddress();
-        if (token0_ == token1_) revert IdenticalAddresses();
-        _token0 = IERC20(token0_);
-        _token1 = IERC20(token1_);
+    constructor(address _token0, address _token1) Ownable(msg.sender) {
+        if (_token0 == _token1) revert IdenticalAddresses();
+        if (_token0 == address(0) || _token1 == address(0)) revert ZeroAddress();
+        token0 = _token0;
+        token1 = _token1;
     }
 
     function getReserves() public view returns (uint112 _reserve0, uint112 _reserve1, uint32 _blockTimestampLast) {
@@ -532,354 +331,543 @@ contract MagnumDEX is Context, ReentrancyGuard, Pausable, Ownable {
         _blockTimestampLast = blockTimestampLast;
     }
 
-    function addLiquidity(uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address to) external nonReentrant whenNotPaused returns (uint256 amount0, uint256 amount1, uint256 liquidity) {
-        (amount0, amount1) = _calculateOptimalLiquidity(amount0Desired, amount1Desired, amount0Min, amount1Min);
-        
-        _token0.transferFrom(_msgSender(), address(this), amount0);
-        _token1.transferFrom(_msgSender(), address(this), amount1);
-
-        liquidity = _mintLP(to, amount0, amount1);
-    }
-
-    function removeLiquidity(uint256 liquidity, uint256 amount0Min, uint256 amount1Min, address to) external nonReentrant returns (uint256 amount0, uint256 amount1) {
-        if (lpBalances[_msgSender()] < liquidity) revert InsufficientBalance(lpBalances[_msgSender()], liquidity);
-
-        uint256 balance0 = _token0.balanceOf(address(this));
-        uint256 balance1 = _token1.balanceOf(address(this));
-
-        amount0 = (liquidity * balance0) / totalLpSupply;
-        amount1 = (liquidity * balance1) / totalLpSupply;
-
-        if (amount0 < amount0Min || amount1 < amount1Min) revert SlippageExceeded();
-
-        lpBalances[_msgSender()] -= liquidity;
-        totalLpSupply -= liquidity;
-
-        _token0.transfer(to, amount0);
-        _token1.transfer(to, amount1);
-
-        _updateReserves(_token0.balanceOf(address(this)), _token1.balanceOf(address(this)));
-        emit Burn(_msgSender(), amount0, amount1, to);
-    }
-
-    function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external nonReentrant whenNotPaused {
-        if (amount0Out == 0 && amount1Out == 0) revert ZeroAmount();
-        if (amount0Out > reserve0 || amount1Out > reserve1) revert InsufficientLiquidity();
-
-        if (amount0Out > 0) _token0.transfer(to, amount0Out);
-        if (amount1Out > 0) _token1.transfer(to, amount1Out);
-
-        uint256 balance0 = _token0.balanceOf(address(this));
-        uint256 balance1 = _token1.balanceOf(address(this));
-
-        uint256 amount0In = balance0 > reserve0 - amount0Out ? balance0 - (reserve0 - amount0Out) : 0;
-        uint256 amount1In = balance1 > reserve1 - amount1Out ? balance1 - (reserve1 - amount1Out) : 0;
-
-        if (amount0In == 0 && amount1In == 0) revert ZeroAmount();
-
-        uint256 balance0Adjusted = balance0 * 1000 - (amount0In * 3);
-        uint256 balance1Adjusted = balance1 * 1000 - (amount1In * 3);
-
-        if (balance0Adjusted * balance1Adjusted < uint256(reserve0) * uint256(reserve1) * 1000000) {
-            revert SlippageExceeded();
-        }
-
-        _updateReserves(balance0, balance1);
-        emit Swap(_msgSender(), amount0In, amount1In, amount0Out, amount1Out, to);
-    }
-
-    function flashLoan(address receiverAddress, address token, uint256 amount, bytes calldata data) external nonReentrant whenNotPaused {
-        if (token != address(_token0) && token != address(_token1)) revert Unauthorized();
-        if (amount == 0) revert ZeroAmount();
-
-        IERC20 loanToken = IERC20(token);
-        uint256 balanceBefore = loanToken.balanceOf(address(this));
-        if (balanceBefore < amount) revert InsufficientLiquidity();
-
-        uint256 fee = (amount * 9) / 10000; // 0.09% flash loan fee
-        loanToken.transfer(receiverAddress, amount);
-
-        bool success = IFlashLoanReceiver(receiverAddress).executeOperation(token, amount, fee, _msgSender(), data);
-        if (!success) revert FlashLoanFailed();
-
-        uint256 balanceAfter = loanToken.balanceOf(address(this));
-        if (balanceAfter < balanceBefore + fee) revert FlashLoanFailed();
-
-        _updateReserves(_token0.balanceOf(address(this)), _token1.balanceOf(address(this)));
-    }
-
-    function _calculateOptimalLiquidity(uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min) internal view returns (uint256 amount0, uint256 amount1) {
-        if (reserve0 == 0 && reserve1 == 0) {
-            (amount0, amount1) = (amount0Desired, amount1Desired);
-        } else {
-            uint256 amount1Optimal = (amount0Desired * reserve1) / reserve0;
-            if (amount1Optimal <= amount1Desired) {
-                if (amount1Optimal < amount1Min) revert SlippageExceeded();
-                (amount0, amount1) = (amount0Desired, amount1Optimal);
-            } else {
-                uint256 amount0Optimal = (amount1Desired * reserve0) / reserve1;
-                if (amount0Optimal < amount0Min) revert SlippageExceeded();
-                (amount0, amount1) = (amount0Optimal, amount1Desired);
-            }
-        }
-    }
-
-    function _mintLP(address to, uint256 amount0, uint256 amount1) internal returns (uint256 liquidity) {
-        if (totalLpSupply == 0) {
-            liquidity = MagnumMath.sqrt(amount0 * amount1);
-        } else {
-            liquidity = MagnumMath.min((amount0 * totalLpSupply) / reserve0, (amount1 * totalLpSupply) / reserve1);
-        }
-        if (liquidity == 0) revert InsufficientLiquidity();
-
-        totalLpSupply += liquidity;
-        lpBalances[to] += liquidity;
-
-        _updateReserves(_token0.balanceOf(address(this)), _token1.balanceOf(address(this)));
-        emit Mint(to, amount0, amount1);
-    }
-
-    function _updateReserves(uint256 balance0, uint256 balance1) internal {
+    function _update(uint256 balance0, uint256 balance1) private {
         reserve0 = uint112(balance0);
         reserve1 = uint112(balance1);
         blockTimestampLast = uint32(block.timestamp % 2**32);
         emit Sync(reserve0, reserve1);
     }
+
+    function addLiquidity(uint256 amount0Desired, uint256 amount1Desired, address to) external nonReentrant returns (uint256 liquidity) {
+        IERC20(token0).transferFrom(msg.sender, address(this), amount0Desired);
+        IERC20(token1).transferFrom(msg.sender, address(this), amount1Desired);
+
+        (uint112 _reserve0, uint112 _reserve1,) = getReserves();
+        uint256 balance0 = IERC20(token0).balanceOf(address(this));
+        uint256 balance1 = IERC20(token1).balanceOf(address(this));
+        uint256 amount0 = balance0 - _reserve0;
+        uint256 amount1 = balance1 - _reserve1;
+
+        uint256 _totalSupply = totalSupply;
+        if (_totalSupply == 0) {
+            liquidity = MagnumMath.sqrt(amount0 * amount1) - MINIMUM_LIQUIDITY;
+            totalSupply = MINIMUM_LIQUIDITY + liquidity;
+            balanceOf[address(0)] = MINIMUM_LIQUIDITY;
+        } else {
+            liquidity = MagnumMath.min((amount0 * _totalSupply) / _reserve0, (amount1 * _totalSupply) / _reserve1);
+            totalSupply += liquidity;
+        }
+
+        if (liquidity == 0) revert InsufficientLiquidity();
+        balanceOf[to] += liquidity;
+        _update(balance0, balance1);
+        emit Mint(msg.sender, amount0, amount1);
+    }
+
+    function removeLiquidity(uint256 liquidity, address to) external nonReentrant returns (uint256 amount0, uint256 amount1) {
+        if (balanceOf[msg.sender] < liquidity) revert InsufficientBalance(balanceOf[msg.sender], liquidity);
+        
+        uint256 balance0 = IERC20(token0).balanceOf(address(this));
+        uint256 balance1 = IERC20(token1).balanceOf(address(this));
+        uint256 _totalSupply = totalSupply;
+
+        amount0 = (liquidity * balance0) / _totalSupply;
+        amount1 = (liquidity * balance1) / _totalSupply;
+        if (amount0 == 0 || amount1 == 0) revert InsufficientLiquidity();
+
+        balanceOf[msg.sender] -= liquidity;
+        totalSupply -= liquidity;
+
+        IERC20(token0).transfer(to, amount0);
+        IERC20(token1).transfer(to, amount1);
+
+        balance0 = IERC20(token0).balanceOf(address(this));
+        balance1 = IERC20(token1).balanceOf(address(this));
+        _update(balance0, balance1);
+        emit Burn(msg.sender, amount0, amount1, to);
+    }
+
+    function swap(uint256 amount0Out, uint256 amount1Out, address to) external nonReentrant {
+        if (amount0Out == 0 && amount1Out == 0) revert ZeroAmount();
+        (uint112 _reserve0, uint112 _reserve1,) = getReserves();
+        if (amount0Out >= _reserve0 || amount1Out >= _reserve1) revert InsufficientLiquidity();
+
+        if (amount0Out > 0) IERC20(token0).transfer(to, amount0Out);
+        if (amount1Out > 0) IERC20(token1).transfer(to, amount1Out);
+
+        uint256 balance0 = IERC20(token0).balanceOf(address(this));
+        uint256 balance1 = IERC20(token1).balanceOf(address(this));
+
+        uint256 amount0In = balance0 > _reserve0 - amount0Out ? balance0 - (_reserve0 - amount0Out) : 0;
+        uint256 amount1In = balance1 > _reserve1 - amount1Out ? balance1 - (_reserve1 - amount1Out) : 0;
+        if (amount0In == 0 && amount1In == 0) revert ZeroAmount();
+
+        // 0.3% trading fee mechanism check
+        uint256 balance0Adjusted = (balance0 * 1000) - (amount0In * 3);
+        uint256 balance1Adjusted = (balance1 * 1000) - (amount1In * 3);
+        if (balance0Adjusted * balance1Adjusted < uint256(_reserve0) * uint256(_reserve1) * 1000**2) {
+            revert SlippageExceeded();
+        }
+
+        _update(balance0, balance1);
+        emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
+    }
+
+    function flashLoan(address target, address token, uint256 amount, bytes calldata data) external nonReentrant {
+        if (amount == 0) revert ZeroAmount();
+        if (token != token0 && token != token1) revert Unauthorized();
+        
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
+        if (balanceBefore < amount) revert InsufficientLiquidity();
+
+        uint256 fee = (amount * 9) / 10000; // 0.09% fee
+        IERC20(token).transfer(target, amount);
+
+        bool success = IFlashLoanReceiver(target).executeOperation(token, amount, fee, data);
+        if (!success) revert FlashLoanFailed();
+
+        uint256 balanceAfter = IERC20(token).balanceOf(address(this));
+        if (balanceAfter < balanceBefore + fee) revert FlashLoanFailed();
+
+        (uint256 balance0, uint256 balance1) = (IERC20(token0).balanceOf(address(this)), IERC20(token1).balanceOf(address(this)));
+        _update(balance0, balance1);
+        emit FlashLoan(target, token, amount, fee);
+    }
 }
 
 // -----------------------------------------------------------------------------
-// MagnumStaking: Time-Locked Multi-Tier Yield Staking Suite
+// Multi-Tier Yield Staking Engine
 // -----------------------------------------------------------------------------
-contract MagnumStaking is Context, ReentrancyGuard, Ownable, Pausable {
+contract MagnumStakingVault is ReentrancyGuard, Pausable, Ownable {
     IERC20 public immutable stakingToken;
-    MagnumToken public immutable rewardToken;
+    IERC20 public immutable rewardToken;
 
-    struct StakeInfo {
-        uint256 amount;
-        uint256 rewardDebt;
-        uint256 lockPeriod;
-        uint256 depositTimestamp;
+    struct Tier {
+        uint256 lockDuration;
+        uint256 multiplierBps; // 10000 = 1.0x
+        bool active;
     }
 
-    uint256 public rewardPerSecond = 1e18; // 1 Reward token / second
+    struct StakePosition {
+        uint256 amount;
+        uint256 tierId;
+        uint256 startTime;
+        uint256 rewardDebt;
+        uint256 unlockTime;
+    }
+
+    mapping(uint256 => Tier) public tiers;
+    uint256 public nextTierId;
+
+    mapping(address => StakePosition[]) public userPositions;
+    uint256 public rewardPerSecond;
     uint256 public lastRewardTime;
     uint256 public accRewardPerShare;
-    uint256 public totalStaked;
+    uint256 public totalStakedWeighted;
 
-    mapping(address => StakeInfo) public stakes;
+    event Staked(address indexed user, uint256 indexed positionId, uint256 amount, uint256 tierId);
+    event Unstaked(address indexed user, uint256 indexed positionId, uint256 amount, uint256 reward);
+    event RewardHarvested(address indexed user, uint256 indexed positionId, uint256 amount);
+    event TierAdded(uint256 indexed tierId, uint256 lockDuration, uint256 multiplierBps);
 
-    event Staked(address indexed user, uint256 amount, uint256 lockPeriod);
-    event Withdrawn(address indexed user, uint256 amount);
-    event RewardHarvested(address indexed user, uint256 amount);
-
-    constructor(address _stakingToken, address _rewardToken) Ownable(msg.sender) {
-        if (_stakingToken == address(0) || _rewardToken == address(0)) revert ZeroAddress();
+    constructor(address _stakingToken, address _rewardToken, uint256 _rewardPerSecond) Ownable(msg.sender) {
         stakingToken = IERC20(_stakingToken);
-        rewardToken = MagnumToken(_rewardToken);
+        rewardToken = IERC20(_rewardToken);
+        rewardPerSecond = _rewardPerSecond;
         lastRewardTime = block.timestamp;
+
+        _addTier(0, 10000);        // Flexible: 1x
+        _addTier(30 days, 12500);  // 30 Days: 1.25x
+        _addTier(90 days, 17500);  // 90 Days: 1.75x
+        _addTier(365 days, 30000); // 1 Year: 3x
+    }
+
+    function _addTier(uint256 duration, uint256 multiplierBps) private {
+        tiers[nextTierId] = Tier(duration, multiplierBps, true);
+        emit TierAdded(nextTierId, duration, multiplierBps);
+        nextTierId++;
+    }
+
+    function addTier(uint256 duration, uint256 multiplierBps) external onlyOwner {
+        _addTier(duration, multiplierBps);
     }
 
     function updatePool() public {
         if (block.timestamp <= lastRewardTime) return;
-        if (totalStaked == 0) {
+        if (totalStakedWeighted == 0) {
             lastRewardTime = block.timestamp;
             return;
         }
-        uint256 timeElapsed = block.timestamp - lastRewardTime;
-        uint256 rewardAmount = timeElapsed * rewardPerSecond;
-        accRewardPerShare += (rewardAmount * 1e12) / totalStaked;
+        uint256 elapsed = block.timestamp - lastRewardTime;
+        uint256 rewardAmount = elapsed * rewardPerSecond;
+        accRewardPerShare += (rewardAmount * 1e12) / totalStakedWeighted;
         lastRewardTime = block.timestamp;
     }
 
-    function stake(uint256 amount, uint256 lockDays) external nonReentrant whenNotPaused {
+    function stake(uint256 amount, uint256 tierId) external nonReentrant whenNotPaused {
         if (amount == 0) revert ZeroAmount();
+        Tier memory tier = tiers[tierId];
+        if (!tier.active) revert Unauthorized();
+
         updatePool();
+        stakingToken.transferFrom(msg.sender, address(this), amount);
 
-        StakeInfo storage userStake = stakes[_msgSender()];
-        if (userStake.amount > 0) {
-            uint256 pending = (userStake.amount * accRewardPerShare) / 1e12 - userStake.rewardDebt;
-            if (pending > 0) {
-                _sendReward(_msgSender(), pending);
-            }
-        }
+        uint256 weightedAmount = (amount * tier.multiplierBps) / 10000;
+        totalStakedWeighted += weightedAmount;
 
-        stakingToken.transferFrom(_msgSender(), address(this), amount);
-        userStake.amount += amount;
-        userStake.depositTimestamp = block.timestamp;
-        userStake.lockPeriod = lockDays * 1 days;
-        userStake.rewardDebt = (userStake.amount * accRewardPerShare) / 1e12;
+        uint256 unlockTime = block.timestamp + tier.lockDuration;
+        uint256 rewardDebt = (weightedAmount * accRewardPerShare) / 1e12;
 
-        totalStaked += amount;
-        emit Staked(_msgSender(), amount, lockDays);
+        userPositions[msg.sender].push(StakePosition({
+            amount: amount,
+            tierId: tierId,
+            startTime: block.timestamp,
+            rewardDebt: rewardDebt,
+            unlockTime: unlockTime
+        }));
+
+        emit Staked(msg.sender, userPositions[msg.sender].length - 1, amount, tierId);
     }
 
-    function withdraw(uint256 amount) external nonReentrant {
-        StakeInfo storage userStake = stakes[_msgSender()];
-        if (userStake.amount < amount) revert InsufficientBalance(userStake.amount, amount);
-        if (block.timestamp < userStake.depositTimestamp + userStake.lockPeriod) {
-            revert PositionLocked(userStake.depositTimestamp + userStake.lockPeriod);
-        }
-
+    function harvest(uint256 positionId) public nonReentrant {
+        if (positionId >= userPositions[msg.sender].length) revert Unauthorized();
         updatePool();
-        uint256 pending = (userStake.amount * accRewardPerShare) / 1e12 - userStake.rewardDebt;
+
+        StakePosition storage pos = userPositions[msg.sender][positionId];
+        Tier memory tier = tiers[pos.tierId];
+        uint256 weightedAmount = (pos.amount * tier.multiplierBps) / 10000;
+        
+        uint256 accumulated = (weightedAmount * accRewardPerShare) / 1e12;
+        uint256 pending = accumulated > pos.rewardDebt ? accumulated - pos.rewardDebt : 0;
+
         if (pending > 0) {
-            _sendReward(_msgSender(), pending);
+            pos.rewardDebt = accumulated;
+            rewardToken.transfer(msg.sender, pending);
+            emit RewardHarvested(msg.sender, positionId, pending);
         }
-
-        userStake.amount -= amount;
-        userStake.rewardDebt = (userStake.amount * accRewardPerShare) / 1e12;
-        totalStaked -= amount;
-
-        stakingToken.transfer(_msgSender(), amount);
-        emit Withdrawn(_msgSender(), amount);
     }
 
-    function claimReward() external nonReentrant {
-        updatePool();
-        StakeInfo storage userStake = stakes[_msgSender()];
-        uint256 pending = (userStake.amount * accRewardPerShare) / 1e12 - userStake.rewardDebt;
-        if (pending == 0) revert ZeroAmount();
+    function unstake(uint256 positionId) external nonReentrant {
+        if (positionId >= userPositions[msg.sender].length) revert Unauthorized();
+        StakePosition storage pos = userPositions[msg.sender][positionId];
+        if (block.timestamp < pos.unlockTime) revert PositionLocked(pos.unlockTime);
 
-        userStake.rewardDebt = (userStake.amount * accRewardPerShare) / 1e12;
-        _sendReward(_msgSender(), pending);
+        harvest(positionId);
+
+        uint256 amount = pos.amount;
+        Tier memory tier = tiers[pos.tierId];
+        uint256 weightedAmount = (amount * tier.multiplierBps) / 10000;
+        totalStakedWeighted -= weightedAmount;
+
+        // Move last position to current slot
+        uint256 lastIdx = userPositions[msg.sender].length - 1;
+        if (positionId != lastIdx) {
+            userPositions[msg.sender][positionId] = userPositions[msg.sender][lastIdx];
+        }
+        userPositions[msg.sender].pop();
+
+        stakingToken.transfer(msg.sender, amount);
+        emit Unstaked(msg.sender, positionId, amount, 0);
     }
 
-    function setRewardRate(uint256 _rewardPerSecond) external onlyOwner {
-        updatePool();
-        rewardPerSecond = _rewardPerSecond;
-    }
-
-    function _sendReward(address to, uint256 amount) internal {
-        rewardToken.mint(to, amount);
-        emit RewardHarvested(to, amount);
+    function getUserPositionCount(address user) external view returns (uint256) {
+        return userPositions[user].length;
     }
 }
 
 // -----------------------------------------------------------------------------
-// MagnumVault: Over-Collateralized Lending & Borrowing Engine
+// Lending, Borrowing & Collateral Engine
 // -----------------------------------------------------------------------------
-contract MagnumVault is Context, ReentrancyGuard, Ownable {
+contract MagnumLendingPool is ReentrancyGuard, Pausable, Ownable {
     IERC20 public immutable collateralToken;
-    IERC20 public immutable debtToken;
+    IERC20 public immutable borrowToken;
 
-    uint256 public constant COLLATERAL_FACTOR = 75; // 75% LTV
-    uint256 public constant LIQUIDATION_THRESHOLD = 80; // 80%
-    uint256 public constant LIQUIDATION_DISCOUNT = 5; // 5% bonus to liquidator
+    uint256 public constant COLLATERAL_FACTOR = 7500; // 75% LTV
+    uint256 public constant LIQUIDATION_THRESHOLD = 8000; // 80%
+    uint256 public constant LIQUIDATION_DISCOUNT = 1000; // 10%
 
-    mapping(address => uint256) public collateralBalances;
-    mapping(address => uint256) public debtBalances;
+    struct UserAccount {
+        uint256 collateralBalance;
+        uint256 borrowedAmount;
+        uint256 lastInterestBlock;
+    }
+
+    mapping(address => UserAccount) public accounts;
+    uint256 public totalCollateral;
+    uint256 public totalBorrows;
+    uint256 public oraclePriceRatio; // Collateral price in BorrowToken units (scaled 1e18)
 
     event CollateralDeposited(address indexed user, uint256 amount);
     event CollateralWithdrawn(address indexed user, uint256 amount);
-    event DebtBorrowed(address indexed user, uint256 amount);
-    event DebtRepaid(address indexed user, uint256 amount);
-    event Liquidated(address indexed borrower, address indexed liquidator, uint256 debtRepaid, uint256 collateralSeized);
+    event Borrowed(address indexed user, uint256 amount);
+    event Repaid(address indexed user, uint256 amount);
+    event Liquidated(address indexed borrower, address indexed liquidator, uint256 repayAmount, uint256 seizedCollateral);
+    event OracleUpdated(uint256 newPriceRatio);
 
-    constructor(address _collateralToken, address _debtToken) Ownable(msg.sender) {
-        if (_collateralToken == address(0) || _debtToken == address(0)) revert ZeroAddress();
+    constructor(address _collateralToken, address _borrowToken, uint256 _initialOraclePriceRatio) Ownable(msg.sender) {
         collateralToken = IERC20(_collateralToken);
-        debtToken = IERC20(_debtToken);
+        borrowToken = IERC20(_borrowToken);
+        oraclePriceRatio = _initialOraclePriceRatio;
     }
 
-    function depositCollateral(uint256 amount) external nonReentrant {
-        if (amount == 0) revert ZeroAmount();
-        collateralBalances[_msgSender()] += amount;
-        collateralToken.transferFrom(_msgSender(), address(this), amount);
-        emit CollateralDeposited(_msgSender(), amount);
-    }
-
-    function borrow(uint256 amount) external nonReentrant {
-        if (amount == 0) revert ZeroAmount();
-        debtBalances[_msgSender()] += amount;
-
-        uint256 healthFactor = getHealthFactor(_msgSender());
-        if (healthFactor < 1e18) revert Undercollateralized(healthFactor);
-
-        debtToken.transfer(_msgSender(), amount);
-        emit DebtBorrowed(_msgSender(), amount);
-    }
-
-    function repay(uint256 amount) external nonReentrant {
-        if (amount == 0) revert ZeroAmount();
-        uint256 currentDebt = debtBalances[_msgSender()];
-        uint256 repayAmount = amount > currentDebt ? currentDebt : amount;
-
-        debtBalances[_msgSender()] -= repayAmount;
-        debtToken.transferFrom(_msgSender(), address(this), repayAmount);
-        emit DebtRepaid(_msgSender(), repayAmount);
-    }
-
-    function liquidate(address borrower, uint256 debtToCover) external nonReentrant {
-        uint256 healthFactor = getHealthFactor(borrower);
-        if (healthFactor >= 1e18) revert HealthFactorSafe(healthFactor);
-
-        uint256 borrowerDebt = debtBalances[borrower];
-        if (debtToCover > borrowerDebt) debtToCover = borrowerDebt;
-
-        uint256 collateralToSeize = debtToCover + ((debtToCover * LIQUIDATION_DISCOUNT) / 100);
-        if (collateralToSeize > collateralBalances[borrower]) {
-            collateralToSeize = collateralBalances[borrower];
-        }
-
-        debtBalances[borrower] -= debtToCover;
-        collateralBalances[borrower] -= collateralToSeize;
-
-        debtToken.transferFrom(_msgSender(), address(this), debtToCover);
-        collateralToken.transfer(_msgSender(), collateralToSeize);
-
-        emit Liquidated(borrower, _msgSender(), debtToCover, collateralToSeize);
+    function setOraclePriceRatio(uint256 _priceRatio) external onlyOwner {
+        if (_priceRatio == 0) revert ZeroAmount();
+        oraclePriceRatio = _priceRatio;
+        emit OracleUpdated(_priceRatio);
     }
 
     function getHealthFactor(address user) public view returns (uint256) {
-        uint256 debt = debtBalances[user];
-        if (debt == 0) return type(uint256).max;
+        UserAccount memory acc = accounts[user];
+        if (acc.borrowedAmount == 0) return type(uint256).max;
 
-        uint256 collateralValue = collateralBalances[user];
-        uint256 maxBorrow = (collateralValue * LIQUIDATION_THRESHOLD) / 100;
+        uint256 collateralValueInBorrow = (acc.collateralBalance * oraclePriceRatio) / 1e18;
+        uint256 maxBorrowAllowed = (collateralValueInBorrow * LIQUIDATION_THRESHOLD) / 10000;
+        return (maxBorrowAllowed * 1e18) / acc.borrowedAmount;
+    }
 
-        return (maxBorrow * 1e18) / debt;
+    function depositCollateral(uint256 amount) external nonReentrant whenNotPaused {
+        if (amount == 0) revert ZeroAmount();
+        collateralToken.transferFrom(msg.sender, address(this), amount);
+        accounts[msg.sender].collateralBalance += amount;
+        totalCollateral += amount;
+        emit CollateralDeposited(msg.sender, amount);
+    }
+
+    function withdrawCollateral(uint256 amount) external nonReentrant {
+        UserAccount storage acc = accounts[msg.sender];
+        if (acc.collateralBalance < amount) revert InsufficientBalance(acc.collateralBalance, amount);
+
+        acc.collateralBalance -= amount;
+        totalCollateral -= amount;
+
+        if (acc.borrowedAmount > 0) {
+            uint256 hf = getHealthFactor(msg.sender);
+            if (hf < 1e18) revert Undercollateralized(hf);
+        }
+
+        collateralToken.transfer(msg.sender, amount);
+        emit CollateralWithdrawn(msg.sender, amount);
+    }
+
+    function borrow(uint256 amount) external nonReentrant whenNotPaused {
+        if (amount == 0) revert ZeroAmount();
+        UserAccount storage acc = accounts[msg.sender];
+
+        uint256 collateralValueInBorrow = (acc.collateralBalance * oraclePriceRatio) / 1e18;
+        uint256 maxBorrow = (collateralValueInBorrow * COLLATERAL_FACTOR) / 10000;
+
+        if (acc.borrowedAmount + amount > maxBorrow) revert Undercollateralized(getHealthFactor(msg.sender));
+
+        acc.borrowedAmount += amount;
+        totalBorrows += amount;
+        borrowToken.transfer(msg.sender, amount);
+        emit Borrowed(msg.sender, amount);
+    }
+
+    function repay(uint256 amount) external nonReentrant {
+        UserAccount storage acc = accounts[msg.sender];
+        if (acc.borrowedAmount == 0) revert ZeroAmount();
+
+        uint256 repayAmount = amount > acc.borrowedAmount ? acc.borrowedAmount : amount;
+        borrowToken.transferFrom(msg.sender, address(this), repayAmount);
+
+        acc.borrowedAmount -= repayAmount;
+        totalBorrows -= repayAmount;
+        emit Repaid(msg.sender, repayAmount);
+    }
+
+    function liquidate(address borrower, uint256 repayAmount) external nonReentrant {
+        uint256 hf = getHealthFactor(borrower);
+        if (hf >= 1e18) revert HealthFactorSafe(hf);
+
+        UserAccount storage acc = accounts[borrower];
+        if (repayAmount > acc.borrowedAmount) revert InsufficientBalance(acc.borrowedAmount, repayAmount);
+
+        borrowToken.transferFrom(msg.sender, address(this), repayAmount);
+        acc.borrowedAmount -= repayAmount;
+        totalBorrows -= repayAmount;
+
+        // Seize collateral with liquidation bonus discount
+        uint256 collateralValueSeizedInBorrow = (repayAmount * (10000 + LIQUIDATION_DISCOUNT)) / 10000;
+        uint256 collateralToSeize = (collateralValueSeizedInBorrow * 1e18) / oraclePriceRatio;
+
+        if (collateralToSeize > acc.collateralBalance) {
+            collateralToSeize = acc.collateralBalance;
+        }
+
+        acc.collateralBalance -= collateralToSeize;
+        totalCollateral -= collateralToSeize;
+        collateralToken.transfer(msg.sender, collateralToSeize);
+
+        emit Liquidated(borrower, msg.sender, repayAmount, collateralToSeize);
     }
 }
 
 // -----------------------------------------------------------------------------
-// MagnumNexusManager: Governance Engine & Multi-Chain Operations Hub
+// NFT Marketplace & Generative Asset Engine
 // -----------------------------------------------------------------------------
-contract MagnumNexusManager is Ownable {
-    address public dexAddress;
-    address public stakingAddress;
-    address public vaultAddress;
-    address public treasury;
+contract MagnumNFTCollection is ReentrancyGuard, Ownable {
+    string public name = "Magnum Opus Nexus NFT";
+    string public symbol = "MONFT";
+    uint256 public nextTokenId = 1;
+    uint256 public maxSupply = 10000;
+    uint256 public mintPrice = 0.05 ether;
+    uint96 public royaltyBps = 500; // 5% Royalty
 
-    event ModuleUpdated(string indexed moduleName, address newAddress);
-    event TreasuryUpdated(address newTreasury);
+    mapping(uint256 => address) private _owners;
+    mapping(address => uint256) private _balances;
+    mapping(uint256 => address) private _tokenApprovals;
+    mapping(address => mapping(address => bool)) private _operatorApprovals;
+    mapping(uint256 => string) private _tokenURIs;
 
-    constructor(address _treasury) Ownable(msg.sender) {
-        if (_treasury == address(0)) revert ZeroAddress();
-        treasury = _treasury;
+    struct Listing {
+        uint256 price;
+        address seller;
+        bool active;
+    }
+    mapping(uint256 => Listing) public listings;
+
+    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+    event Approval(address indexed owner, address indexed spender, uint256 indexed tokenId);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+    event NFTMinted(address indexed recipient, uint256 indexed tokenId, string tokenURI);
+    event NFTListed(uint256 indexed tokenId, address indexed seller, uint256 price);
+    event NFTSold(uint256 indexed tokenId, address indexed buyer, address indexed seller, uint256 price);
+    event ListingCancelled(uint256 indexed tokenId, address indexed seller);
+
+    constructor() Ownable(msg.sender) {}
+
+    function balanceOf(address ownerAddress) external view returns (uint256) {
+        if (ownerAddress == address(0)) revert ZeroAddress();
+        return _balances[ownerAddress];
     }
 
-    function setModules(address _dex, address _staking, address _vault) external onlyOwner {
-        dexAddress = _dex;
-        stakingAddress = _staking;
-        vaultAddress = _vault;
-        emit ModuleUpdated("DEX", _dex);
-        emit ModuleUpdated("Staking", _staking);
-        emit ModuleUpdated("Vault", _vault);
+    function ownerOf(uint256 tokenId) public view returns (address) {
+        address ownerAddress = _owners[tokenId];
+        if (ownerAddress == address(0)) revert TokenDoesNotExist();
+        return ownerAddress;
     }
 
-    function setTreasury(address _treasury) external onlyOwner {
-        if (_treasury == address(0)) revert ZeroAddress();
-        treasury = _treasury;
-        emit TreasuryUpdated(_treasury);
+    function tokenURI(uint256 tokenId) external view returns (string memory) {
+        if (_owners[tokenId] == address(0)) revert TokenDoesNotExist();
+        return _tokenURIs[tokenId];
     }
 
-    function pauseEcosystem() external onlyOwner {
-        if (dexAddress != address(0)) Pausable(dexAddress).pause();
-        if (stakingAddress != address(0)) Pausable(stakingAddress).pause();
+    function approve(address to, uint256 tokenId) external {
+        address ownerAddress = ownerOf(tokenId);
+        if (msg.sender != ownerAddress && !_operatorApprovals[ownerAddress][msg.sender]) revert Unauthorized();
+        _tokenApprovals[tokenId] = to;
+        emit Approval(ownerAddress, to, tokenId);
     }
 
-    function unpauseEcosystem() external onlyOwner {
-        if (dexAddress != address(0)) Pausable(dexAddress).unpause();
-        if (stakingAddress != address(0)) Pausable(stakingAddress).unpause();
+    function setApprovalForAll(address operator, bool approved) external {
+        _operatorApprovals[msg.sender][operator] = approved;
+        emit ApprovalForAll(msg.sender, operator, approved);
+    }
+
+    function transferFrom(address from, address to, uint256 tokenId) public {
+        if (ownerOf(tokenId) != from) revert Unauthorized();
+        if (to == address(0)) revert ZeroAddress();
+        if (msg.sender != from && _tokenApprovals[tokenId] != msg.sender && !_operatorApprovals[from][msg.sender]) {
+            revert Unauthorized();
+        }
+
+        delete _tokenApprovals[tokenId];
+        _balances[from] -= 1;
+        _balances[to] += 1;
+        _owners[tokenId] = to;
+
+        emit Transfer(from, to, tokenId);
+    }
+
+    function mintNFT(string calldata _uri) external payable nonReentrant returns (uint256) {
+        if (nextTokenId > maxSupply) revert MaxSupplyReached();
+        if (msg.value < mintPrice) revert InsufficientBalance(msg.value, mintPrice);
+
+        uint256 tokenId = nextTokenId++;
+        _owners[tokenId] = msg.sender;
+        _balances[msg.sender] += 1;
+        _tokenURIs[tokenId] = _uri;
+
+        emit Transfer(address(0), msg.sender, tokenId);
+        emit NFTMinted(msg.sender, tokenId, _uri);
+        return tokenId;
+    }
+
+    function listNFT(uint256 tokenId, uint256 price) external {
+        if (ownerOf(tokenId) != msg.sender) revert Unauthorized();
+        if (price == 0) revert ZeroAmount();
+
+        listings[tokenId] = Listing(price, msg.sender, true);
+        emit NFTListed(tokenId, msg.sender, price);
+    }
+
+    function buyNFT(uint256 tokenId) external payable nonReentrant {
+        Listing memory item = listings[tokenId];
+        if (!item.active) revert Unauthorized();
+        if (msg.value < item.price) revert InsufficientBalance(msg.value, item.price);
+
+        listings[tokenId].active = false;
+        address seller = item.seller;
+
+        uint256 royalty = (item.price * royaltyBps) / 10000;
+        uint256 sellerProceeds = item.price - royalty;
+
+        transferFrom(seller, msg.sender, tokenId);
+
+        payable(owner()).transfer(royalty);
+        payable(seller).transfer(sellerProceeds);
+
+        emit NFTSold(tokenId, msg.sender, seller, item.price);
+    }
+
+    function cancelListing(uint256 tokenId) external {
+        Listing memory item = listings[tokenId];
+        if (item.seller != msg.sender) revert Unauthorized();
+        delete listings[tokenId];
+        emit ListingCancelled(tokenId, msg.sender);
+    }
+
+    function withdrawFees() external onlyOwner {
+        payable(owner()).transfer(address(this).balance);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Main Orchestration Governance Contract
+// -----------------------------------------------------------------------------
+contract MagnumNexusProtocol is Ownable, ReentrancyGuard {
+    MagnumToken public immutable magnumToken;
+    MagnumStakingVault public immutable stakingVault;
+    MagnumLendingPool public immutable lendingPool;
+    MagnumNFTCollection public immutable nftCollection;
+
+    event ProtocolInitialized(address token, address staking, address lending, address nft);
+
+    constructor(
+        address _magnumToken,
+        address _stakingVault,
+        address _lendingPool,
+        address _nftCollection
+    ) Ownable(msg.sender) {
+        magnumToken = MagnumToken(_magnumToken);
+        stakingVault = MagnumStakingVault(_stakingVault);
+        lendingPool = MagnumLendingPool(_lendingPool);
+        nftCollection = MagnumNFTCollection(_nftCollection);
+        emit ProtocolInitialized(_magnumToken, _stakingVault, _lendingPool, _nftCollection);
+    }
+
+    function getProtocolSummary() external view returns (
+        uint256 totalTokenSupply,
+        uint256 totalStaked,
+        uint256 totalBorrowed,
+        uint256 nftSupply
+    ) {
+        return (
+            magnumToken.totalSupply(),
+            stakingVault.totalStakedWeighted(),
+            lendingPool.totalBorrows(),
+            nftCollection.nextTokenId() - 1
+        );
     }
 }
