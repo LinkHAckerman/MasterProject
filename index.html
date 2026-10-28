@@ -58,7 +58,7 @@
     <!-- Top Global Header -->
     <header id="main-header">
         <div class="logo-container">
-            <div class="logo-icon" aria-hidden="true">\u03a9</div>
+            <div class="logo-icon" aria-hidden="true">Ω</div>
             <div>
                 <span class="logo-text">MAGNUM OPUS</span>
                 <span class="version-tag">v4.8.0-PRO</span>
@@ -99,52 +99,444 @@
             </button>
 
             <button id="open-settings-btn" class="icon-btn" aria-label="Platform Settings" title="Settings">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82-0.33c-0.68 0.18-1.41 0.18-2.09 0l-.13-.03a1.65 1.65 0 0 0-1.51 1V21a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09a1.65 1.65 0 0 0 1.51-1c0.18-0.68 0.18-1.41 0-2.09l-.03-.13a1.65 1.65 0 0 0 1-1.51V13a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51c0.68 0.18 1.41 0.18 2.09 0l.13-.03a1.65 1.65 0 0 0 1.51-1V13a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 .33 1.82z"/></svg>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </button>
+
+            <button id="connect-wallet-btn" class="primary-btn glow-effect">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"/><path d="M4 6v12c0 1.1.9 2 2 2h14v-4"/><path d="M18 12a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>
+                <span id="wallet-btn-text">Connect Wallet</span>
             </button>
         </div>
     </header>
 
-    <main id="dashboard">
-        <section class="wallet-overview card">
-            <h2 class="section-title">Wallet Overview</h2>
-            <div class="wallet-balance">
-                <span class="label">Total Balance:</span>
-                <span id="total-balance" class="value">0.00 ETH</span>
+    <div class="app-viewport">
+        <!-- Sidebar Navigation -->
+        <aside id="sidebar-nav">
+            <nav class="nav-menu">
+                <button class="nav-item active" data-tab="dashboard">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                    <span>Dashboard</span>
+                </button>
+
+                <button class="nav-item" data-tab="dex-swap">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                    <span>DEX Swap</span>
+                </button>
+
+                <button class="nav-item" data-tab="yield-vaults">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                    <span>Yield Vaults</span>
+                </button>
+
+                <button class="nav-item" data-tab="nft-nexus">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+                    <span>NFT Nexus</span>
+                </button>
+
+                <button class="nav-item" data-tab="orderbook">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                    <span>Orderbook</span>
+                </button>
+
+                <button class="nav-item" data-tab="contract-studio">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                    <span>Contract Studio</span>
+                </button>
+
+                <button class="nav-item" data-tab="analytics">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
+                    <span>Analytics</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="system-status-badge">
+                    <span class="dot green"></span>
+                    <span class="text">All Systems Operational</span>
+                </div>
             </div>
-            <div class="wallet-actions">
-                <button id="btn-deposit" class="action-btn">Deposit</button>
-                <button id="btn-withdraw" class="action-btn">Withdraw</button>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main id="main-content">
+            <!-- Global Metrics Bar -->
+            <div class="ticker-metrics-strip">
+                <div class="metric-card">
+                    <div class="metric-label">TOTAL PORTFOLIO VALUE</div>
+                    <div class="metric-value" id="val-networth">$1,284,950.42</div>
+                    <div class="metric-trend positive">+14.82% (24h)</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">24H DEX VOLUME</div>
+                    <div class="metric-value" id="val-volume">$842.15 M</div>
+                    <div class="metric-trend positive">+8.4%</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">TOTAL VALUE LOCKED</div>
+                    <div class="metric-value" id="val-tvl">$4.18 B</div>
+                    <div class="metric-trend positive">+3.2%</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">CROSS-CHAIN ROUTER LATENCY</div>
+                    <div class="metric-value" id="val-latency">12.4 ms</div>
+                    <div class="metric-trend neutral">OPTIMAL</div>
+                </div>
             </div>
-        </section>
 
-        <section class="recent-transactions card">
-            <h2 class="section-title">Recent Transactions</h2>
-            <table id="tx-table">
-                <thead>
-                    <tr>
-                        <th>Hash</th>
-                        <th>Type</th>
-                        <th>Amount</th>
-                        <th>Status</th>
-                        <th>Time</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr><td colspan="5" class="empty">Loading...</td></tr>
-                </tbody>
-            </table>
-        </section>
+            <!-- Tab Content Viewports -->
+            <div id="tab-container">
+                <!-- 1. DASHBOARD TAB -->
+                <section id="tab-dashboard" class="tab-pane active">
+                    <div class="dashboard-grid">
+                        <!-- Chart Section -->
+                        <div class="card chart-card flex-grow-2">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <h3>Portfolio Performance & Asset Index</h3>
+                                    <span class="sub-text">Real-time dynamic telemetry canvas</span>
+                                </div>
+                                <div class="chart-timeframe-selector">
+                                    <button class="tf-btn" data-tf="1H">1H</button>
+                                    <button class="tf-btn" data-tf="24H">24H</button>
+                                    <button class="tf-btn active" data-tf="7D">7D</button>
+                                    <button class="tf-btn" data-tf="1M">1M</button>
+                                    <button class="tf-btn" data-tf="1Y">1Y</button>
+                                </div>
+                            </div>
+                            <div class="card-body canvas-container">
+                                <canvas id="portfolio-chart-canvas" width="900" height="350"></canvas>
+                            </div>
+                        </div>
 
-        <section class="chart-section card">
-            <h2 class="section-title">Network Throughput</h2>
-            <canvas id="throughput-chart" width="800" height="400"></canvas>
-        </section>
-    </main>
+                        <!-- Rapid Swap Quick-Widget -->
+                        <div class="card widget-card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <h3>Instant Liquidity Swap</h3>
+                                </div>
+                                <span class="badge badge-purple">Zero-Slippage Engine</span>
+                            </div>
+                            <div class="card-body">
+                                <form id="quick-swap-form" onsubmit="return false;">
+                                    <div class="input-group">
+                                        <div class="input-header">
+                                            <label for="qs-pay-amount">You Pay</label>
+                                            <span class="balance-label">Balance: 14.52 ETH</span>
+                                        </div>
+                                        <div class="input-row">
+                                            <input type="number" id="qs-pay-amount" placeholder="0.00" value="1.0" step="0.01"/>
+                                            <select id="qs-pay-token" class="token-select">
+                                                <option value="ETH">ETH</option>
+                                                <option value="USDC">USDC</option>
+                                                <option value="SOL">SOL</option>
+                                                <option value="MAGNUM">OPUS</option>
+                                            </select>
+                                        </div>
+                                    </div>
 
-    <footer id="main-footer">
-        <p>© 2026 Magnum Opus. All rights reserved.</p>
-    </footer>
+                                    <div class="swap-divider">
+                                        <button type="button" class="swap-icon-btn" id="qs-reverse-btn" aria-label="Reverse Tokens">
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 16V4M7 4L3 8M7 4l4 4M17 8v12M17 20l4-4M17 20l-4-4"/></svg>
+                                        </button>
+                                    </div>
 
+                                    <div class="input-group">
+                                        <div class="input-header">
+                                            <label for="qs-receive-amount">You Receive (Est.)</label>
+                                            <span class="balance-label">Balance: 0.00 USDC</span>
+                                        </div>
+                                        <div class="input-row">
+                                            <input type="number" id="qs-receive-amount" placeholder="0.00" value="3482.50" readonly/>
+                                            <select id="qs-receive-token" class="token-select">
+                                                <option value="USDC">USDC</option>
+                                                <option value="ETH">ETH</option>
+                                                <option value="SOL">SOL</option>
+                                                <option value="MAGNUM">OPUS</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div class="swap-meta-list">
+                                        <div class="meta-row">
+                                            <span>Exchange Rate</span>
+                                            <span id="qs-rate">1 ETH = 3,482.50 USDC</span>
+                                        </div>
+                                        <div class="meta-row">
+                                            <span>Routing Fee</span>
+                                            <span class="accent-emerald">0.00% (Protocol Promo)</span>
+                                        </div>
+                                        <div class="meta-row">
+                                            <span>Max Slippage</span>
+                                            <span>0.10%</span>
+                                        </div>
+                                    </div>
+
+                                    <button type="button" id="qs-submit-btn" class="primary-btn block-btn glow-effect">
+                                        Execute Liquidity Trade
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <!-- Live Multi-Chain Activity Explorer Feed -->
+                        <div class="card full-width-card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <h3>Real-Time Multi-Chain Transaction Stream</h3>
+                                    <span class="sub-text">Live RPC & WebSocket block telemetry engine</span>
+                                </div>
+                                <div class="card-actions">
+                                    <span class="status-indicator-badge pulse-emerald">Live Socket Active</span>
+                                </div>
+                            </div>
+                            <div class="card-body table-responsive">
+                                <table class="data-table" id="tx-stream-table">
+                                    <thead>
+                                        <tr>
+                                            <th>TX Hash</th>
+                                            <th>Chain</th>
+                                            <th>Type</th>
+                                            <th>From / To</th>
+                                            <th>Value</th>
+                                            <th>Gas Spent</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="tx-stream-tbody">
+                                        <!-- Dynamically generated rows via app.js -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 2. DEX SWAP TAB -->
+                <section id="tab-dex-swap" class="tab-pane">
+                    <div class="dex-layout">
+                        <div class="card swap-container-card">
+                            <div class="card-header">
+                                <h3>Magnum Aggregated DEX Router</h3>
+                                <div class="gear-btn-wrapper">
+                                    <button id="dex-settings-btn" class="icon-btn" aria-label="Slippage Settings">
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div class="route-visualization" id="dex-route-vis">
+                                    <div class="route-node">Input (ETH)</div>
+                                    <div class="route-arrow">&rarr; Uniswap V3 (45%) &rarr;</div>
+                                    <div class="route-arrow">&rarr; Curve LP (55%) &rarr;</div>
+                                    <div class="route-node">Output (USDC)</div>
+                                </div>
+                                <div class="action-box">
+                                    <button class="primary-btn block-btn glow-effect Large-btn" id="execute-dex-swap">Swap Assets Now</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 3. YIELD VAULTS TAB -->
+                <section id="tab-yield-vaults" class="tab-pane">
+                    <div class="vaults-header-title">
+                        <h2>DeFi Yield Aggregator & Liquidity Pools</h2>
+                        <p>Automated market maker strategy vaults powered by high-frequency smart contracts.</p>
+                    </div>
+                    <div class="vaults-grid" id="vaults-grid-container">
+                        <!-- Vault Cards dynamically injected or static template -->
+                        <div class="card vault-card">
+                            <div class="vault-badge">HYPER-YIELD</div>
+                            <h3>ETH / OPUS Dual Staking</h3>
+                            <div class="vault-apr">142.8% <span>APY</span></div>
+                            <div class="vault-stats">
+                                <div><span>TVL:</span> $84.2M</div>
+                                <div><span>Lock:</span> Flexible</div>
+                            </div>
+                            <button class="primary-btn block-btn margin-top-15">Deposit Funds</button>
+                        </div>
+
+                        <div class="card vault-card">
+                            <div class="vault-badge badge-blue">STABLECOIN</div>
+                            <h3>USDC / USDT Delta-Neutral</h3>
+                            <div class="vault-apr">18.4% <span>APY</span></div>
+                            <div class="vault-stats">
+                                <div><span>TVL:</span> $310.5M</div>
+                                <div><span>Lock:</span> 7 Days</div>
+                            </div>
+                            <button class="primary-btn block-btn margin-top-15">Deposit Funds</button>
+                        </div>
+
+                        <div class="card vault-card">
+                            <div class="vault-badge badge-purple">SOLANA VAULT</div>
+                            <h3>SOL Liquid Staking Index</h3>
+                            <div class="vault-apr">32.1% <span>APY</span></div>
+                            <div class="vault-stats">
+                                <div><span>TVL:</span> $120.0M</div>
+                                <div><span>Lock:</span> Flexible</div>
+                            </div>
+                            <button class="primary-btn block-btn margin-top-15">Deposit Funds</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 4. NFT NEXUS TAB -->
+                <section id="tab-nft-nexus" class="tab-pane">
+                    <div class="nft-header-bar">
+                        <h2>NFT Nexus Vault & Dynamic Metadata Inspector</h2>
+                        <div class="filter-pills">
+                            <button class="pill-btn active">All Collections</button>
+                            <button class="pill-btn">Cyber Genesis</button>
+                            <button class="pill-btn">Quantum Relics</button>
+                            <button class="pill-btn">On-Chain Genomes</button>
+                        </div>
+                    </div>
+                    <div class="nft-grid" id="nft-gallery-grid">
+                        <!-- Cards added dynamically -->
+                    </div>
+                </section>
+
+                <!-- 5. ORDERBOOK TAB -->
+                <section id="tab-orderbook" class="tab-pane">
+                    <div class="orderbook-layout">
+                        <div class="card orderbook-card">
+                            <div class="card-header">
+                                <h3>C++ Computational Core Live Orderbook (ETH/USDT)</h3>
+                            </div>
+                            <div class="card-body flex-row gap-20">
+                                <div class="ob-side ob-asks">
+                                    <div class="ob-title text-rose">ASKS (SELL ORDERS)</div>
+                                    <div class="ob-list" id="ob-asks-list"></div>
+                                </div>
+                                <div class="ob-side ob-bids">
+                                    <div class="ob-title text-emerald">BIDS (BUY ORDERS)</div>
+                                    <div class="ob-list" id="ob-bids-list"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 6. CONTRACT STUDIO TAB -->
+                <section id="tab-contract-studio" class="tab-pane">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Solidity & Anchor On-Chain Program Execution Studio</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="studio-form-grid">
+                                <div class="form-group">
+                                    <label for="contract-address-input">Contract Address / Program ID</label>
+                                    <input type="text" id="contract-address-input" class="styled-input" value="0x71C7656EC7ab88b098defB751B7401B5f6d8976F"/>
+                                </div>
+                                <div class="form-group">
+                                    <label for="contract-method-select">ABI Method</label>
+                                    <select id="contract-method-select" class="styled-select block-select">
+                                        <option value="stakeTokens(uint256)">stakeTokens(uint256 amount)</option>
+                                        <option value="claimRewards()">claimRewards()</option>
+                                        <option value="swapExactTokensForTokens()">swapExactTokensForTokens(...)</option>
+                                    </select>
+                                </div>
+                                <button id="execute-contract-method-btn" class="primary-btn glow-effect margin-top-10">
+                                    Execute Method
+                                </button>
+                            </div>
+                            <div class="console-output-box margin-top-20" id="studio-console">
+                                <div class="console-line">[SYSTEM]: Magnum Opus Contract Studio Ready.</div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 7. ANALYTICS TAB -->
+                <section id="tab-analytics" class="tab-pane">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Multi-Language Platform Microservice Telemetry</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="analytics-metrics-grid">
+                                <div class="mini-stat-card">
+                                    <div class="stat-title">Go Relay Microservice</div>
+                                    <div class="stat-value text-cyan">99.99% Up</div>
+                                </div>
+                                <div class="mini-stat-card">
+                                    <div class="stat-title">.NET Backend Processor</div>
+                                    <div class="stat-value text-emerald">1.2ms Queue</div>
+                                </div>
+                                <div class="mini-stat-card">
+                                    <div class="stat-title">C++ Hashing Engine</div>
+                                    <div class="stat-value text-purple">12.8M Hash/s</div>
+                                </div>
+                                <div class="mini-stat-card">
+                                    <div class="stat-title">Ruby Oracle Sync</div>
+                                    <div class="stat-value text-amber">Active</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <!-- Wallet Connect Modal -->
+    <div class="modal-overlay" id="wallet-modal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Connect Web3 Wallet</h3>
+                <button class="close-modal-btn" id="close-wallet-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="wallet-options-list">
+                    <button class="wallet-option-btn" data-wallet="metamask">
+                        <span class="wallet-icon">&#129418;</span>
+                        <span class="wallet-name">MetaMask</span>
+                    </button>
+                    <button class="wallet-option-btn" data-wallet="phantom">
+                        <span class="wallet-icon">&#128123;</span>
+                        <span class="wallet-name">Phantom (Solana)</span>
+                    </button>
+                    <button class="wallet-option-btn" data-wallet="walletconnect">
+                        <span class="wallet-icon">&#128279;</span>
+                        <span class="wallet-name">WalletConnect</span>
+                    </button>
+                    <button class="wallet-option-btn" data-wallet="coinbase">
+                        <span class="wallet-icon">&#128309;</span>
+                        <span class="wallet-name">Coinbase Wallet</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Platform Settings Modal -->
+    <div class="modal-overlay" id="settings-modal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Platform Settings</h3>
+                <button class="close-modal-btn" id="close-settings-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="setting-row">
+                    <span>Synthesizer Audio Feedback</span>
+                    <input type="checkbox" id="setting-audio-toggle" checked/>
+                </div>
+                <div class="setting-row">
+                    <span>High Frequency Chart Refresh</span>
+                    <input type="checkbox" id="setting-chart-refresh" checked/>
+                </div>
+                <div class="setting-row">
+                    <span>Custom RPC Endpoint</span>
+                    <input type="text" class="styled-input input-sm" value="https://eth-mainnet.alchemyapi.io/v2/demo"/>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Core Interactive Application Script -->
     <script src="app.js"></script>
 </body>
 </html>
