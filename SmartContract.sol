@@ -203,36 +203,18 @@ interface IERC721Metadata is IERC721 {
 }
 
 // -----------------------------------------------------------------------------
-// ERC20 Implementation – MagnumToken
+// Core ERC20 Implementation – Magnum Token
 // -----------------------------------------------------------------------------
-contract MagnumToken is Context, IERC20, IERC20Metadata, Ownable, Pausable, ReentrancyGuard {
-    string private _name;
-    string private _symbol;
+contract MagnumToken is Context, Ownable, Pausable, ReentrancyGuard, IERC20, IERC20Metadata {
+    string private _name = "Magnum Token";
+    string private _symbol = "MAG";
     uint8 private constant _decimals = 18;
-
     uint256 private _totalSupply;
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
 
-    // EIP-2612 Permit state
-    bytes32 public immutable DOMAIN_SEPARATOR;
-    // keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)")
-    bytes32 public constant PERMIT_TYPEHASH = 0x6e71edae12b1d5d4c0c2c5e5c5e5c5e5c5e5c5e5c5e5c5e5c5e5c5e5c5e5c5e5;
-    mapping(address => uint256) public nonces;
-
-    constructor(address initialOwner, string memory tokenName, string memory tokenSymbol, uint256 initialSupply) Ownable(initialOwner) {
-        _name = tokenName;
-        _symbol = tokenSymbol;
+    constructor(address initialOwner, uint256 initialSupply) Ownable(initialOwner) {
         _mint(initialOwner, initialSupply);
-        uint256 chainId;
-        assembly { chainId := chainid() }
-        DOMAIN_SEPARATOR = keccak256(abi.encode(
-            keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-            keccak256(bytes(tokenName)),
-            keccak256(bytes("1")),
-            chainId,
-            address(this)
-        ));
     }
 
     // IERC20Metadata
@@ -256,65 +238,49 @@ contract MagnumToken is Context, IERC20, IERC20Metadata, Ownable, Pausable, Reen
     }
     function transferFrom(address sender, address recipient, uint256 amount) external override whenNotPaused nonReentrant returns (bool) {
         uint256 currentAllowance = _allowances[sender][_msgSender()];
-        if (currentAllowance < amount) revert InsufficientAllowance(currentAllowance, amount);
+        if (currentAllowance < amount) revert InsufficientAllowance({available: currentAllowance, required: amount});
         _transfer(sender, recipient, amount);
         _approve(sender, _msgSender(), currentAllowance - amount);
         return true;
     }
 
-    // Optional: increase/decrease allowance helpers
-    function increaseAllowance(address spender, uint256 addedValue) external whenNotPaused returns (bool) {
-        _approve(_msgSender(), spender, _allowances[_msgSender()][spender] + addedValue);
-        return true;
-    }
-    function decreaseAllowance(address spender, uint256 subtractedValue) external whenNotPaused returns (bool) {
-        uint256 current = _allowances[_msgSender()][spender];
-        require(current >= subtractedValue, "ERC20: decreased allowance below zero");
-        _approve(_msgSender(), spender, current - subtractedValue);
-        return true;
-    }
-
-    // EIP-2612 permit
-    function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external {
-        require(deadline >= block.timestamp, ExpiredDeadline());
-        bytes32 structHash = keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, value, nonces[owner]++, deadline));
-        bytes32 hash = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
-        address signer = ecrecover(hash, v, r, s);
-        require(signer == owner && signer != address(0), InvalidSignature());
-        _approve(owner, spender, value);
-    }
-
-    // Internal mechanics
+    // Internal helpers
     function _transfer(address sender, address recipient, uint256 amount) internal {
-        if (sender == address(0) || recipient == address(0)) revert ZeroAddress();
-        if (amount == 0) revert ZeroAmount();
+        if (sender == address(0)) revert ZeroAddress();
+        if (recipient == address(0)) revert ZeroAddress();
         uint256 senderBal = _balances[sender];
-        if (senderBal < amount) revert InsufficientBalance(senderBal, amount);
-        _beforeTokenTransfer(sender, recipient, amount);
-        _balances[sender] = senderBal - amount;
-        _balances[recipient] += amount;
+        if (senderBal < amount) revert InsufficientBalance({available: senderBal, required: amount});
+        unchecked {
+            _balances[sender] = senderBal - amount;
+            _balances[recipient] += amount;
+        }
         emit Transfer(sender, recipient, amount);
-        _afterTokenTransfer(sender, recipient, amount);
     }
 
     function _mint(address account, uint256 amount) internal {
         if (account == address(0)) revert ZeroAddress();
-        _beforeTokenTransfer(address(0), account, amount);
         _totalSupply += amount;
         _balances[account] += amount;
         emit Transfer(address(0), account, amount);
-        _afterTokenTransfer(address(0), account, amount);
+    }
+
+    function mint(address to, uint256 amount) external onlyOwner whenNotPaused {
+        _mint(to, amount);
     }
 
     function _burn(address account, uint256 amount) internal {
         if (account == address(0)) revert ZeroAddress();
         uint256 accountBal = _balances[account];
-        if (accountBal < amount) revert InsufficientBalance(accountBal, amount);
-        _beforeTokenTransfer(account, address(0), amount);
-        _balances[account] = accountBal - amount;
-        _totalSupply -= amount;
+        if (accountBal < amount) revert InsufficientBalance({available: accountBal, required: amount});
+        unchecked {
+            _balances[account] = accountBal - amount;
+            _totalSupply -= amount;
+        }
         emit Transfer(account, address(0), amount);
-        _afterTokenTransfer(account, address(0), amount);
+    }
+
+    function burn(uint256 amount) external whenNotPaused {
+        _burn(_msgSender(), amount);
     }
 
     function _approve(address owner, address spender, uint256 amount) internal {
@@ -323,32 +289,32 @@ contract MagnumToken is Context, IERC20, IERC20Metadata, Ownable, Pausable, Reen
         emit Approval(owner, spender, amount);
     }
 
-    function _beforeTokenTransfer(address from, address to, uint256 amount) internal virtual whenNotPaused {}
-    function _afterTokenTransfer(address from, address to, uint256 amount) internal virtual {}
+    // Administrative controls
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
 }
 
 // -----------------------------------------------------------------------------
-// ERC721 Implementation – MagnumNFT
+// Simple ERC721 Implementation – Magnum NFT
 // -----------------------------------------------------------------------------
-contract MagnumNFT is Context, IERC721, IERC721Metadata, Ownable, Pausable {
-    string private _name;
-    string private _symbol;
+contract MagnumNFT is Context, Ownable, Pausable, ReentrancyGuard, IERC721Metadata {
+    string private _name = "Magnum NFT";
+    string private _symbol = "MAGNFT";
     uint256 private _tokenIdCounter;
+    string private _baseTokenURI;
 
-    // tokenId => owner
     mapping(uint256 => address) private _owners;
-    // owner => balance
     mapping(address => uint256) private _balances;
-    // tokenId => approved address
     mapping(uint256 => address) private _tokenApprovals;
-    // owner => operator => approved
     mapping(address => mapping(address => bool)) private _operatorApprovals;
-    // tokenId => tokenURI
-    mapping(uint256 => string) private _tokenURIs;
 
-    constructor(address initialOwner, string memory name_, string memory symbol_) Ownable(initialOwner) {
-        _name = name_;
-        _symbol = symbol_;
+    constructor(address initialOwner, string memory baseURI) Ownable(initialOwner) {
+        _baseTokenURI = baseURI;
     }
 
     // IERC721Metadata
@@ -356,7 +322,7 @@ contract MagnumNFT is Context, IERC721, IERC721Metadata, Ownable, Pausable {
     function symbol() external view override returns (string memory) { return _symbol; }
     function tokenURI(uint256 tokenId) external view override returns (string memory) {
         if (!_exists(tokenId)) revert TokenDoesNotExist();
-        return _tokenURIs[tokenId];
+        return string(abi.encodePacked(_baseTokenURI, _toString(tokenId)));
     }
 
     // IERC721
@@ -371,9 +337,9 @@ contract MagnumNFT is Context, IERC721, IERC721Metadata, Ownable, Pausable {
         return owner;
     }
 
-    function approve(address to, uint256 tokenId) external override whenNotPaused {
+    function approve(address to, uint256 tokenId) external override whenNotPaused nonReentrant {
         address owner = ownerOf(tokenId);
-        if (to == owner) revert InvalidRoyaltyPercentage(); // reuse error for brevity
+        if (to == owner) revert Unauthorized();
         if (_msgSender() != owner && !isApprovedForAll(owner, _msgSender())) revert Unauthorized();
         _tokenApprovals[tokenId] = to;
         emit Approval(owner, to, tokenId);
@@ -385,7 +351,7 @@ contract MagnumNFT is Context, IERC721, IERC721Metadata, Ownable, Pausable {
     }
 
     function setApprovalForAll(address operator, bool approved) external override whenNotPaused {
-        if (operator == _msgSender()) revert InvalidRoyaltyPercentage();
+        if (operator == _msgSender()) revert Unauthorized();
         _operatorApprovals[_msgSender()][operator] = approved;
         emit ApprovalForAll(_msgSender(), operator, approved);
     }
@@ -394,21 +360,22 @@ contract MagnumNFT is Context, IERC721, IERC721Metadata, Ownable, Pausable {
         return _operatorApprovals[owner][operator];
     }
 
-    function transferFrom(address from, address to, uint256 tokenId) public override whenNotPaused {
+    function transferFrom(address from, address to, uint256 tokenId) public override whenNotPaused nonReentrant {
         if (!_isApprovedOrOwner(_msgSender(), tokenId)) revert Unauthorized();
         _transfer(from, to, tokenId);
     }
 
-    function safeTransferFrom(address from, address to, uint256 tokenId) external override whenNotPaused {
+    function safeTransferFrom(address from, address to, uint256 tokenId) external override {
         safeTransferFrom(from, to, tokenId, "");
     }
 
-    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory _data) public override whenNotPaused {
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory _data) public override whenNotPaused nonReentrant {
         if (!_isApprovedOrOwner(_msgSender(), tokenId)) revert Unauthorized();
-        _safeTransfer(from, to, tokenId, _data);
+        _transfer(from, to, tokenId);
+        require(_checkOnERC721Received(from, to, tokenId, _data), "ERC721: transfer to non ERC721Receiver implementer");
     }
 
-    // Internal helpers
+    // Internal functions
     function _exists(uint256 tokenId) internal view returns (bool) {
         return _owners[tokenId] != address(0);
     }
@@ -418,40 +385,35 @@ contract MagnumNFT is Context, IERC721, IERC721Metadata, Ownable, Pausable {
         return (spender == owner || getApproved(tokenId) == spender || isApprovedForAll(owner, spender));
     }
 
-    function _safeTransfer(address from, address to, uint256 tokenId, bytes memory _data) internal {
-        _transfer(from, to, tokenId);
-        require(_checkOnERC721Received(from, to, tokenId, _data), "ERC721: transfer to non ERC721Receiver implementer");
+    function _safeMint(address to) internal {
+        _mint(to);
+        require(_checkOnERC721Received(address(0), to, _tokenIdCounter, ""), "ERC721: transfer to non ERC721Receiver implementer");
+    }
+
+    function mint(address to) external onlyOwner whenNotPaused nonReentrant {
+        _mint(to);
+    }
+
+    function _mint(address to) internal {
+        if (to == address(0)) revert ZeroAddress();
+        _tokenIdCounter += 1;
+        uint256 tokenId = _tokenIdCounter;
+        _owners[tokenId] = to;
+        _balances[to] += 1;
+        emit Transfer(address(0), to, tokenId);
     }
 
     function _transfer(address from, address to, uint256 tokenId) internal {
-        if (from != ownerOf(tokenId)) revert Unauthorized();
+        if (ownerOf(tokenId) != from) revert Unauthorized();
         if (to == address(0)) revert ZeroAddress();
-        // clear approvals
+        // Clear approvals
         delete _tokenApprovals[tokenId];
+        // Update balances
         _balances[from] -= 1;
         _balances[to] += 1;
+        // Transfer ownership
         _owners[tokenId] = to;
         emit Transfer(from, to, tokenId);
-    }
-
-    function _mint(address to, string memory uri) internal returns (uint256) {
-        if (to == address(0)) revert ZeroAddress();
-        uint256 tokenId = ++_tokenIdCounter;
-        _owners[tokenId] = to;
-        _balances[to] += 1;
-        _tokenURIs[tokenId] = uri;
-        emit Transfer(address(0), to, tokenId);
-        return tokenId;
-    }
-
-    function _burn(uint256 tokenId) internal {
-        address owner = ownerOf(tokenId);
-        // clear approvals
-        delete _tokenApprovals[tokenId];
-        _balances[owner] -= 1;
-        delete _owners[tokenId];
-        delete _tokenURIs[tokenId];
-        emit Transfer(owner, address(0), tokenId);
     }
 
     function _checkOnERC721Received(address from, address to, uint256 tokenId, bytes memory _data) private returns (bool) {
@@ -459,108 +421,42 @@ contract MagnumNFT is Context, IERC721, IERC721Metadata, Ownable, Pausable {
             return true;
         }
         // solhint-disable-next-line avoid-low-level-calls
-        (bool success, bytes memory returndata) = to.call(abi.encodeWithSignature(
-            "onERC721Received(address,address,uint256,bytes)",
-            _msgSender(),
-            from,
-            tokenId,
-            _data
+        (bool success, bytes memory returndata) = to.call(abi.encodeWithSelector(
+            bytes4(keccak256("onERC721Received(address,address,uint256,bytes)")),
+            _msgSender(), from, tokenId, _data
         ));
         if (!success) return false;
         bytes4 retval = abi.decode(returndata, (bytes4));
-        return (retval == bytes4(keccak256("onERC721Received(address,address,uint256,bytes)")));
-    }
-}
-
-// -----------------------------------------------------------------------------
-// Simple Constant-Product AMM – MagnumLiquidityPool
-// -----------------------------------------------------------------------------
-contract MagnumLiquidityPool is Context, Ownable, Pausable, ReentrancyGuard {
-    IERC20 public immutable tokenA;
-    IERC20 public immutable tokenB;
-
-    uint256 public reserveA;
-    uint256 public reserveB;
-    uint256 public totalLiquidity;
-    mapping(address => uint256) public liquidityOf;
-
-    uint256 public constant FEE_NUMERATOR = 3; // 0.3% fee
-    uint256 public constant FEE_DENOMINATOR = 1000;
-
-    event LiquidityAdded(address indexed provider, uint256 amountA, uint256 amountB, uint256 liquidityMinted);
-    event LiquidityRemoved(address indexed provider, uint256 amountA, uint256 amountB, uint256 liquidityBurned);
-    event Swapped(address indexed trader, address tokenIn, uint256 amountIn, address tokenOut, uint256 amountOut);
-
-    constructor(address _owner, address _tokenA, address _tokenB) Ownable(_owner) {
-        if (_tokenA == _tokenB) revert IdenticalAddresses();
-        tokenA = IERC20(_tokenA);
-        tokenB = IERC20(_tokenB);
+        return retval == bytes4(keccak256("onERC721Received(address,address,uint256,bytes)"));
     }
 
-    // Add liquidity – provider must approve token transfers beforehand
-    function addLiquidity(uint256 amountA, uint256 amountB) external whenNotPaused nonReentrant returns (uint256 liquidityMinted) {
-        if (amountA == 0 || amountB == 0) revert ZeroAmount();
-        // Transfer tokens to pool
-        tokenA.transferFrom(_msgSender(), address(this), amountA);
-        tokenB.transferFrom(_msgSender(), address(this), amountB);
-        uint256 _totalLiquidity = totalLiquidity;
-        if (_totalLiquidity == 0) {
-            liquidityMinted = MagnumMath.sqrt(amountA * amountB);
-        } else {
-            liquidityMinted = MagnumMath.min((amountA * _totalLiquidity) / reserveA, (amountB * _totalLiquidity) / reserveB);
+    // Utility to convert uint256 to string
+    function _toString(uint256 value) internal pure returns (string memory) {
+        // Inspired by OraclizeAPI's implementation - MIT licence
+        if (value == 0) {
+            return "0";
         }
-        if (liquidityMinted == 0) revert ZeroAmount();
-        liquidityOf[_msgSender()] += liquidityMinted;
-        totalLiquidity += liquidityMinted;
-        _updateReserves();
-        emit LiquidityAdded(_msgSender(), amountA, amountB, liquidityMinted);
-    }
-
-    // Remove liquidity – burns LP tokens and returns underlying assets
-    function removeLiquidity(uint256 liquidity) external whenNotPaused nonReentrant returns (uint256 amountA, uint256 amountB) {
-        uint256 providerLiquidity = liquidityOf[_msgSender()];
-        if (liquidity == 0 || liquidity > providerLiquidity) revert InsufficientBalance(providerLiquidity, liquidity);
-        amountA = (liquidity * reserveA) / totalLiquidity;
-        amountB = (liquidity * reserveB) / totalLiquidity;
-        if (amountA == 0 || amountB == 0) revert ZeroAmount();
-        liquidityOf[_msgSender()] = providerLiquidity - liquidity;
-        totalLiquidity -= liquidity;
-        tokenA.transfer(_msgSender(), amountA);
-        tokenB.transfer(_msgSender(), amountB);
-        _updateReserves();
-        emit LiquidityRemoved(_msgSender(), amountA, amountB, liquidity);
-    }
-
-    // Swap – tokenIn can be tokenA or tokenB
-    function swap(address tokenIn, uint256 amountIn, uint256 minAmountOut) external whenNotPaused nonReentrant returns (uint256 amountOut) {
-        if (amountIn == 0) revert ZeroAmount();
-        bool isAtoB;
-        if (tokenIn == address(tokenA)) {
-            isAtoB = true;
-        } else if (tokenIn == address(tokenB)) {
-            isAtoB = false;
-        } else {
-            revert IdenticalAddresses();
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
         }
-        IERC20 inToken = isAtoB ? tokenA : tokenB;
-        IERC20 outToken = isAtoB ? tokenB : tokenA;
-        inToken.transferFrom(_msgSender(), address(this), amountIn);
-        // Apply fee
-        uint256 amountInWithFee = amountIn * (FEE_DENOMINATOR - FEE_NUMERATOR) / FEE_DENOMINATOR;
-        // Constant product formula
-        uint256 reserveIn = isAtoB ? reserveA : reserveB;
-        uint256 reserveOut = isAtoB ? reserveB : reserveA;
-        uint256 numerator = amountInWithFee * reserveOut;
-        uint256 denominator = reserveIn + amountInWithFee;
-        amountOut = numerator / denominator;
-        if (amountOut < minAmountOut) revert InsufficientOutputAmount(amountOut, minAmountOut);
-        outToken.transfer(_msgSender(), amountOut);
-        _updateReserves();
-        emit Swapped(_msgSender(), tokenIn, amountIn, address(outToken), amountOut);
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
     }
 
-    function _updateReserves() internal {
-        reserveA = tokenA.balanceOf(address(this));
-        reserveB = tokenB.balanceOf(address(this));
+    // Administrative controls
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
     }
 }
