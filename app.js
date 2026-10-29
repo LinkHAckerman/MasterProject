@@ -128,222 +128,386 @@
 
     /**
      * Play a short tone for UI feedback.
-     * @param {number} freq Frequency in Hz
-     * @param {string} type Oscillator type (sine, square, sawtooth, triangle)
-     * @param {number} duration Seconds
-     * @param {number} gainVal Linear gain (0‑1)
+     * @param {number} frequency Hz
+     * @param {number} duration ms
      */
-    function playAudioTone(freq, type = 'sine', duration = 0.15, gainVal = 0.05) {
+    function playTone(frequency, duration) {
         if (!state.settings.enableSounds) return;
-        try {
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.type = type;
-            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-            gain.gain.setValueAtTime(gainVal, audioCtx.currentTime);
-            // Exponential fade‑out to avoid clicks
-            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(audioCtx.currentTime + duration);
-        } catch (e) {
-            console.error('Audio tone error:', e);
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(frequency, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.001, audioCtx.currentTime);
+        oscillator.connect(gain).connect(audioCtx.destination);
+        oscillator.start();
+        gain.gain.exponentialRampToValueAtTime(0.2, audioCtx.currentTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration / 1000);
+        oscillator.stop(audioCtx.currentTime + duration / 1000 + 0.02);
+    }
+
+    // ---------------------------------------------------------------------
+    // UI Helpers
+    // ---------------------------------------------------------------------
+    function formatNumber(num, decimals = 2) {
+        return Number(num).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    }
+
+    function addNotification(message, type = 'info') {
+        const timestamp = new Date().toISOString();
+        state.notifications.unshift({ message, type, timestamp });
+        if (DOM.notificationList) {
+            const li = document.createElement('li');
+            li.className = `notification ${type}`;
+            li.textContent = `[${new Date(timestamp).toLocaleTimeString()}] ${message}`;
+            DOM.notificationList.prepend(li);
+        }
+        playTone(440, 100);
+    }
+
+    // ---------------------------------------------------------------------
+    // DOM Initialization
+    // ---------------------------------------------------------------------
+    function initDOM() {
+        DOM = {
+            connectBtn: document.getElementById('connect-wallet'),
+            addressSpan: document.getElementById('wallet-address'),
+            balanceList: document.getElementById('wallet-balances'),
+            marketPrice: document.getElementById('market-price'),
+            marketChange: document.getElementById('market-change'),
+            marketVolume: document.getElementById('market-volume'),
+            orderBookBids: document.getElementById('orderbook-bids'),
+            orderBookAsks: document.getElementById('orderbook-asks'),
+            swapForm: document.getElementById('swap-form'),
+            stakeForm: document.getElementById('stake-form'),
+            txList: document.getElementById('tx-list'),
+            portfolioTable: document.getElementById('portfolio-table'),
+            stakingInfo: document.getElementById('staking-info'),
+            notificationList: document.getElementById('notification-list'),
+            themeToggle: document.getElementById('theme-toggle')
+        };
+
+        // Attach event listeners
+        if (DOM.connectBtn) DOM.connectBtn.addEventListener('click', connectWallet);
+        if (DOM.swapForm) DOM.swapForm.addEventListener('submit', handleSwap);
+        if (DOM.stakeForm) DOM.stakeForm.addEventListener('submit', handleStake);
+        if (DOM.themeToggle) DOM.themeToggle.addEventListener('click', toggleTheme);
+    }
+
+    // ---------------------------------------------------------------------
+    // Wallet Interaction (mocked for demo)
+    // ---------------------------------------------------------------------
+    function connectWallet() {
+        // In a real app, this would invoke window.ethereum.request({ method: 'eth_requestAccounts' })
+        state.wallet.connected = true;
+        state.wallet.address = '0x' + Math.random().toString(16).substr(2, 40);
+        updateWalletUI();
+        addNotification('Wallet connected: ' + state.wallet.address, 'success');
+        playTone(660, 150);
+    }
+
+    function updateWalletUI() {
+        if (!DOM.addressSpan) return;
+        DOM.addressSpan.textContent = state.wallet.connected ? state.wallet.address : 'Not Connected';
+        // Update token balances list
+        if (DOM.balanceList) {
+            DOM.balanceList.innerHTML = '';
+            state.wallet.tokens.forEach(tok => {
+                const li = document.createElement('li');
+                li.textContent = `${tok.symbol}: ${formatNumber(tok.balance, 4)} (${formatNumber(tok.price)} ${state.settings.currency})`;
+                DOM.balanceList.appendChild(li);
+            });
         }
     }
 
     // ---------------------------------------------------------------------
-    // UI Rendering Helpers
-    // ---------------------------------------------------------------------
-    function renderWallet() {
-        if (!DOM.walletAddress) return;
-        DOM.walletAddress.textContent = state.wallet.connected ? state.wallet.address : 'Not Connected';
-        DOM.walletBalance.textContent = state.wallet.connected ? `${state.wallet.balanceEth.toFixed(4)} ETH` : '--';
-    }
-
-    function renderMarket() {
-        if (!DOM.marketPair) return;
-        const m = state.market;
-        DOM.marketPair.textContent = m.selectedPair;
-        DOM.marketPrice.textContent = `$${m.price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-        DOM.marketChange.textContent = `${m.change24h.toFixed(2)}%`;
-        DOM.marketChange.className = m.change24h >= 0 ? 'positive' : 'negative';
-        DOM.marketVolume.textContent = `${(m.volume24h / 1e6).toFixed(2)}M`; // display in millions
-    }
-
-    function renderOrderBook() {
-        if (!DOM.orderBookBids || !DOM.orderBookAsks) return;
-        const { bids, asks, maxDepth } = state.orderBook;
-        const renderSide = (container, rows) => {
-            container.innerHTML = '';
-            rows.slice(0, maxDepth).forEach(r => {
-                const div = document.createElement('div');
-                div.className = 'order-row';
-                div.textContent = `${r.price.toFixed(2)} @ ${r.amount}`;
-                container.appendChild(div);
-            });
-        };
-        renderSide(DOM.orderBookBids, bids);
-        renderSide(DOM.orderBookAsks, asks);
-    }
-
-    function renderPortfolio() {
-        if (!DOM.portfolioTable) return;
-        const tbody = DOM.portfolioTable.querySelector('tbody');
-        tbody.innerHTML = '';
-        state.portfolio.forEach(p => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td>${p.symbol}</td>
-                <td>${p.balance.toLocaleString(undefined, {maximumFractionDigits: 4})}</td>
-                <td>$${p.price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                <td>$${p.value.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                <td>${p.allocation.toFixed(1)}%</td>
-            `;
-            tbody.appendChild(tr);
-        });
-    }
-
-    function renderStaking() {
-        if (!DOM.stakingInfo) return;
-        const s = state.staking;
-        DOM.stakingInfo.textContent = `Staked: ${s.stakedOpus.toLocaleString()} OPUS | APY: ${s.rewardRateApy}% | Pending: ${s.pendingRewards.toFixed(2)} OPUS`;
-    }
-
-    function renderNotifications() {
-        if (!DOM.notificationList) return;
-        const list = DOM.notificationList;
-        list.innerHTML = '';
-        state.notifications.slice(-5).reverse().forEach(n => {
-            const li = document.createElement('li');
-            li.textContent = n;
-            list.appendChild(li);
-        });
-    }
-
-    function renderSettings() {
-        if (!DOM.themeToggle) return;
-        document.body.dataset.theme = state.settings.theme;
-        DOM.themeToggle.checked = state.settings.theme === 'dark';
-        DOM.slippageInput.value = state.settings.slippageTolerance;
-    }
-
-    // ---------------------------------------------------------------------
-    // Mock Data Updaters – in a real product these would call APIs
+    // Market Data Simulation
     // ---------------------------------------------------------------------
     function updateMarketData() {
-        const pair = state.market.selectedPair;
-        const rate = PAIR_RATES[pair];
-        // Simulate small random walk
-        const delta = (Math.random() - 0.5) * rate.price * 0.005; // ±0.25%
-        rate.price = Math.max(rate.price + delta, 0.01);
-        state.market.price = parseFloat(rate.price.toFixed(rate.decimals));
-        // Simulate 24h change based on price drift
-        state.market.change24h = ((rate.price - PAIR_RATES[pair].price) / PAIR_RATES[pair].price) * 100;
-        state.market.volume24h = Math.floor(Math.random() * 5e9) + 1e9; // 1‑5B
-        renderMarket();
-        // Play a subtle tick sound on price update
-        playAudioTone(440, 'sine', 0.07, 0.02);
-    }
-
-    function updateGasData() {
-        const base = 12;
-        const jitter = Math.random() * 6; // 0‑6 Gwei
-        state.gas.slow = Math.round(base + jitter * 0.5);
-        state.gas.standard = Math.round(base + jitter);
-        state.gas.fast = Math.round(base + jitter * 1.5);
-        state.gas.current = state.gas.standard;
-        if (DOM.gasCurrent) {
-            DOM.gasCurrent.textContent = `${state.gas.current} ${state.gas.unit}`;
+        const pair = PAIR_RATES[state.market.selectedPair];
+        // Simulate price drift within ±1%
+        const drift = (Math.random() - 0.5) * 0.02; // ±1%
+        const newPrice = pair.price * (1 + drift);
+        state.market.price = parseFloat(newPrice.toFixed(pair.decimals));
+        // Simulate 24h change, volume, high/low
+        state.market.change24h = parseFloat(((Math.random() - 0.5) * 10).toFixed(2));
+        state.market.volume24h = Math.round(state.market.volume24h * (0.95 + Math.random() * 0.1));
+        state.market.high24h = Math.max(state.market.high24h, state.market.price);
+        state.market.low24h = Math.min(state.market.low24h, state.market.price);
+        // Mock chart data (push last 30 points)
+        const now = new Date();
+        state.market.chartData.labels.push(now.toLocaleTimeString());
+        state.market.chartData.prices.push(state.market.price);
+        if (state.market.chartData.labels.length > 30) {
+            state.market.chartData.labels.shift();
+            state.market.chartData.prices.shift();
         }
+        renderMarketUI();
     }
 
+    function renderMarketUI() {
+        if (DOM.marketPrice) DOM.marketPrice.textContent = formatNumber(state.market.price, PAIR_RATES[state.market.selectedPair].decimals);
+        if (DOM.marketChange) {
+            const change = state.market.change24h;
+            DOM.marketChange.textContent = (change >= 0 ? '+' : '') + formatNumber(change, 2) + '%';
+            DOM.marketChange.style.color = change >= 0 ? '#22c55e' : '#ef4444';
+        }
+        if (DOM.marketVolume) DOM.marketVolume.textContent = formatNumber(state.market.volume24h, 0);
+        // Chart rendering is omitted for brevity – a canvas library would consume state.market.chartData
+    }
+
+    // ---------------------------------------------------------------------
+    // Gas Price Simulation
+    // ---------------------------------------------------------------------
+    function updateGasPrices() {
+        const base = 10; // base Gwei
+        state.gas.slow = Math.round(base * (0.8 + Math.random() * 0.4));
+        state.gas.standard = Math.round(base * (1 + Math.random() * 0.5));
+        state.gas.fast = Math.round(base * (1.5 + Math.random() * 0.5));
+        state.gas.current = state.gas.standard;
+        // UI update – assume elements exist with IDs gas-slow, gas-standard, gas-fast
+        ['slow', 'standard', 'fast'].forEach(level => {
+            const el = document.getElementById(`gas-${level}`);
+            if (el) el.textContent = state.gas[level] + ' ' + state.gas.unit;
+        });
+    }
+
+    // ---------------------------------------------------------------------
+    // Order Book Simulation
+    // ---------------------------------------------------------------------
     function updateOrderBook() {
-        const generateSide = (type) => {
-            const side = [];
-            const basePrice = state.market.price;
-            for (let i = 0; i < state.orderBook.maxDepth; i++) {
-                const priceFluct = (Math.random() - 0.5) * 0.02 * basePrice; // ±1%
-                const price = type === 'bid' ? basePrice - Math.abs(priceFluct) : basePrice + Math.abs(priceFluct);
-                const amount = (Math.random() * 10).toFixed(4);
-                side.push({ price: parseFloat(price.toFixed(2)), amount });
-            }
-            // Sort appropriately
-            side.sort((a, b) => type === 'bid' ? b.price - a.price : a.price - b.price);
-            return side;
-        };
-        state.orderBook.bids = generateSide('bid');
-        state.orderBook.asks = generateSide('ask');
+        const depth = state.orderBook.maxDepth;
+        const mid = state.market.price;
+        const spread = mid * 0.001; // 0.1% spread
+        state.orderBook.bids = [];
+        state.orderBook.asks = [];
+        for (let i = 1; i <= depth; i++) {
+            const priceBid = parseFloat((mid - spread * i).toFixed(2));
+            const priceAsk = parseFloat((mid + spread * i).toFixed(2));
+            const sizeBid = (Math.random() * 5).toFixed(4);
+            const sizeAsk = (Math.random() * 5).toFixed(4);
+            state.orderBook.bids.push({ price: priceBid, size: sizeBid });
+            state.orderBook.asks.push({ price: priceAsk, size: sizeAsk });
+        }
         renderOrderBook();
     }
 
+    function renderOrderBook() {
+        if (DOM.orderBookBids) {
+            DOM.orderBookBids.innerHTML = '';
+            state.orderBook.bids.forEach(entry => {
+                const li = document.createElement('li');
+                li.textContent = `${formatNumber(entry.size, 4)} @ ${formatNumber(entry.price, 2)}`;
+                DOM.orderBookBids.appendChild(li);
+            });
+        }
+        if (DOM.orderBookAsks) {
+            DOM.orderBookAsks.innerHTML = '';
+            state.orderBook.asks.forEach(entry => {
+                const li = document.createElement('li');
+                li.textContent = `${formatNumber(entry.size, 4)} @ ${formatNumber(entry.price, 2)}`;
+                DOM.orderBookAsks.appendChild(li);
+            });
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Staking Rewards Simulation
+    // ---------------------------------------------------------------------
     function updateStaking() {
         const now = Date.now();
-        const elapsed = (now - state.staking.lastClaimed) / 1000; // seconds
+        const elapsedSec = (now - state.staking.lastClaimed) / 1000;
         const rewardPerSec = (state.staking.stakedOpus * state.staking.rewardRateApy) / (365 * 24 * 3600 * 100);
-        const accrued = rewardPerSec * elapsed;
+        const accrued = rewardPerSec * elapsedSec;
         state.staking.pendingRewards = parseFloat((state.staking.pendingRewards + accrued).toFixed(4));
         renderStaking();
     }
 
-    // ---------------------------------------------------------------------
-    // Event Handlers
-    // ---------------------------------------------------------------------
-    function bindUIEvents() {
-        if (DOM.connectBtn) {
-            DOM.connectBtn.addEventListener('click', () => {
-                // Mock wallet connection
-                state.wallet.connected = true;
-                state.wallet.address = '0x' + Math.random().toString(16).substr(2, 40);
-                renderWallet();
-                playAudioTone(660, 'triangle', 0.12, 0.04);
-            });
-        }
-        if (DOM.themeToggle) {
-            DOM.themeToggle.addEventListener('change', (e) => {
-                state.settings.theme = e.target.checked ? 'dark' : 'light';
-                renderSettings();
-                playAudioTone(880, 'sine', 0.08, 0.03);
-            });
-        }
-        if (DOM.slippageInput) {
-            DOM.slippageInput.addEventListener('input', (e) => {
-                const val = parseFloat(e.target.value);
-                if (!isNaN(val) && val >= 0 && val <= 5) {
-                    state.settings.slippageTolerance = val;
-                }
-            });
-        }
-        if (DOM.claimRewardsBtn) {
-            DOM.claimRewardsBtn.addEventListener('click', () => {
-                state.staking.pendingRewards = 0;
-                state.staking.lastClaimed = Date.now();
-                renderStaking();
-                state.notifications.unshift('Staking rewards claimed');
-                renderNotifications();
-                playAudioTone(1200, 'square', 0.15, 0.05);
-            });
+    function renderStaking() {
+        if (DOM.stakingInfo) {
+            DOM.stakingInfo.innerHTML = `Staked: ${formatNumber(state.staking.stakedOpus, 2)} OPUS<br>` +
+                `APY: ${formatNumber(state.staking.rewardRateApy, 2)}%<br>` +
+                `Pending Rewards: ${formatNumber(state.staking.pendingRewards, 4)} OPUS`;
         }
     }
 
     // ---------------------------------------------------------------------
-    // Interval Management
+    // Transaction Log UI
     // ---------------------------------------------------------------------
-    function startIntervals() {
-        const refresh = state.settings.autoRefreshInterval;
-        marketInterval = setInterval(updateMarketData, refresh);
-        gasInterval = setInterval(updateGasData, refresh * 2);
-        orderBookInterval = setInterval(updateOrderBook, refresh * 3);
-        stakingInterval = setInterval(updateStaking, 5000);
+    function renderTransactions() {
+        if (!DOM.txList) return;
+        DOM.txList.innerHTML = '';
+        state.transactions.slice().reverse().forEach(tx => {
+            const li = document.createElement('li');
+            li.className = `tx ${tx.status.toLowerCase()}`;
+            const date = new Date(tx.timestamp).toLocaleString();
+            li.textContent = `[${date}] ${tx.type}: ${tx.description} (${tx.status})`;
+            DOM.txList.appendChild(li);
+        });
     }
 
-    function stopIntervals() {
+    // ---------------------------------------------------------------------
+    // Portfolio UI
+    // ---------------------------------------------------------------------
+    function renderPortfolio() {
+        if (!DOM.portfolioTable) return;
+        const tbody = DOM.portfolioTable.querySelector('tbody');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        state.portfolio.forEach(item => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${item.symbol}</td>` +
+                `<td>${formatNumber(item.balance, 4)}</td>` +
+                `<td>${formatNumber(item.price, 2)}</td>` +
+                `<td>${formatNumber(item.value, 2)}</td>` +
+                `<td>${formatNumber(item.allocation, 1)}%</td>`;
+            tbody.appendChild(tr);
+        });
+    }
+
+    // ---------------------------------------------------------------------
+    // Swap Handler (mock implementation)
+    // ---------------------------------------------------------------------
+    function handleSwap(event) {
+        event.preventDefault();
+        const form = event.target;
+        const fromToken = form.elements['from-token'].value;
+        const toToken = form.elements['to-token'].value;
+        const amountStr = form.elements['amount'].value;
+        const amount = parseFloat(amountStr);
+        if (isNaN(amount) || amount <= 0) {
+            addNotification('Invalid swap amount', 'error');
+            return;
+        }
+        const fromInfo = state.wallet.tokens.find(t => t.symbol === fromToken);
+        const toInfo = state.wallet.tokens.find(t => t.symbol === toToken);
+        if (!fromInfo || !toInfo) {
+            addNotification('Unsupported token pair', 'error');
+            return;
+        }
+        if (fromInfo.balance < amount) {
+            addNotification('Insufficient balance for swap', 'error');
+            return;
+        }
+        // Simple constant product mock: amountOut = amount * priceRatio
+        const priceRatio = fromInfo.price / toInfo.price;
+        const amountOut = amount * priceRatio * (1 - state.settings.slippageTolerance / 100);
+        // Update balances
+        fromInfo.balance = parseFloat((fromInfo.balance - amount).toFixed(8));
+        toInfo.balance = parseFloat((toInfo.balance + amountOut).toFixed(8));
+        // Log transaction
+        const tx = {
+            hash: '0x' + Math.random().toString(16).substr(2, 64),
+            type: 'Swap',
+            description: `Swapped ${formatNumber(amount, 4)} ${fromToken} for ${formatNumber(amountOut, 4)} ${toToken}`,
+            amount: `${formatNumber(amount, 4)} ${fromToken}`,
+            status: 'Pending',
+            timestamp: Date.now(),
+            blockNumber: null
+        };
+        state.transactions.push(tx);
+        renderTransactions();
+        updateWalletUI();
+        addNotification('Swap submitted', 'info');
+        // Simulate confirmation after 2 seconds
+        setTimeout(() => {
+            tx.status = 'Confirmed';
+            tx.blockNumber = Math.floor(Math.random() * 20000000) + 1000000;
+            renderTransactions();
+            addNotification('Swap confirmed', 'success');
+            playTone(880, 120);
+        }, 2000);
+    }
+
+    // ---------------------------------------------------------------------
+    // Stake Handler (mock implementation)
+    // ---------------------------------------------------------------------
+    function handleStake(event) {
+        event.preventDefault();
+        const form = event.target;
+        const amountStr = form.elements['amount'].value;
+        const amount = parseFloat(amountStr);
+        if (isNaN(amount) || amount <= 0) {
+            addNotification('Invalid stake amount', 'error');
+            return;
+        }
+        const opus = state.wallet.tokens.find(t => t.symbol === 'OPUS');
+        if (!opus || opus.balance < amount) {
+            addNotification('Insufficient OPUS balance', 'error');
+            return;
+        }
+        // Update balances and staking state
+        opus.balance = parseFloat((opus.balance - amount).toFixed(8));
+        state.staking.stakedOpus = parseFloat((state.staking.stakedOpus + amount).toFixed(8));
+        state.staking.lastClaimed = Date.now();
+        state.staking.pendingRewards = 0;
+        // Log transaction
+        const tx = {
+            hash: '0x' + Math.random().toString(16).substr(2, 64),
+            type: 'Stake',
+            description: `Staked ${formatNumber(amount, 4)} OPUS`,
+            amount: `${formatNumber(amount, 4)} OPUS`,
+            status: 'Pending',
+            timestamp: Date.now(),
+            blockNumber: null
+        };
+        state.transactions.push(tx);
+        renderTransactions();
+        updateWalletUI();
+        renderStaking();
+        addNotification('Stake submitted', 'info');
+        setTimeout(() => {
+            tx.status = 'Confirmed';
+            tx.blockNumber = Math.floor(Math.random() * 20000000) + 1000000;
+            renderTransactions();
+            addNotification('Stake confirmed', 'success');
+            playTone(660, 120);
+        }, 2000);
+    }
+
+    // ---------------------------------------------------------------------
+    // Theme Toggle
+    // ---------------------------------------------------------------------
+    function toggleTheme() {
+        const root = document.documentElement;
+        if (state.settings.theme === 'dark') {
+            state.settings.theme = 'light';
+            root.classList.remove('theme-dark');
+            root.classList.add('theme-light');
+        } else {
+            state.settings.theme = 'dark';
+            root.classList.remove('theme-light');
+            root.classList.add('theme-dark');
+        }
+        addNotification('Theme switched to ' + state.settings.theme, 'info');
+    }
+
+    // ---------------------------------------------------------------------
+    // Engine Control – start/stop intervals
+    // ---------------------------------------------------------------------
+    function startEngine() {
+        // Market ticker
+        updateMarketData();
+        marketInterval = setInterval(updateMarketData, state.settings.autoRefreshInterval);
+        // Gas ticker – slower
+        updateGasPrices();
+        gasInterval = setInterval(updateGasPrices, 15000);
+        // Order book ticker
+        updateOrderBook();
+        orderBookInterval = setInterval(updateOrderBook, 5000);
+        // Staking rewards ticker
+        updateStaking();
+        stakingInterval = setInterval(updateStaking, 10000);
+        // Initial UI render
+        renderMarketUI();
+        renderOrderBook();
+        renderStaking();
+        renderTransactions();
+        renderPortfolio();
+        updateWalletUI();
+    }
+
+    function stopEngine() {
         clearInterval(marketInterval);
         clearInterval(gasInterval);
         clearInterval(orderBookInterval);
@@ -351,58 +515,17 @@
     }
 
     // ---------------------------------------------------------------------
-    // DOM Cache Initialization
+    // Graceful shutdown handling (e.g., when user navigates away)
     // ---------------------------------------------------------------------
-    function initDOM() {
-        DOM.walletAddress = document.getElementById('wallet-address');
-        DOM.walletBalance = document.getElementById('wallet-balance');
-        DOM.connectBtn = document.getElementById('connect-wallet');
-        DOM.marketPair = document.getElementById('market-pair');
-        DOM.marketPrice = document.getElementById('market-price');
-        DOM.marketChange = document.getElementById('market-change');
-        DOM.marketVolume = document.getElementById('market-volume');
-        DOM.gasCurrent = document.getElementById('gas-current');
-        DOM.orderBookBids = document.getElementById('orderbook-bids');
-        DOM.orderBookAsks = document.getElementById('orderbook-asks');
-        DOM.portfolioTable = document.getElementById('portfolio-table');
-        DOM.stakingInfo = document.getElementById('staking-info');
-        DOM.claimRewardsBtn = document.getElementById('claim-rewards');
-        DOM.notificationList = document.getElementById('notification-list');
-        DOM.themeToggle = document.getElementById('theme-toggle');
-        DOM.slippageInput = document.getElementById('slippage-input');
-    }
+    window.addEventListener('beforeunload', stopEngine);
 
     // ---------------------------------------------------------------------
-    // Application Bootstrap
+    // Bootstrap
     // ---------------------------------------------------------------------
-    function init() {
+    document.addEventListener('DOMContentLoaded', () => {
         initDOM();
-        renderWallet();
-        renderMarket();
-        renderOrderBook();
-        renderPortfolio();
-        renderStaking();
-        renderSettings();
-        bindUIEvents();
-        startIntervals();
-        console.log('Magnum Opus dashboard initialized');
-    }
-
-    // Kick off when DOM is ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
-    }
-
-    // Expose a minimal debug API on window for developers
-    window.MagnumOpus = {
-        state,
-        playAudioTone,
-        updateMarketData,
-        updateGasData,
-        updateOrderBook,
-        updateStaking
-    };
+        startEngine();
+        // If the wallet is already injected (e.g., MetaMask), auto‑connect could be attempted here.
+    });
 
 })();
