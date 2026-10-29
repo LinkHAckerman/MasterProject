@@ -124,15 +124,11 @@ module MagnumOpus
     # Generic token balance (ERC-20, SPL, etc.)
     # @param symbol [String] token ticker (e.g. 'DAI', 'MAG')
     # @param contract_address [String] token contract address
-    # @param chain [Symbol] blockchain network symbol (:ethereum, :solana, etc.)
-    # @return [Hash] token balance information
+    # @param chain [Symbol] blockchain network symbol
     def get_token_balance(symbol, contract_address, chain: :ethereum)
-      chain = chain.to_sym
-      unless SUPPORTED_CHAINS.include?(chain)
-        raise WalletServiceError, "Unsupported chain: #{chain}"
-      end
-
-      usd_rate = fetch_market_rate(symbol.downcase)
+      symbol = symbol.downcase
+      chain = SUPPORTED_CHAINS.include?(chain.to_sym) ? chain.to_sym : :ethereum
+      usd_rate = fetch_market_rate(symbol)
       balance = @wallet_address ? query_token_balance_internal(@wallet_address, contract_address, chain) : BigDecimal('1000.00')
       usd_val = (balance * usd_rate).round(2)
 
@@ -142,7 +138,7 @@ module MagnumOpus
         symbol: symbol.upcase,
         contract_address: contract_address,
         balance: balance.to_s('F'),
-        price_usd: usd_rate.to_f,
+        token_price_usd: usd_rate.to_f,
         usd_value: usd_val.to_f,
         timestamp: Time.now.utc.iso8601
       }
@@ -152,9 +148,8 @@ module MagnumOpus
     # Public API - Exchange Rate helpers
     # ---------------------------------------------------------------------
 
-    # Returns current exchange rate for a given cryptocurrency
-    # @param symbol [String] cryptocurrency symbol (e.g. 'eth', 'btc', 'sol')
-    # @return [BigDecimal] current exchange rate in USD
+    # Returns current market rate for a given token in USD
+    # @param symbol [String] token ticker (e.g. 'ETH', 'BTC')
     def fetch_market_rate(symbol)
       symbol = symbol.downcase
       cache_key = "market_rate_#{symbol}"
@@ -172,158 +167,70 @@ module MagnumOpus
 
         if data.key?(symbol) && data[symbol].key?('usd')
           rate = BigDecimal(data[symbol]['usd'].to_s)
-          @cache[cache_key] = { rate: rate, expires_at: Time.now + DEFAULT_CACHE_TTL_SEC }
-          rate
+          @cache[cache_key] = {
+            rate: rate,
+            expires_at: Time.now + DEFAULT_CACHE_TTL_SEC
+          }
+          return rate
         else
-          @logger.warn("No market rate found for #{symbol}")
-          FALLBACK_RATES[symbol] || BigDecimal('0.00')
+          @logger.warn("Unexpected API response for #{symbol}: #{data.inspect}")
+          return FALLBACK_RATES[symbol] || BigDecimal('1.00')
         end
-      rescue StandardError => e
+      rescue NetworkError, JSON::ParserError => e
         @logger.error("Failed to fetch market rate for #{symbol}: #{e.message}")
-        FALLBACK_RATES[symbol] || BigDecimal('0.00')
+        return FALLBACK_RATES[symbol] || BigDecimal('1.00')
       end
     end
 
     # ---------------------------------------------------------------------
-    # Internal methods
+    # Private API - Internal helpers
     # ---------------------------------------------------------------------
 
     private
 
-    # Validates and normalizes a wallet address based on the primary chain
+    # Validates and normalizes wallet address based on chain type
     # @param address [String, nil] wallet address to validate
-    # @return [String, nil] normalized address or nil if invalid
     def validate_and_normalize_address(address)
       return nil unless address
 
       case @primary_chain
       when :ethereum
-        validate_ethereum_address(address)
+        unless address.match?(/^0x[a-fA-F0-9]{40}$/)
+          raise InvalidAddressError, "Invalid Ethereum address: #{address}"
+        end
+        address.downcase
       when :solana
-        validate_solana_address(address)
+        unless address.match?(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)
+          raise InvalidAddressError, "Invalid Solana address: #{address}"
+        end
+        address
       else
-        raise WalletServiceError, "Unsupported primary chain: #{@primary_chain}"
+        raise InvalidAddressError, "Unsupported chain for address validation: #{@primary_chain}"
       end
     end
 
-    # Validates an Ethereum address
-    # @param address [String] Ethereum address to validate
-    # @return [String] normalized Ethereum address
-    # @raise [InvalidAddressError] if the address is invalid
-    def validate_ethereum_address(address)
-      address = address.strip.downcase
-      unless address.match?(/^0x[a-fA-F0-9]{40}$/)
-        raise InvalidAddressError, "Invalid Ethereum address: #{address}"
-      end
-      address
-    end
-
-    # Validates a Solana address
-    # @param address [String] Solana address to validate
-    # @return [String] normalized Solana address
-    # @raise [InvalidAddressError] if the address is invalid
-    def validate_solana_address(address)
-      address = address.strip
-      unless address.match?(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)
-        raise InvalidAddressError, "Invalid Solana address: #{address}"
-      end
-      address
-    end
-
-    # Queries the blockchain for the native balance of a wallet
-    # @param address [String] wallet address
-    # @param chain [Symbol] blockchain network symbol (:ethereum, :solana, etc.)
-    # @return [BigDecimal] native balance
-    def query_chain_balance(address, chain)
-      case chain
-      when :ethereum
-        query_ethereum_balance(address)
-      when :solana
-        query_solana_balance(address)
-      else
-        raise WalletServiceError, "Unsupported chain for balance query: #{chain}"
-      end
-    end
-
-    # Queries the Ethereum blockchain for the native balance of a wallet
-    # @param address [String] Ethereum address
-    # @return [BigDecimal] ETH balance
-    def query_ethereum_balance(address)
-      # In a real implementation, this would query an Ethereum node or API
-      # For this example, we'll return a mock balance
-      BigDecimal('14.8520')
-    end
-
-    # Queries the Solana blockchain for the native balance of a wallet
-    # @param address [String] Solana address
-    # @return [BigDecimal] SOL balance
-    def query_solana_balance(address)
-      # In a real implementation, this would query a Solana node or API
-      # For this example, we'll return a mock balance
-      BigDecimal('42.50')
-    end
-
-    # Queries the blockchain for the balance of a token
-    # @param address [String] wallet address
-    # @param contract_address [String] token contract address
-    # @param chain [Symbol] blockchain network symbol (:ethereum, :solana, etc.)
-    # @return [BigDecimal] token balance
-    def query_token_balance_internal(address, contract_address, chain = :ethereum)
-      case chain
-      when :ethereum
-        query_ethereum_token_balance(address, contract_address)
-      when :solana
-        query_solana_token_balance(address, contract_address)
-      else
-        raise WalletServiceError, "Unsupported chain for token balance query: #{chain}"
-      end
-    end
-
-    # Queries the Ethereum blockchain for the balance of a token
-    # @param address [String] Ethereum address
-    # @param contract_address [String] token contract address
-    # @return [BigDecimal] token balance
-    def query_ethereum_token_balance(address, contract_address)
-      # In a real implementation, this would query an Ethereum node or API
-      # For this example, we'll return a mock balance
-      BigDecimal('1000.00')
-    end
-
-    # Queries the Solana blockchain for the balance of a token
-    # @param address [String] Solana address
-    # @param contract_address [String] token contract address
-    # @return [BigDecimal] token balance
-    def query_solana_token_balance(address, contract_address)
-      # In a real implementation, this would query a Solana node or API
-      # For this example, we'll return a mock balance
-      BigDecimal('500.00')
-    end
-
-    # Makes an HTTP request with retry logic and rate limiting
+    # Makes HTTP request with retry logic and rate limiting
     # @param uri [URI] request URI
-    # @param method [String] HTTP method
+    # @param method [Symbol] HTTP method (:get, :post, etc.)
     # @param body [String, nil] request body
-    # @return [Net::HTTPResponse] HTTP response
-    # @raise [NetworkError] if the request fails after retries
-    def make_http_request(uri, method = 'GET', body = nil)
+    # @param headers [Hash] request headers
+    def make_http_request(uri, method: :get, body: nil, headers: {})
       attempt = 0
       begin
         attempt += 1
-        enforce_rate_limiting(uri)
-
         http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = uri.scheme == 'https'
+        http.use_ssl = (uri.scheme == 'https')
         http.open_timeout = DEFAULT_TIMEOUT_SEC
         http.read_timeout = DEFAULT_TIMEOUT_SEC
 
-        request = case method.upcase
-                   when 'GET' then Net::HTTP::Get.new(uri)
-                   when 'POST' then Net::HTTP::Post.new(uri)
-                   else raise WalletServiceError, "Unsupported HTTP method: #{method}"
+        request = case method
+                   when :get then Net::HTTP::Get.new(uri.request_uri)
+                   when :post then Net::HTTP::Post.new(uri.request_uri)
+                   else raise ArgumentError, "Unsupported HTTP method: #{method}"
                    end
 
-        request['Content-Type'] = 'application/json' if body
         request.body = body if body
+        headers.each { |k, v| request[k] = v }
 
         response = http.request(request)
 
@@ -331,45 +238,53 @@ module MagnumOpus
         when Net::HTTPSuccess
           response
         when Net::HTTPTooManyRequests
+          retry_after = response['Retry-After'].to_i
+          sleep(retry_after) if retry_after.positive?
           raise RateLimitError, "Rate limited by #{uri.host}"
         else
           raise NetworkError, "HTTP request failed with code #{response.code}: #{response.message}"
         end
-      rescue RateLimitError => e
+      rescue Net::OpenTimeout, Net::ReadTimeout, Errno::ECONNREFUSED, Errno::EHOSTUNREACH => e
         if attempt < MAX_RETRY_ATTEMPTS
           sleep(2 ** attempt)
           retry
         else
-          raise e
-        end
-      rescue StandardError => e
-        if attempt < MAX_RETRY_ATTEMPTS
-          sleep(2 ** attempt)
-          retry
-        else
-          raise NetworkError, "HTTP request failed after #{MAX_RETRY_ATTEMPTS} attempts: #{e.message}"
+          raise NetworkError, "HTTP request failed after #{attempt} attempts: #{e.message}"
         end
       end
     end
 
-    # Enforces rate limiting for a given URI
-    # @param uri [URI] request URI
-    def enforce_rate_limiting(uri)
-      host = uri.host
-      now = Time.now
-
-      # Remove old timestamps
-      @rate_limiter[host].reject! { |t| t < now - 60 }
-
-      # Check if we've exceeded the rate limit
-      if @rate_limiter[host].size >= 30
-        sleep_time = 60 - (now - @rate_limiter[host].first)
-        sleep(sleep_time) if sleep_time > 0
-        @rate_limiter[host].shift
+    # Queries chain balance for native token
+    # @param address [String] wallet address
+    # @param chain [Symbol] blockchain network symbol
+    def query_chain_balance(address, chain)
+      case chain
+      when :ethereum
+        # Implement Ethereum balance query
+        BigDecimal('14.8520')
+      when :solana
+        # Implement Solana balance query
+        BigDecimal('100.00')
+      else
+        raise InvalidAddressError, "Unsupported chain for balance query: #{chain}"
       end
+    end
 
-      # Add the current timestamp
-      @rate_limiter[host] << now
+    # Queries token balance for ERC-20, SPL, etc.
+    # @param address [String] wallet address
+    # @param contract_address [String] token contract address
+    # @param chain [Symbol] blockchain network symbol
+    def query_token_balance_internal(address, contract_address, chain = :ethereum)
+      case chain
+      when :ethereum
+        # Implement Ethereum token balance query
+        BigDecimal('1000.00')
+      when :solana
+        # Implement Solana token balance query
+        BigDecimal('500.00')
+      else
+        raise InvalidAddressError, "Unsupported chain for token balance query: #{chain}"
+      end
     end
   end
 end
