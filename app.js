@@ -8,7 +8,9 @@
 (function () {
     'use strict';
 
+    // ---------------------------------------------------------------------
     // State Store
+    // ---------------------------------------------------------------------
     const state = {
         wallet: {
             connected: false,
@@ -95,7 +97,9 @@
         }
     };
 
-    // Pair exchange rates dictionary
+    // ---------------------------------------------------------------------
+    // Pair exchange rates dictionary (static mock data)
+    // ---------------------------------------------------------------------
     const PAIR_RATES = {
         'ETH/USDT': { base: 'ETH', quote: 'USDT', price: 3450.75, decimals: 2 },
         'BTC/USDT': { base: 'BTC', quote: 'USDT', price: 64200.00, decimals: 2 },
@@ -104,20 +108,30 @@
         'ETH/BTC': { base: 'ETH', quote: 'BTC', price: 0.0537, decimals: 6 }
     };
 
-    // DOM Elements Cache
+    // ---------------------------------------------------------------------
+    // DOM Elements Cache – populated in initDOM()
+    // ---------------------------------------------------------------------
     let DOM = {};
 
-    // Engine Tickers
+    // ---------------------------------------------------------------------
+    // Engine Tickers (interval handles)
+    // ---------------------------------------------------------------------
     let marketInterval = null;
     let gasInterval = null;
     let orderBookInterval = null;
     let stakingInterval = null;
 
-    // Audio context for procedural Web Audio sound synthesis
+    // ---------------------------------------------------------------------
+    // Web Audio – procedural sound synthesis
+    // ---------------------------------------------------------------------
     let audioCtx = null;
 
     /**
-     * Web Audio Sound Synthesizer
+     * Play a short tone for UI feedback.
+     * @param {number} freq Frequency in Hz
+     * @param {string} type Oscillator type (sine, square, sawtooth, triangle)
+     * @param {number} duration Seconds
+     * @param {number} gainVal Linear gain (0‑1)
      */
     function playAudioTone(freq, type = 'sine', duration = 0.15, gainVal = 0.05) {
         if (!state.settings.enableSounds) return;
@@ -133,489 +147,262 @@
             osc.type = type;
             osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
             gain.gain.setValueAtTime(gainVal, audioCtx.currentTime);
+            // Exponential fade‑out to avoid clicks
             gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
             osc.connect(gain);
             gain.connect(audioCtx.destination);
             osc.start();
             osc.stop(audioCtx.currentTime + duration);
         } catch (e) {
-            console.warn('Audio playback failed:', e);
+            console.error('Audio tone error:', e);
         }
     }
 
-    /**
-     * Generate synthetic candlestick chart data
-     */
-    function generateChartData(length = 50) {
-        const candles = [];
-        const labels = [];
-        const prices = [];
-        let basePrice = state.market.price;
-        for (let i = 0; i < length; i++) {
-            const open = basePrice + (Math.random() - 0.5) * basePrice * 0.02;
-            const close = open + (Math.random() - 0.5) * open * 0.015;
-            const high = Math.max(open, close) + Math.random() * open * 0.01;
-            const low = Math.min(open, close) - Math.random() * open * 0.01;
-            candles.push({ open, high, low, close });
-            prices.push(close);
-            labels.push(`T-${length - i}`);
-            basePrice = close;
-        }
-        return { labels, prices, candles };
-    }
-
-    /**
-     * Render candlestick chart on canvas
-     */
-    function renderChart() {
-        const canvas = DOM.chartCanvas;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        const { candles, labels } = state.market.chartData;
-        if (candles.length === 0) return;
-
-        const width = canvas.width;
-        const height = canvas.height;
-        ctx.clearRect(0, 0, width, height);
-
-        const padding = 40;
-        const chartWidth = width - padding * 2;
-        const chartHeight = height - padding * 2;
-        const candleCount = Math.min(candles.length, 20);
-        const visibleCandles = candles.slice(-candleCount);
-        const candleWidth = chartWidth / candleCount * 0.7;
-        const spacing = chartWidth / candleCount;
-
-        const allHighs = visibleCandles.map(c => c.high);
-        const allLows = visibleCandles.map(c => c.low);
-        const maxPrice = Math.max(...allHighs);
-        const minPrice = Math.min(...allLows);
-        const priceRange = maxPrice - minPrice || 1;
-
-        // Draw grid lines
-        ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-        ctx.lineWidth = 1;
-        for (let i = 0; i <= 5; i++) {
-            const y = padding + (chartHeight / 5) * i;
-            ctx.beginPath();
-            ctx.moveTo(padding, y);
-            ctx.lineTo(width - padding, y);
-            ctx.stroke();
-        }
-
-        // Draw candles
-        visibleCandles.forEach((candle, index) => {
-            const x = padding + index * spacing + spacing / 2;
-            const yHigh = padding + chartHeight - ((candle.high - minPrice) / priceRange) * chartHeight;
-            const yLow = padding + chartHeight - ((candle.low - minPrice) / priceRange) * chartHeight;
-            const yOpen = padding + chartHeight - ((candle.open - minPrice) / priceRange) * chartHeight;
-            const yClose = padding + chartHeight - ((candle.close - minPrice) / priceRange) * chartHeight;
-
-            // Wick
-            ctx.strokeStyle = candle.close >= candle.open ? '#26a69a' : '#ef5350';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(x, yHigh);
-            ctx.lineTo(x, yLow);
-            ctx.stroke();
-
-            // Body
-            const bodyHeight = Math.abs(yOpen - yClose);
-            const bodyY = Math.min(yOpen, yClose);
-            ctx.fillStyle = candle.close >= candle.open ? '#26a69a' : '#ef5350';
-            ctx.fillRect(x - candleWidth / 2, bodyY, candleWidth, bodyHeight || 1);
-        });
-
-        // Draw price line
-        ctx.strokeStyle = 'rgba(100, 180, 255, 0.6)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([5, 5]);
-        const lastPriceY = padding + chartHeight - ((visibleCandles[visibleCandles.length - 1].close - minPrice) / priceRange) * chartHeight;
-        ctx.beginPath();
-        ctx.moveTo(padding, lastPriceY);
-        ctx.lineTo(width - padding, lastPriceY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-    }
-
-    /**
-     * Generate synthetic order book data
-     */
-    function generateOrderBook() {
-        const bids = [];
-        const asks = [];
-        const centerPrice = state.market.price;
-        for (let i = 0; i < state.orderBook.maxDepth; i++) {
-            const bidPrice = centerPrice - (i + 1) * centerPrice * 0.001;
-            const askPrice = centerPrice + (i + 1) * centerPrice * 0.001;
-            const bidAmount = Math.random() * 10 + 1;
-            const askAmount = Math.random() * 10 + 1;
-            bids.push({ price: bidPrice, amount: bidAmount });
-            asks.push({ price: askPrice, amount: askAmount });
-        }
-        return { bids, asks };
-    }
-
-    /**
-     * Render order book to DOM
-     */
-    function renderOrderBook() {
-        const bidsContainer = DOM.orderBookBids;
-        const asksContainer = DOM.orderBookAsks;
-        if (!bidsContainer || !asksContainer) return;
-
-        bidsContainer.innerHTML = '';
-        asksContainer.innerHTML = '';
-
-        state.orderBook.bids.slice().reverse().forEach(bid => {
-            const row = document.createElement('div');
-            row.className = 'orderbook-row bid';
-            row.innerHTML = `
-                <span class="price">${bid.price.toFixed(2)}</span>
-                <span class="amount">${bid.amount.toFixed(4)}</span>
-                <span class="total">${(bid.price * bid.amount).toFixed(2)}</span>
-            `;
-            bidsContainer.appendChild(row);
-        });
-
-        state.orderBook.asks.forEach(ask => {
-            const row = document.createElement('div');
-            row.className = 'orderbook-row ask';
-            row.innerHTML = `
-                <span class="price">${ask.price.toFixed(2)}</span>
-                <span class="amount">${ask.amount.toFixed(4)}</span>
-                <span class="total">${(ask.price * ask.amount).toFixed(2)}</span>
-            `;
-            asksContainer.appendChild(row);
-        });
-    }
-
-    /**
-     * Update gas price simulation
-     */
-    function updateGasPrice() {
-        const variation = (Math.random() - 0.5) * 4;
-        state.gas.current = Math.max(8, Math.min(30, state.gas.current + variation));
-        state.gas.slow = Math.max(5, state.gas.current - 6);
-        state.gas.standard = state.gas.current;
-        state.gas.fast = state.gas.current + 6;
-        if (DOM.gasCurrent) DOM.gasCurrent.textContent = state.gas.current.toFixed(1);
-        if (DOM.gasSlow) DOM.gasSlow.textContent = state.gas.slow.toFixed(1);
-        if (DOM.gasStandard) DOM.gasStandard.textContent = state.gas.standard.toFixed(1);
-        if (DOM.gasFast) DOM.gasFast.textContent = state.gas.fast.toFixed(1);
-    }
-
-    /**
-     * Update staking rewards
-     */
-    function updateStaking() {
-        const elapsed = (Date.now() - state.staking.lastClaimed) / 86400000;
-        const dailyReward = (state.staking.stakedOpus * state.staking.rewardRateApy / 100) / 365;
-        state.staking.pendingRewards = parseFloat((dailyReward * elapsed).toFixed(4));
-        if (DOM.pendingRewards) DOM.pendingRewards.textContent = state.staking.pendingRewards.toFixed(4);
-        if (DOM.stakedOpus) DOM.stakedOpus.textContent = state.staking.stakedOpus.toFixed(2);
-    }
-
-    /**
-     * Add notification
-     */
-    function addNotification(message, type = 'info') {
-        const id = Date.now();
-        state.notifications.push({ id, message, type });
-        renderNotifications();
-        setTimeout(() => removeNotification(id), 5000);
-    }
-
-    /**
-     * Remove notification
-     */
-    function removeNotification(id) {
-        state.notifications = state.notifications.filter(n => n.id !== id);
-        renderNotifications();
-    }
-
-    /**
-     * Render notifications panel
-     */
-    function renderNotifications() {
-        const container = DOM.notifications;
-        if (!container) return;
-        container.innerHTML = '';
-        state.notifications.slice(-5).reverse().forEach(note => {
-            const el = document.createElement('div');
-            el.className = `notification ${note.type}`;
-            el.textContent = note.message;
-            container.appendChild(el);
-        });
-    }
-
-    /**
-     * Format currency
-     */
-    function formatCurrency(value, decimals = 2) {
-        return new Intl.NumberFormat('en-US', {
-            style: 'currency',
-            currency: state.settings.currency,
-            minimumFractionDigits: decimals,
-            maximumFractionDigits: decimals
-        }).format(value);
-    }
-
-    /**
-     * Execute simulated swap
-     */
-    function executeSwap(fromToken, toToken, amount) {
-        const rate = PAIR_RATES[`${fromToken}/${toToken}`] || PAIR_RATES[`${toToken}/${fromToken}`];
-        if (!rate) {
-            addNotification(`No exchange rate found for ${fromToken}/${toToken}`, 'error');
-            return;
-        }
-        const fromBalance = state.wallet.tokens.find(t => t.symbol === fromToken);
-        if (!fromBalance || fromBalance.balance < amount) {
-            addNotification(`Insufficient ${fromToken} balance`, 'error');
-            return;
-        }
-        const convertedAmount = amount * rate.price;
-        fromBalance.balance -= amount;
-        const toBalance = state.wallet.tokens.find(t => t.symbol === toToken);
-        if (toBalance) {
-            toBalance.balance += convertedAmount;
-        }
-        addNotification(`Swapped ${amount} ${fromToken} for ${convertedAmount.toFixed(4)} ${toToken}`, 'success');
-        playAudioTone(440, 'sine', 0.1, 0.03);
-        renderWallet();
-    }
-
-    /**
-     * Render wallet balances
-     */
+    // ---------------------------------------------------------------------
+    // UI Rendering Helpers
+    // ---------------------------------------------------------------------
     function renderWallet() {
-        if (DOM.walletAddress) DOM.walletAddress.textContent = state.wallet.address || 'Not Connected';
-        if (DOM.balanceEth) DOM.balanceEth.textContent = state.wallet.balanceEth.toFixed(4);
-        if (DOM.balanceUsdt) DOM.balanceUsdt.textContent = state.wallet.balanceUsdt.toFixed(2);
-        if (DOM.balanceBtc) DOM.balanceBtc.textContent = state.wallet.balanceBtc.toFixed(6);
-        if (DOM.balanceSol) DOM.balanceSol.textContent = state.wallet.balanceSol.toFixed(4);
-        if (DOM.networkName) DOM.networkName.textContent = state.wallet.networkName;
-        if (DOM.chainId) DOM.chainId.textContent = state.wallet.chainId;
+        if (!DOM.walletAddress) return;
+        DOM.walletAddress.textContent = state.wallet.connected ? state.wallet.address : 'Not Connected';
+        DOM.walletBalance.textContent = state.wallet.connected ? `${state.wallet.balanceEth.toFixed(4)} ETH` : '--';
+    }
 
-        const tokenList = DOM.tokenList;
-        if (tokenList) {
-            tokenList.innerHTML = '';
-            state.wallet.tokens.forEach(token => {
-                const row = document.createElement('div');
-                row.className = 'token-row';
-                row.innerHTML = `
-                    <span class="token-symbol">${token.symbol}</span>
-                    <span class="token-name">${token.name}</span>
-                    <span class="token-balance">${token.balance.toFixed(token.decimals > 6 ? 4 : 6)}</span>
-                    <span class="token-value">${formatCurrency(token.balance * token.price)}</span>
-                `;
-                tokenList.appendChild(row);
+    function renderMarket() {
+        if (!DOM.marketPair) return;
+        const m = state.market;
+        DOM.marketPair.textContent = m.selectedPair;
+        DOM.marketPrice.textContent = `$${m.price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        DOM.marketChange.textContent = `${m.change24h.toFixed(2)}%`;
+        DOM.marketChange.className = m.change24h >= 0 ? 'positive' : 'negative';
+        DOM.marketVolume.textContent = `${(m.volume24h / 1e6).toFixed(2)}M`; // display in millions
+    }
+
+    function renderOrderBook() {
+        if (!DOM.orderBookBids || !DOM.orderBookAsks) return;
+        const { bids, asks, maxDepth } = state.orderBook;
+        const renderSide = (container, rows) => {
+            container.innerHTML = '';
+            rows.slice(0, maxDepth).forEach(r => {
+                const div = document.createElement('div');
+                div.className = 'order-row';
+                div.textContent = `${r.price.toFixed(2)} @ ${r.amount}`;
+                container.appendChild(div);
             });
-        }
-    }
-
-    /**
-     * Render portfolio allocation
-     */
-    function renderPortfolio() {
-        const container = DOM.portfolio;
-        if (!container) return;
-        container.innerHTML = '';
-        state.portfolio.forEach(item => {
-            const row = document.createElement('div');
-            row.className = 'portfolio-row';
-            row.innerHTML = `
-                <span class="portfolio-symbol">${item.symbol}</span>
-                <span class="portfolio-name">${item.name}</span>
-                <span class="portfolio-balance">${item.balance.toFixed(4)}</span>
-                <span class="portfolio-value">${formatCurrency(item.value)}</span>
-                <span class="portfolio-allocation">${item.allocation.toFixed(1)}%</span>
-            `;
-            container.appendChild(row);
-        });
-    }
-
-    /**
-     * Render transaction history
-     */
-    function renderTransactions() {
-        const container = DOM.transactions;
-        if (!container) return;
-        container.innerHTML = '';
-        state.transactions.slice().reverse().forEach(tx => {
-            const row = document.createElement('div');
-            row.className = `transaction-row ${tx.status.toLowerCase()}`;
-            row.innerHTML = `
-                <span class="tx-hash">${tx.hash}</span>
-                <span class="tx-type">${tx.type}</span>
-                <span class="tx-description">${tx.description}</span>
-                <span class="tx-amount">${tx.amount}</span>
-                <span class="tx-status">${tx.status}</span>
-                <span class="tx-time">${new Date(tx.timestamp).toLocaleTimeString()}</span>
-            `;
-            container.appendChild(row);
-        });
-    }
-
-    /**
-     * Connect wallet simulation
-     */
-    function connectWallet() {
-        if (state.wallet.connected) {
-            state.wallet.connected = false;
-            state.wallet.address = null;
-            addNotification('Wallet disconnected', 'info');
-        } else {
-            state.wallet.connected = true;
-            state.wallet.address = '0x' + Math.random().toString(16).substr(2, 40);
-            addNotification('Wallet connected successfully', 'success');
-            playAudioTone(523, 'sine', 0.15, 0.04);
-        }
-        renderWallet();
-    }
-
-    /**
-     * Initialize DOM element references
-     */
-    function initDOMElements() {
-        DOM = {
-            walletAddress: document.getElementById('wallet-address'),
-            balanceEth: document.getElementById('balance-eth'),
-            balanceUsdt: document.getElementById('balance-usdt'),
-            balanceBtc: document.getElementById('balance-btc'),
-            balanceSol: document.getElementById('balance-sol'),
-            networkName: document.getElementById('network-name'),
-            chainId: document.getElementById('chain-id'),
-            tokenList: document.getElementById('token-list'),
-            gasCurrent: document.getElementById('gas-current'),
-            gasSlow: document.getElementById('gas-slow'),
-            gasStandard: document.getElementById('gas-standard'),
-            gasFast: document.getElementById('gas-fast'),
-            chartCanvas: document.getElementById('price-chart'),
-            orderBookBids: document.getElementById('orderbook-bids'),
-            orderBookAsks: document.getElementById('orderbook-asks'),
-            pendingRewards: document.getElementById('pending-rewards'),
-            stakedOpus: document.getElementById('staked-opus'),
-            notifications: document.getElementById('notifications'),
-            portfolio: document.getElementById('portfolio'),
-            transactions: document.getElementById('transactions'),
-            connectBtn: document.getElementById('connect-wallet-btn'),
-            swapForm: document.getElementById('swap-form'),
-            stakeBtn: document.getElementById('stake-btn'),
-            claimBtn: document.getElementById('claim-btn')
         };
+        renderSide(DOM.orderBookBids, bids);
+        renderSide(DOM.orderBookAsks, asks);
     }
 
-    /**
-     * Attach event listeners
-     */
-    function attachEventListeners() {
+    function renderPortfolio() {
+        if (!DOM.portfolioTable) return;
+        const tbody = DOM.portfolioTable.querySelector('tbody');
+        tbody.innerHTML = '';
+        state.portfolio.forEach(p => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${p.symbol}</td>
+                <td>${p.balance.toLocaleString(undefined, {maximumFractionDigits: 4})}</td>
+                <td>$${p.price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                <td>$${p.value.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                <td>${p.allocation.toFixed(1)}%</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function renderStaking() {
+        if (!DOM.stakingInfo) return;
+        const s = state.staking;
+        DOM.stakingInfo.textContent = `Staked: ${s.stakedOpus.toLocaleString()} OPUS | APY: ${s.rewardRateApy}% | Pending: ${s.pendingRewards.toFixed(2)} OPUS`;
+    }
+
+    function renderNotifications() {
+        if (!DOM.notificationList) return;
+        const list = DOM.notificationList;
+        list.innerHTML = '';
+        state.notifications.slice(-5).reverse().forEach(n => {
+            const li = document.createElement('li');
+            li.textContent = n;
+            list.appendChild(li);
+        });
+    }
+
+    function renderSettings() {
+        if (!DOM.themeToggle) return;
+        document.body.dataset.theme = state.settings.theme;
+        DOM.themeToggle.checked = state.settings.theme === 'dark';
+        DOM.slippageInput.value = state.settings.slippageTolerance;
+    }
+
+    // ---------------------------------------------------------------------
+    // Mock Data Updaters – in a real product these would call APIs
+    // ---------------------------------------------------------------------
+    function updateMarketData() {
+        const pair = state.market.selectedPair;
+        const rate = PAIR_RATES[pair];
+        // Simulate small random walk
+        const delta = (Math.random() - 0.5) * rate.price * 0.005; // ±0.25%
+        rate.price = Math.max(rate.price + delta, 0.01);
+        state.market.price = parseFloat(rate.price.toFixed(rate.decimals));
+        // Simulate 24h change based on price drift
+        state.market.change24h = ((rate.price - PAIR_RATES[pair].price) / PAIR_RATES[pair].price) * 100;
+        state.market.volume24h = Math.floor(Math.random() * 5e9) + 1e9; // 1‑5B
+        renderMarket();
+        // Play a subtle tick sound on price update
+        playAudioTone(440, 'sine', 0.07, 0.02);
+    }
+
+    function updateGasData() {
+        const base = 12;
+        const jitter = Math.random() * 6; // 0‑6 Gwei
+        state.gas.slow = Math.round(base + jitter * 0.5);
+        state.gas.standard = Math.round(base + jitter);
+        state.gas.fast = Math.round(base + jitter * 1.5);
+        state.gas.current = state.gas.standard;
+        if (DOM.gasCurrent) {
+            DOM.gasCurrent.textContent = `${state.gas.current} ${state.gas.unit}`;
+        }
+    }
+
+    function updateOrderBook() {
+        const generateSide = (type) => {
+            const side = [];
+            const basePrice = state.market.price;
+            for (let i = 0; i < state.orderBook.maxDepth; i++) {
+                const priceFluct = (Math.random() - 0.5) * 0.02 * basePrice; // ±1%
+                const price = type === 'bid' ? basePrice - Math.abs(priceFluct) : basePrice + Math.abs(priceFluct);
+                const amount = (Math.random() * 10).toFixed(4);
+                side.push({ price: parseFloat(price.toFixed(2)), amount });
+            }
+            // Sort appropriately
+            side.sort((a, b) => type === 'bid' ? b.price - a.price : a.price - b.price);
+            return side;
+        };
+        state.orderBook.bids = generateSide('bid');
+        state.orderBook.asks = generateSide('ask');
+        renderOrderBook();
+    }
+
+    function updateStaking() {
+        const now = Date.now();
+        const elapsed = (now - state.staking.lastClaimed) / 1000; // seconds
+        const rewardPerSec = (state.staking.stakedOpus * state.staking.rewardRateApy) / (365 * 24 * 3600 * 100);
+        const accrued = rewardPerSec * elapsed;
+        state.staking.pendingRewards = parseFloat((state.staking.pendingRewards + accrued).toFixed(4));
+        renderStaking();
+    }
+
+    // ---------------------------------------------------------------------
+    // Event Handlers
+    // ---------------------------------------------------------------------
+    function bindUIEvents() {
         if (DOM.connectBtn) {
-            DOM.connectBtn.addEventListener('click', connectWallet);
-        }
-        if (DOM.swapForm) {
-            DOM.swapForm.addEventListener('submit', function(e) {
-                e.preventDefault();
-                const fromToken = document.getElementById('swap-from').value;
-                const toToken = document.getElementById('swap-to').value;
-                const amount = parseFloat(document.getElementById('swap-amount').value);
-                if (isNaN(amount) || amount <= 0) {
-                    addNotification('Please enter a valid amount', 'error');
-                    return;
-                }
-                executeSwap(fromToken, toToken, amount);
-            });
-        }
-        if (DOM.stakeBtn) {
-            DOM.stakeBtn.addEventListener('click', function() {
-                const amount = parseFloat(prompt('Enter OPUS amount to stake:'));
-                if (isNaN(amount) || amount <= 0) return;
-                const opusToken = state.wallet.tokens.find(t => t.symbol === 'OPUS');
-                if (!opusToken || opusToken.balance < amount) {
-                    addNotification('Insufficient OPUS balance', 'error');
-                    return;
-                }
-                opusToken.balance -= amount;
-                state.staking.stakedOpus += amount;
-                addNotification(`Staked ${amount} OPUS`, 'success');
-                playAudioTone(329, 'square', 0.2, 0.05);
+            DOM.connectBtn.addEventListener('click', () => {
+                // Mock wallet connection
+                state.wallet.connected = true;
+                state.wallet.address = '0x' + Math.random().toString(16).substr(2, 40);
                 renderWallet();
-                updateStaking();
+                playAudioTone(660, 'triangle', 0.12, 0.04);
             });
         }
-        if (DOM.claimBtn) {
-            DOM.claimBtn.addEventListener('click', function() {
-                if (state.staking.pendingRewards <= 0) {
-                    addNotification('No rewards to claim', 'info');
-                    return;
+        if (DOM.themeToggle) {
+            DOM.themeToggle.addEventListener('change', (e) => {
+                state.settings.theme = e.target.checked ? 'dark' : 'light';
+                renderSettings();
+                playAudioTone(880, 'sine', 0.08, 0.03);
+            });
+        }
+        if (DOM.slippageInput) {
+            DOM.slippageInput.addEventListener('input', (e) => {
+                const val = parseFloat(e.target.value);
+                if (!isNaN(val) && val >= 0 && val <= 5) {
+                    state.settings.slippageTolerance = val;
                 }
-                const claimed = state.staking.pendingRewards;
+            });
+        }
+        if (DOM.claimRewardsBtn) {
+            DOM.claimRewardsBtn.addEventListener('click', () => {
                 state.staking.pendingRewards = 0;
                 state.staking.lastClaimed = Date.now();
-                const opusToken = state.wallet.tokens.find(t => t.symbol === 'OPUS');
-                if (opusToken) opusToken.balance += claimed;
-                addNotification(`Claimed ${claimed.toFixed(4)} OPUS rewards`, 'success');
-                playAudioTone(659, 'sine', 0.3, 0.06);
-                renderWallet();
-                updateStaking();
+                renderStaking();
+                state.notifications.unshift('Staking rewards claimed');
+                renderNotifications();
+                playAudioTone(1200, 'square', 0.15, 0.05);
             });
         }
     }
 
-    /**
-     * Start all interval-based updates
-     */
+    // ---------------------------------------------------------------------
+    // Interval Management
+    // ---------------------------------------------------------------------
     function startIntervals() {
-        marketInterval = setInterval(() => {
-            const variation = (Math.random() - 0.5) * 10;
-            state.market.price += variation;
-            state.market.change24h = (Math.random() * 10 - 5).toFixed(2);
-            state.market.volume24h = Math.floor(Math.random() * 2000000000);
-            state.market.high24h = state.market.price + Math.random() * 50;
-            state.market.low24h = state.market.price - Math.random() * 50;
-            state.market.chartData = generateChartData(50);
-            renderChart();
-            if (DOM.marketPrice) DOM.marketPrice.textContent = state.market.price.toFixed(2);
-            if (DOM.marketChange) DOM.marketChange.textContent = `${state.market.change24h}%`;
-            if (DOM.marketVolume) DOM.marketVolume.textContent = formatCurrency(state.market.volume24h, 0);
-            if (DOM.marketHigh) DOM.marketHigh.textContent = state.market.high24h.toFixed(2);
-            if (DOM.marketLow) DOM.marketLow.textContent = state.market.low24h.toFixed(2);
-        }, state.settings.autoRefreshInterval);
-
-        gasInterval = setInterval(updateGasPrice, 5000);
-
-        orderBookInterval = setInterval(() => {
-            state.orderBook = generateOrderBook();
-            renderOrderBook();
-        }, 3000);
-
-        stakingInterval = setInterval(updateStaking, 10000);
+        const refresh = state.settings.autoRefreshInterval;
+        marketInterval = setInterval(updateMarketData, refresh);
+        gasInterval = setInterval(updateGasData, refresh * 2);
+        orderBookInterval = setInterval(updateOrderBook, refresh * 3);
+        stakingInterval = setInterval(updateStaking, 5000);
     }
 
-    /**
-     * Initialize application
-     */
+    function stopIntervals() {
+        clearInterval(marketInterval);
+        clearInterval(gasInterval);
+        clearInterval(orderBookInterval);
+        clearInterval(stakingInterval);
+    }
+
+    // ---------------------------------------------------------------------
+    // DOM Cache Initialization
+    // ---------------------------------------------------------------------
+    function initDOM() {
+        DOM.walletAddress = document.getElementById('wallet-address');
+        DOM.walletBalance = document.getElementById('wallet-balance');
+        DOM.connectBtn = document.getElementById('connect-wallet');
+        DOM.marketPair = document.getElementById('market-pair');
+        DOM.marketPrice = document.getElementById('market-price');
+        DOM.marketChange = document.getElementById('market-change');
+        DOM.marketVolume = document.getElementById('market-volume');
+        DOM.gasCurrent = document.getElementById('gas-current');
+        DOM.orderBookBids = document.getElementById('orderbook-bids');
+        DOM.orderBookAsks = document.getElementById('orderbook-asks');
+        DOM.portfolioTable = document.getElementById('portfolio-table');
+        DOM.stakingInfo = document.getElementById('staking-info');
+        DOM.claimRewardsBtn = document.getElementById('claim-rewards');
+        DOM.notificationList = document.getElementById('notification-list');
+        DOM.themeToggle = document.getElementById('theme-toggle');
+        DOM.slippageInput = document.getElementById('slippage-input');
+    }
+
+    // ---------------------------------------------------------------------
+    // Application Bootstrap
+    // ---------------------------------------------------------------------
     function init() {
-        initDOMElements();
-        attachEventListeners();
-        state.market.chartData = generateChartData(50);
-        state.orderBook = generateOrderBook();
-        renderChart();
-        renderOrderBook();
+        initDOM();
         renderWallet();
+        renderMarket();
+        renderOrderBook();
         renderPortfolio();
-        renderTransactions();
-        updateGasPrice();
-        updateStaking();
+        renderStaking();
+        renderSettings();
+        bindUIEvents();
         startIntervals();
-        addNotification('Magnum Opus dashboard initialized', 'info');
+        console.log('Magnum Opus dashboard initialized');
     }
 
-    // Auto-initialize when DOM is ready
+    // Kick off when DOM is ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
         init();
     }
+
+    // Expose a minimal debug API on window for developers
+    window.MagnumOpus = {
+        state,
+        playAudioTone,
+        updateMarketData,
+        updateGasData,
+        updateOrderBook,
+        updateStaking
+    };
+
 })();
