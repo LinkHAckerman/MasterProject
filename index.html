@@ -47,7 +47,7 @@
             color: var(--text-main);
             min-height: 100vh;
             overflow-x: hidden;
-            background-image: 
+            background-image:
                 radial-gradient(circle at 10% 15%, rgba(168, 85, 247, 0.12) 0%, transparent 45%),
                 radial-gradient(circle at 90% 85%, rgba(56, 189, 248, 0.12) 0%, transparent 45%);
             background-attachment: fixed;
@@ -99,59 +99,59 @@
             </button>
 
             <button id="open-settings-btn" class="icon-btn" aria-label="Platform Settings" title="Settings">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09a1.65 1.65 0 0 0-1.51-1.51H5a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33h2.2a1.65 1.65 0 0 0 1-1.51V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1.51 1.51h.09a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09a1.65 1.65 0 0 0-1.51-1.51H5a2 2 0 0"/></svg>
             </button>
         </div>
     </header>
 
     <!-- Main Dashboard -->
     <main id="dashboard">
-        <section class="card" id="wallet-overview">
-            <h2>Wallet Overview</h2>
-            <div class="card-content">
-                <p>Balance: <span id="wallet-balance">0.00 ETH</span></p>
-                <p>Connected Network: <span id="connected-network">Ethereum</span></p>
-            </div>
+        <section class="wallet-overview card">
+            <h2 class="section-title">Wallet Overview</h2>
+            <div class="wallet-balance mono-val" id="wallet-balance">0.00 ETH</div>
+            <button class="btn-primary" id="refresh-balance">Refresh</button>
         </section>
 
-        <section class="card" id="orderbook">
-            <h2>Order Book</h2>
-            <canvas id="orderbook-canvas" width="800" height="400"></canvas>
+        <section class="market-data card">
+            <h2 class="section-title">Market Data</h2>
+            <canvas id="price-chart" width="800" height="400"></canvas>
         </section>
 
-        <section class="card" id="activity-feed">
-            <h2>Recent Activity</h2>
-            <ul id="activity-list">
-                <li>No activity yet.</li>
-            </ul>
+        <section class="transactions card">
+            <h2 class="section-title">Recent Transactions</h2>
+            <table id="tx-table">
+                <thead>
+                    <tr><th>Hash</th><th>Type</th><th>Amount</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                    <!-- rows injected by app.js -->
+                </tbody>
+            </table>
         </section>
     </main>
 
     <!-- Settings Modal (hidden by default) -->
-    <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <div class="modal-content">
-            <h2 id="settings-title">Platform Settings</h2>
-            <button id="close-settings-btn" class="icon-btn" aria-label="Close Settings">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-            <form id="settings-form">
-                <label>
-                    Theme:
-                    <select id="theme-select">
-                        <option value="dark">Dark</option>
-                        <option value="light">Light</option>
-                    </select>
-                </label>
-                <label>
-                    Refresh Interval (seconds):
-                    <input type="number" id="refresh-interval" min="5" max="60" step="5" value="15"/>
-                </label>
-                <button type="submit" class="primary-btn">Save Settings</button>
-            </form>
-        </div>
-    </div>
+    <dialog id="settings-modal">
+        <form method="dialog">
+            <h3>Platform Settings</h3>
+            <label>
+                <span>Theme</span>
+                <select id="theme-select">
+                    <option value="dark">Dark</option>
+                    <option value="light">Light</option>
+                </select>
+            </label>
+            <label>
+                <span>Refresh Interval (seconds)</span>
+                <input type="number" id="refresh-interval" min="5" max="60" value="15"/>
+            </label>
+            <menu>
+                <button value="cancel">Cancel</button>
+                <button id="save-settings" value="default">Save</button>
+            </menu>
+        </form>
+    </dialog>
 
-    <!-- Core Application Script -->
-    <script src="app.js"></script>
+    <script src="app.js" defer></script>
 </body>
 </html>
