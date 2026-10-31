@@ -182,23 +182,23 @@ namespace MagnumOpus.Backend.Core
         Task<TransactionReceipt> ProcessTransactionAsync(Transaction transaction, CancellationToken cancellationToken = default);
         Task<Block> MineBlockAsync(CancellationToken cancellationToken = default);
         Task<Block> GetLatestBlockAsync(CancellationToken cancellationToken = default);
-        Task<Transaction> GetTransactionAsync(string transactionId, CancellationToken cancellationToken = default);
-        Task<TransactionReceipt> GetTransactionReceiptAsync(string transactionId, CancellationToken cancellationToken = default);
-        Task<Wallet> GetWalletAsync(string address, CancellationToken cancellationToken = default);
-        Task<Token> GetTokenAsync(string symbol, CancellationToken cancellationToken = default);
+        Task<Transaction> GetTransactionByIdAsync(string transactionId, CancellationToken cancellationToken = default);
+        Task<TransactionReceipt> GetTransactionReceiptByIdAsync(string transactionId, CancellationToken cancellationToken = default);
+        Task<Wallet> GetWalletByAddressAsync(string address, CancellationToken cancellationToken = default);
+        Task<Token> GetTokenBySymbolAsync(string symbol, CancellationToken cancellationToken = default);
     }
 
     public sealed class TransactionProcessor : ITransactionProcessor
     {
         private readonly ConcurrentDictionary<string, Transaction> _pendingTransactions = new ConcurrentDictionary<string, Transaction>();
         private readonly ConcurrentDictionary<string, TransactionReceipt> _transactionReceipts = new ConcurrentDictionary<string, TransactionReceipt>();
-        private readonly ConcurrentDictionary<string, Block> _blocks = new ConcurrentDictionary<string, Block>();
         private readonly ConcurrentDictionary<string, Wallet> _wallets = new ConcurrentDictionary<string, Wallet>();
         private readonly ConcurrentDictionary<string, Token> _tokens = new ConcurrentDictionary<string, Token>();
-        private readonly object _miningLock = new object();
-        private readonly object _walletLock = new object();
-        private readonly object _tokenLock = new object();
-        private readonly Random _random = new Random();
+        private readonly ConcurrentQueue<Block> _blockchain = new ConcurrentQueue<Block>();
+        private readonly SemaphoreSlim _miningSemaphore = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _walletSemaphore = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _tokenSemaphore = new SemaphoreSlim(1, 1);
+        private readonly object _blockchainLock = new object();
 
         public TransactionProcessor()
         {
@@ -207,15 +207,14 @@ namespace MagnumOpus.Backend.Core
             {
                 Index = 0,
                 Timestamp = DateTime.UtcNow,
-                Transactions = new List<Transaction>(),
                 PreviousHash = "0",
                 MerkleRoot = "0",
                 Nonce = 0,
                 Hash = "0",
-                MinerAddress = "0",
+                MinerAddress = "0x0",
                 Difficulty = 1
             };
-            _blocks.TryAdd(genesisBlock.Hash, genesisBlock);
+            _blockchain.Enqueue(genesisBlock);
         }
 
         public async Task<TransactionReceipt> ProcessTransactionAsync(Transaction transaction, CancellationToken cancellationToken = default)
@@ -223,208 +222,154 @@ namespace MagnumOpus.Backend.Core
             // Validate transaction
             if (string.IsNullOrWhiteSpace(transaction.Sender) || string.IsNullOrWhiteSpace(transaction.Recipient))
             {
-                throw new ArgumentException("Invalid transaction sender or recipient");
+                throw new ArgumentException("Invalid sender or recipient address.");
             }
 
             if (transaction.Amount <= 0)
             {
-                throw new ArgumentException("Invalid transaction amount");
+                throw new ArgumentException("Invalid transaction amount.");
             }
 
             if (transaction.Fee <= 0)
             {
-                throw new ArgumentException("Invalid transaction fee");
+                throw new ArgumentException("Invalid transaction fee.");
+            }
+
+            // Verify transaction signature
+            if (!VerifyTransactionSignature(transaction))
+            {
+                throw new ArgumentException("Invalid transaction signature.");
             }
 
             // Check if transaction already exists
             if (_pendingTransactions.ContainsKey(transaction.Id) || _transactionReceipts.ContainsKey(transaction.Id))
             {
-                throw new InvalidOperationException("Transaction already exists");
+                throw new ArgumentException("Transaction already exists.");
             }
 
             // Add transaction to pending transactions
             _pendingTransactions.TryAdd(transaction.Id, transaction);
 
-            // Return pending transaction receipt
-            return new TransactionReceipt
+            // Create transaction receipt
+            var transactionReceipt = new TransactionReceipt
             {
                 TransactionId = transaction.Id,
-                BlockIndex = -1,
-                BlockHash = string.Empty,
-                GasUsed = 0,
-                FeePaid = 0,
                 Status = TransactionStatus.Pending,
-                Timestamp = DateTime.UtcNow,
-                ExecutionMessage = "Transaction is pending"
+                Timestamp = DateTime.UtcNow
             };
+
+            // Add transaction receipt to transaction receipts
+            _transactionReceipts.TryAdd(transaction.Id, transactionReceipt);
+
+            return transactionReceipt;
         }
 
         public async Task<Block> MineBlockAsync(CancellationToken cancellationToken = default)
         {
-            lock (_miningLock)
+            await _miningSemaphore.WaitAsync(cancellationToken);
+
+            try
             {
                 // Get the latest block
-                var latestBlock = _blocks.Values.OrderByDescending(b => b.Index).FirstOrDefault();
+                var latestBlock = _blockchain.LastOrDefault();
 
-                // Create new block
+                // Create a new block
                 var newBlock = new Block
                 {
                     Index = latestBlock.Index + 1,
                     Timestamp = DateTime.UtcNow,
-                    Transactions = _pendingTransactions.Values.ToList(),
                     PreviousHash = latestBlock.Hash,
-                    MerkleRoot = ComputeMerkleRoot(_pendingTransactions.Values.ToList()),
-                    Nonce = (ulong)_random.Next(),
-                    MinerAddress = "0",
-                    Difficulty = 1
+                    Difficulty = latestBlock.Difficulty
                 };
 
-                // Compute block hash
-                newBlock.Hash = ComputeBlockHash(newBlock);
+                // Get pending transactions
+                var pendingTransactions = _pendingTransactions.Values.ToList();
 
-                // Add block to blocks
-                _blocks.TryAdd(newBlock.Hash, newBlock);
+                // Add transactions to the new block
+                newBlock.Transactions.AddRange(pendingTransactions);
 
-                // Clear pending transactions
-                _pendingTransactions.Clear();
+                // Calculate Merkle root
+                newBlock.MerkleRoot = CalculateMerkleRoot(pendingTransactions);
 
-                // Create transaction receipts
-                foreach (var transaction in newBlock.Transactions)
+                // Mine the block
+                MineBlock(newBlock);
+
+                // Add the new block to the blockchain
+                _blockchain.Enqueue(newBlock);
+
+                // Update transaction receipts
+                foreach (var transaction in pendingTransactions)
                 {
-                    var receipt = new TransactionReceipt
+                    if (_transactionReceipts.TryGetValue(transaction.Id, out var transactionReceipt))
                     {
-                        TransactionId = transaction.Id,
-                        BlockIndex = newBlock.Index,
-                        BlockHash = newBlock.Hash,
-                        GasUsed = 0,
-                        FeePaid = transaction.Fee,
-                        Status = TransactionStatus.Confirmed,
-                        Timestamp = DateTime.UtcNow,
-                        ExecutionMessage = "Transaction confirmed"
-                    };
-                    _transactionReceipts.TryAdd(receipt.TransactionId, receipt);
+                        transactionReceipt.BlockIndex = newBlock.Index;
+                        transactionReceipt.BlockHash = newBlock.Hash;
+                        transactionReceipt.Status = TransactionStatus.Confirmed;
+                    }
+
+                    // Remove transaction from pending transactions
+                    _pendingTransactions.TryRemove(transaction.Id, out _);
                 }
 
                 return newBlock;
+            }
+            finally
+            {
+                _miningSemaphore.Release();
             }
         }
 
         public async Task<Block> GetLatestBlockAsync(CancellationToken cancellationToken = default)
         {
-            return _blocks.Values.OrderByDescending(b => b.Index).FirstOrDefault();
+            return _blockchain.LastOrDefault();
         }
 
-        public async Task<Transaction> GetTransactionAsync(string transactionId, CancellationToken cancellationToken = default)
+        public async Task<Transaction> GetTransactionByIdAsync(string transactionId, CancellationToken cancellationToken = default)
         {
             if (_pendingTransactions.TryGetValue(transactionId, out var pendingTransaction))
             {
                 return pendingTransaction;
             }
 
-            var receipt = await GetTransactionReceiptAsync(transactionId, cancellationToken);
-            if (receipt != null && _blocks.TryGetValue(receipt.BlockHash, out var block))
-            {
-                return block.Transactions.FirstOrDefault(t => t.Id == transactionId);
-            }
-
-            return null;
+            var block = _blockchain.FirstOrDefault(b => b.Transactions.Any(t => t.Id == transactionId));
+            return block?.Transactions.FirstOrDefault(t => t.Id == transactionId);
         }
 
-        public async Task<TransactionReceipt> GetTransactionReceiptAsync(string transactionId, CancellationToken cancellationToken = default)
+        public async Task<TransactionReceipt> GetTransactionReceiptByIdAsync(string transactionId, CancellationToken cancellationToken = default)
         {
-            if (_transactionReceipts.TryGetValue(transactionId, out var receipt))
-            {
-                return receipt;
-            }
-
-            return null;
+            _transactionReceipts.TryGetValue(transactionId, out var transactionReceipt);
+            return transactionReceipt;
         }
 
-        public async Task<Wallet> GetWalletAsync(string address, CancellationToken cancellationToken = default)
+        public async Task<Wallet> GetWalletByAddressAsync(string address, CancellationToken cancellationToken = default)
         {
-            lock (_walletLock)
-            {
-                if (_wallets.TryGetValue(address, out var wallet))
-                {
-                    return wallet;
-                }
-
-                // Create new wallet
-                wallet = new Wallet
-                {
-                    Address = address,
-                    PublicKey = string.Empty,
-                    Balance = 0,
-                    TokenBalances = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase),
-                    Nonce = 0,
-                    CreatedAt = DateTime.UtcNow
-                };
-                _wallets.TryAdd(wallet.Address, wallet);
-
-                return wallet;
-            }
+            _wallets.TryGetValue(address, out var wallet);
+            return wallet;
         }
 
-        public async Task<Token> GetTokenAsync(string symbol, CancellationToken cancellationToken = default)
+        public async Task<Token> GetTokenBySymbolAsync(string symbol, CancellationToken cancellationToken = default)
         {
-            lock (_tokenLock)
-            {
-                if (_tokens.TryGetValue(symbol, out var token))
-                {
-                    return token;
-                }
-
-                // Create new token
-                token = new Token
-                {
-                    Symbol = symbol,
-                    Name = string.Empty,
-                    Decimals = 18,
-                    TotalSupply = 0,
-                    ContractAddress = string.Empty
-                };
-                _tokens.TryAdd(token.Symbol, token);
-
-                return token;
-            }
+            _tokens.TryGetValue(symbol, out var token);
+            return token;
         }
 
-        private string ComputeMerkleRoot(List<Transaction> transactions)
+        private bool VerifyTransactionSignature(Transaction transaction)
         {
-            if (transactions.Count == 0)
-            {
-                return "0";
-            }
-
-            var hashes = transactions.Select(t => t.ComputeHash()).ToList();
-
-            while (hashes.Count > 1)
-            {
-                var newHashes = new List<string>();
-
-                for (var i = 0; i < hashes.Count; i += 2)
-                {
-                    var left = hashes[i];
-                    var right = i + 1 < hashes.Count ? hashes[i + 1] : hashes[i];
-
-                    using var sha256 = SHA256.Create();
-                    var combined = Encoding.UTF8.GetBytes(left + right);
-                    var hash = sha256.ComputeHash(combined);
-                    newHashes.Add(Convert.ToHexString(hash).ToLowerInvariant());
-                }
-
-                hashes = newHashes;
-            }
-
-            return hashes[0];
+            // TODO: Implement transaction signature verification
+            return true;
         }
 
-        private string ComputeBlockHash(Block block)
+        private string CalculateMerkleRoot(List<Transaction> transactions)
         {
-            using var sha256 = SHA256.Create();
-            var blockData = Encoding.UTF8.GetBytes($"{block.Index}:{block.Timestamp:O}:{block.MerkleRoot}:{block.PreviousHash}:{block.Nonce}");
-            var hash = sha256.ComputeHash(blockData);
-            return Convert.ToHexString(hash).ToLowerInvariant();
+            // TODO: Implement Merkle root calculation
+            return "0";
+        }
+
+        private void MineBlock(Block block)
+        {
+            // TODO: Implement block mining logic
+            block.Nonce = 0;
+            block.Hash = block.ComputeHash();
         }
     }
 
