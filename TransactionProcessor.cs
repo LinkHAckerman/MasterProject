@@ -149,202 +149,42 @@ namespace MagnumOpus.Backend.Core
         public DateTime Timestamp { get; set; } = DateTime.UtcNow;
 
         [JsonPropertyName("executionMessage")]
-        public string ExecutionMessage { get; set; } = "Success";
+        public string ExecutionMessage { get; set; } = string.Empty;
 
-        public bool IsSuccessful()
-        {
-            return Status == TransactionStatus.Confirmed;
-        }
+        [JsonPropertyName("logs")]
+        public List<string> Logs { get; set; } = new List<string>();
+
+        [JsonPropertyName("contractAddress")]
+        public string ContractAddress { get; set; } = string.Empty;
+
+        [JsonPropertyName("events")]
+        public List<TransactionEvent> Events { get; set; } = new List<TransactionEvent>();
     }
 
     // ============================================================================
-    // Block Entity
+    // Transaction Event Entity
     // ============================================================================
-    public sealed class Block
+    public sealed class TransactionEvent
     {
-        [JsonPropertyName("index")]
-        public long Index { get; set; }
+        [JsonPropertyName("eventName")]
+        public string EventName { get; set; } = string.Empty;
 
-        [JsonPropertyName("timestamp")]
-        public DateTime Timestamp { get; set; }
-
-        [JsonPropertyName("transactions")]
-        public List<Transaction> Transactions { get; set; } = new List<Transaction>();
-
-        [JsonPropertyName("previousHash")]
-        public string PreviousHash { get; set; } = string.Empty;
-
-        [JsonPropertyName("merkleRoot")]
-        public string MerkleRoot { get; set; } = string.Empty;
-
-        [JsonPropertyName("nonce")]
-        public ulong Nonce { get; set; }
-
-        [JsonPropertyName("hash")]
-        public string Hash { get; set; } = string.Empty;
-
-        [JsonPropertyName("minerAddress")]
-        public string MinerAddress { get; set; } = string.Empty;
-
-        [JsonPropertyName("difficulty")]
-        public int Difficulty { get; set; }
-
-        public bool IsValid()
-        {
-            if (Index <= 0) return false;
-            if (PreviousHash == string.Empty) return false;
-            return true;
-        }
+        [JsonPropertyName("eventData")]
+        public Dictionary<string, object> EventData { get; set; } = new Dictionary<string, object>();
     }
 
     // ============================================================================
-    // Wallet Entity
+    // Transaction Processor
     // ============================================================================
-    public sealed class Wallet
+    public sealed class TransactionProcessor
     {
-        [JsonPropertyName("address")]
-        public string Address { get; set; } = string.Empty;
+        private readonly ConcurrentDictionary<string, Transaction> _pendingTransactions = new ConcurrentDictionary<string, Transaction>();
+        private readonly ConcurrentDictionary<string, Transaction> _confirmedTransactions = new ConcurrentDictionary<string, Transaction>();
+        private readonly ConcurrentDictionary<string, TransactionReceipt> _transactionReceipts = new ConcurrentDictionary<string, TransactionReceipt>();
+        private readonly ConcurrentDictionary<string, ulong> _nonces = new ConcurrentDictionary<string, ulong>();
+        private readonly object _lock = new object();
 
-        [JsonPropertyName("publicKey")]
-        public string PublicKey { get; set; } = string.Empty;
-
-        [JsonPropertyName("balance")]
-        public decimal Balance { get; set; }
-
-        [JsonPropertyName("tokenBalances")]
-        public Dictionary<string, decimal> TokenBalances { get; set; } = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-
-        [JsonPropertyName("nonce")]
-        public ulong Nonce { get; set; }
-
-        [JsonPropertyName("createdAt")]
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-
-        public bool IsActive()
-        {
-            return !string.IsNullOrEmpty(Address) && Balance > 0;
-        }
-    }
-
-    // ============================================================================
-    // Token Entity
-    // ============================================================================
-    public sealed class Token
-    {
-        [JsonPropertyName("symbol")]
-        public string Symbol { get; set; } = "MOPUS";
-
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = "Magnum Opus Token";
-
-        [JsonPropertyName("decimals")]
-        public int Decimals { get; set; } = 18;
-
-        [JsonPropertyName("totalSupply")]
-        public decimal TotalSupply { get; set; }
-
-        [JsonPropertyName("currentSupply")]
-        public decimal CurrentSupply { get; set; }
-
-        public bool IsValid()
-        {
-            return TotalSupply > 0 && CurrentSupply >= 0;
-        }
-    }
-
-    // ============================================================================
-    // Transaction Processor Service
-    // ============================================================================
-    public static class TransactionProcessor
-    {
-        private static readonly ConcurrentDictionary<string, Transaction> _pendingTransactions = new();
-        private static readonly ConcurrentDictionary<string, TransactionReceipt> _completedTransactions = new();
-
-        /// <summary>
-        /// Processes a new transaction through the pipeline.
-        /// </summary>
-        public static async Task<TransactionResult> ProcessTransactionAsync(
-            Transaction transaction,
-            Wallet senderWallet,
-            Token token,
-            string? recipientAddress = null)
-        {
-            if (!transaction.IsValid())
-                return new TransactionResult(TransactionStatus.Failed, "Invalid transaction data");
-
-            if (!senderWallet.IsActive())
-                return new TransactionResult(TransactionStatus.Failed, "Sender wallet is inactive");
-
-            // Simulate network delay
-            await Task.Delay(10);
-
-            // Create receipt
-            var receipt = new TransactionReceipt
-            {
-                TransactionId = transaction.Id,
-                BlockIndex = 0, // Would be set by actual blockchain
-                BlockHash = "",
-                GasUsed = transaction.CalculateTotalCost(),
-                FeePaid = transaction.Fee,
-                Status = TransactionStatus.Confirmed,
-                Timestamp = transaction.Timestamp,
-                ExecutionMessage = "Transaction processed successfully"
-            };
-
-            // Store receipt
-            _completedTransactions[transaction.Id] = receipt;
-
-            return new TransactionResult(transaction.Status, "Transaction processed");
-        }
-
-        /// <summary>
-        /// Validates a transaction against network constraints.
-        /// </summary>
-        public static bool ValidateTransaction(Transaction transaction)
-        {
-            if (!transaction.IsValid()) return false;
-            if (!transaction.ValidateNetworkConstraints()) return false;
-            return true;
-        }
-
-        /// <summary>
-        /// Calculates gas usage based on transaction complexity.
-        /// </summary>
-        public static long EstimateGasUsage(Transaction transaction)
-        {
-            // Base gas rate (simulated)
-            const decimal baseGasRate = 21_000m;
-            
-            // Adjust based on transaction complexity
-            decimal complexityMultiplier = 1.0;
-            if (transaction.Amount > 1000m) complexityMultiplier = 1.5m;
-            if (transaction.Payload.Length > 100) complexityMultiplier = 2.0m;
-            
-            return (long)(baseGasRate * complexityMultiplier);
-        }
-
-        /// <summary>
-        /// Generates a transaction signature using HMAC-SHA256.
-        /// </summary>
-        public static string GenerateSignature(
-            string data,
-            string secretKey)
-        {
-            using var hmac = HMAC.Managed();
-            hmac.Key = Encoding.UTF8.GetBytes(secretKey);
-            return Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(data)));
-        }
-
-        /// <summary>
-        /// Creates a new transaction with proper structure.
-        /// </summary>
-        public static Transaction CreateTransaction(
-            string sender,
-            string recipient,
-            decimal amount,
-            string tokenSymbol,
-            string payload,
-            string signature)
+        public async Task<Transaction> CreateTransactionAsync(string sender, string recipient, decimal amount, string tokenSymbol, string payload, string signature)
         {
             var transaction = new Transaction
             {
@@ -355,87 +195,90 @@ namespace MagnumOpus.Backend.Core
                 TokenSymbol = tokenSymbol,
                 Payload = payload,
                 Signature = signature,
-                Status = TransactionStatus.Pending,
-                Nonce = 0
+                Nonce = GetNextNonce(sender),
+                Timestamp = DateTime.UtcNow
             };
+
+            if (!transaction.IsValid())
+            {
+                throw new InvalidOperationException("Invalid transaction.");
+            }
+
+            if (!_pendingTransactions.TryAdd(transaction.Id, transaction))
+            {
+                throw new InvalidOperationException("Failed to add transaction to pending list.");
+            }
+
             return transaction;
         }
-    }
 
-    // ============================================================================
-    // Transaction Result Type
-    // ============================================================================
-    public sealed class TransactionResult
-    {
-        public TransactionStatus Status { get; set; }
-        public string Message { get; set; } = string.Empty;
-        public bool IsSuccessful { get; set; }
-
-        public static TransactionResult Success(TransactionStatus status, string message)
+        public async Task<TransactionReceipt> ProcessTransactionAsync(Transaction transaction)
         {
-            return new TransactionResult { Status = status, Message = message };
+            if (transaction == null)
+            {
+                throw new ArgumentNullException(nameof(transaction));
+            }
+
+            if (!_pendingTransactions.TryRemove(transaction.Id, out _))
+            {
+                throw new InvalidOperationException("Transaction not found in pending list.");
+            }
+
+            var receipt = new TransactionReceipt
+            {
+                TransactionId = transaction.Id,
+                BlockIndex = GetNextBlockIndex(),
+                BlockHash = ComputeBlockHash(transaction),
+                GasUsed = CalculateGasUsed(transaction),
+                FeePaid = transaction.Fee,
+                Status = TransactionStatus.Confirmed,
+                Timestamp = DateTime.UtcNow,
+                ExecutionMessage = "Transaction processed successfully."
+            };
+
+            if (!_confirmedTransactions.TryAdd(transaction.Id, transaction))
+            {
+                throw new InvalidOperationException("Failed to add transaction to confirmed list.");
+            }
+
+            if (!_transactionReceipts.TryAdd(receipt.TransactionId, receipt))
+            {
+                throw new InvalidOperationException("Failed to add transaction receipt.");
+            }
+
+            return receipt;
         }
 
-        public static TransactionResult Failure(string error)
+        private ulong GetNextNonce(string sender)
         {
-            return new TransactionResult { Status = TransactionStatus.Failed, Message = error };
+            lock (_lock)
+            {
+                if (!_nonces.TryGetValue(sender, out var nonce))
+                {
+                    nonce = 0;
+                }
+
+                _nonces[sender] = nonce + 1;
+                return nonce;
+            }
         }
-    }
-}
 
-// ============================================================================
-// Example Usage and Testing
-// ============================================================================
-
-public class TransactionDemo
-{
-    public static void Main()
-    {
-        // Create a sample token
-        var token = new Token
+        private long GetNextBlockIndex()
         {
-            Symbol = "MOPUS",
-            Name = "Magnum Opus Token",
-            Decimals = 18,
-            TotalSupply = 1000000000m
-        };
+            // Implement logic to get the next block index
+            return 0;
+        }
 
-        // Create a sender wallet
-        var senderWallet = new Wallet
+        private string ComputeBlockHash(Transaction transaction)
         {
-            Address = "0x1234567890abcdef1234567890abcdef12345678",
-            PublicKey = "0xdeadbeef1234567890abcdef1234567890",
-            Balance = 1000.0m,
-            Nonce = 0
-        };
+            // Implement logic to compute the block hash
+            return string.Empty;
+        }
 
-        // Create a recipient wallet
-        var recipientWallet = new Wallet
+        private long CalculateGasUsed(Transaction transaction)
         {
-            Address = "0xabcdef1234567890abcdef1234567890abcdef12",
-            PublicKey = "0xabcdef1234567890abcdef1234567890abcdef1",
-            Balance = 500.0m
-        };
-
-        // Create a transaction
-        var transaction = TransactionProcessor.CreateTransaction(
-            sender: "0x1234567890abcdef1234567890abcdef12345678",
-            recipient: "0xabcdef1234567890abcdef1234567890abcdef12",
-            amount: 50.0m,
-            tokenSymbol: "MOPUS",
-            payload: "{"orderId": 123, "type": "trade"}",
-            signature: "sample-signature-here"
-        );
-
-        // Process the transaction
-        var result = await TransactionProcessor.ProcessTransactionAsync(
-            transaction,
-            senderWallet,
-            token
-        );
-
-        Console.WriteLine($"Transaction ID: {result.TransactionId}");
-        Console.WriteLine($"Status: {result.Status}");
-        Console.WriteLine($"Message: {result.Message}");
+            // Implement logic to calculate gas used
+            return 0;
+        }
     }
 }
