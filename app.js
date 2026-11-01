@@ -127,317 +127,660 @@
     let audioCtx = null;
 
     /**
-     * Play a short tone for UI feedback.
-     * @param {number} frequency Hz
-     * @param {number} duration  ms
+     * Play a short tone for UI feedback
+     * @param {number} frequency - Tone frequency in Hz
+     * @param {number} duration - Duration in milliseconds
      */
     function playTone(frequency, duration) {
         if (!state.settings.enableSounds) return;
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
         const oscillator = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
+        const gainNode = audioCtx.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
         oscillator.type = 'sine';
-        oscillator.frequency.setValueAtTime(frequency, audioCtx.currentTime);
-        gain.gain.setValueAtTime(0.001, audioCtx.currentTime);
-        oscillator.connect(gain).connect(audioCtx.destination);
+        oscillator.frequency.value = frequency;
+
+        gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+        gainNode.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.01);
+        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + duration / 1000);
+
         oscillator.start();
-        gain.gain.exponentialRampToValueAtTime(0.2, audioCtx.currentTime + 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration / 1000);
-        oscillator.stop(audioCtx.currentTime + duration / 1000 + 0.02);
+        oscillator.stop(audioCtx.currentTime + duration / 1000);
     }
 
     // ---------------------------------------------------------------------
-    // Initialization – cache DOM nodes and bind UI events
+    // Utility Functions
     // ---------------------------------------------------------------------
-    function initDOM() {
-        DOM.walletBtn = document.getElementById('wallet-connect');
-        DOM.themeToggle = document.getElementById('theme-toggle');
-        DOM.marketPrice = document.getElementById('market-price');
-        DOM.marketChange = document.getElementById('market-change');
-        DOM.gasSelect = document.getElementById('gas-select');
-        DOM.orderBookBids = document.getElementById('orderbook-bids');
-        DOM.orderBookAsks = document.getElementById('orderbook-asks');
-        DOM.txList = document.getElementById('transaction-list');
-        DOM.portfolioTable = document.getElementById('portfolio-table');
-        DOM.stakeInfo = document.getElementById('stake-info');
-        DOM.notificationArea = document.getElementById('notification-area');
-    }
 
-    function bindEvents() {
-        if (DOM.walletBtn) {
-            DOM.walletBtn.addEventListener('click', () => {
-                toggleWalletConnection();
-                playTone(440, 120);
-            });
-        }
-        if (DOM.themeToggle) {
-            DOM.themeToggle.addEventListener('click', () => {
-                state.settings.theme = state.settings.theme === 'dark' ? 'light' : 'dark';
-                document.documentElement.setAttribute('data-theme', state.settings.theme);
-                playTone(660, 80);
-            });
-        }
-        if (DOM.gasSelect) {
-            DOM.gasSelect.addEventListener('change', (e) => {
-                const val = parseInt(e.target.value, 10);
-                if (!isNaN(val)) state.gas.current = val;
-                playTone(550, 100);
-            });
-        }
-    }
-
-    // ---------------------------------------------------------------------
-    // Wallet connection mock – toggles state.wallet.connected
-    // ---------------------------------------------------------------------
-    function toggleWalletConnection() {
-        state.wallet.connected = !state.wallet.connected;
-        if (state.wallet.connected) {
-            // mock address generation
-            state.wallet.address = '0x' + [...Array(40)].map(() => Math.floor(Math.random() * 16).toString(16)).join('');
-            addNotification('Wallet connected: ' + state.wallet.address, 'info');
-        } else {
-            addNotification('Wallet disconnected', 'warning');
-            state.wallet.address = null;
-        }
-        renderWalletStatus();
-    }
-
-    // ---------------------------------------------------------------------
-    // Notification helper
-    // ---------------------------------------------------------------------
-    function addNotification(message, type = 'info', ttl = 5000) {
-        const id = Date.now() + Math.random();
-        const note = { id, message, type, timestamp: Date.now() };
-        state.notifications.push(note);
-        renderNotifications();
-        setTimeout(() => {
-            state.notifications = state.notifications.filter(n => n.id !== id);
-            renderNotifications();
-        }, ttl);
-    }
-
-    // ---------------------------------------------------------------------
-    // Rendering functions – keep UI in sync with state
-    // ---------------------------------------------------------------------
-    function renderWalletStatus() {
-        if (!DOM.walletBtn) return;
-        DOM.walletBtn.textContent = state.wallet.connected ? 'Disconnect (' + state.wallet.address.slice(0, 6) + '…)': 'Connect Wallet';
-    }
-
-    function renderMarket() {
-        if (!DOM.marketPrice || !DOM.marketChange) return;
-        const fmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: state.settings.currency });
-        DOM.marketPrice.textContent = fmt.format(state.market.price);
-        const change = state.market.change24h.toFixed(2);
-        DOM.marketChange.textContent = (state.market.change24h >= 0 ? '+' : '') + change + '%';
-        DOM.marketChange.style.color = state.market.change24h >= 0 ? '#4caf50' : '#e53935';
-    }
-
-    function renderGas() {
-        if (!DOM.gasSelect) return;
-        const options = ['slow', 'standard', 'fast'];
-        DOM.gasSelect.innerHTML = '';
-        options.forEach(opt => {
-            const value = state.gas[opt];
-            const el = document.createElement('option');
-            el.value = value;
-            el.textContent = `${opt.charAt(0).toUpperCase() + opt.slice(1)} (${value} ${state.gas.unit})`;
-            if (value === state.gas.current) el.selected = true;
-            DOM.gasSelect.appendChild(el);
+    /**
+     * Format a number with the specified decimal places
+     * @param {number} value - The number to format
+     * @param {number} decimals - Number of decimal places
+     * @returns {string} Formatted number string
+     */
+    function formatNumber(value, decimals) {
+        return value.toLocaleString(undefined, {
+            minimumFractionDigits: decimals,
+            maximumFractionDigits: decimals
         });
     }
 
-    function renderOrderBook() {
-        if (!DOM.orderBookBids || !DOM.orderBookAsks) return;
-        const { bids, asks, maxDepth } = state.orderBook;
+    /**
+     * Format a currency value with the user's preferred currency
+     * @param {number} value - The amount to format
+     * @returns {string} Formatted currency string
+     */
+    function formatCurrency(value) {
+        return new Intl.NumberFormat(undefined, {
+            style: 'currency',
+            currency: state.settings.currency,
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }).format(value);
+    }
+
+    /**
+     * Format a percentage value
+     * @param {number} value - The percentage value
+     * @returns {string} Formatted percentage string
+     */
+    function formatPercentage(value) {
+        return `${value.toFixed(1)}%`;
+    }
+
+    /**
+     * Format a timestamp as a relative time string
+     * @param {number} timestamp - The timestamp in milliseconds
+     * @returns {string} Relative time string
+     */
+    function formatRelativeTime(timestamp) {
+        const now = Date.now();
+        const diff = now - timestamp;
+
+        if (diff < 60000) {
+            return 'Just now';
+        } else if (diff < 3600000) {
+            const minutes = Math.floor(diff / 60000);
+            return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
+        } else if (diff < 86400000) {
+            const hours = Math.floor(diff / 3600000);
+            return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
+        } else {
+            const days = Math.floor(diff / 86400000);
+            return `${days} day${days !== 1 ? 's' : ''} ago`;
+        }
+    }
+
+    /**
+     * Generate a random transaction hash
+     * @returns {string} Random transaction hash
+     */
+    function generateRandomHash() {
+        return '0x' + Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+    }
+
+    /**
+     * Generate a random block number
+     * @returns {number} Random block number
+     */
+    function generateRandomBlockNumber() {
+        return Math.floor(Math.random() * 10000000) + 19000000;
+    }
+
+    // ---------------------------------------------------------------------
+    // Wallet Functions
+    // ---------------------------------------------------------------------
+
+    /**
+     * Connect to a wallet
+     */
+    async function connectWallet() {
+        // Simulate wallet connection
+        state.wallet.connected = true;
+        state.wallet.address = '0x' + Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+
+        // Update UI
+        updateWalletUI();
+        updatePortfolioUI();
+        updateTransactionsUI();
+
+        // Play connection sound
+        playTone(880, 200);
+    }
+
+    /**
+     * Disconnect from the wallet
+     */
+    function disconnectWallet() {
+        state.wallet.connected = false;
+        state.wallet.address = null;
+
+        // Update UI
+        updateWalletUI();
+        updatePortfolioUI();
+        updateTransactionsUI();
+
+        // Play disconnection sound
+        playTone(440, 200);
+    }
+
+    /**
+     * Update the wallet UI
+     */
+    function updateWalletUI() {
+        if (state.wallet.connected) {
+            DOM.walletAddress.textContent = `${state.wallet.address.slice(0, 6)}...${state.wallet.address.slice(-4)}`;
+            DOM.walletBalance.textContent = formatCurrency(state.wallet.balanceEth * state.wallet.tokens.find(t => t.symbol === 'ETH').price);
+            DOM.connectWalletBtn.textContent = 'Disconnect';
+            DOM.connectWalletBtn.onclick = disconnectWallet;
+            DOM.walletInfo.classList.remove('hidden');
+        } else {
+            DOM.walletAddress.textContent = 'Not connected';
+            DOM.walletBalance.textContent = formatCurrency(0);
+            DOM.connectWalletBtn.textContent = 'Connect Wallet';
+            DOM.connectWalletBtn.onclick = connectWallet;
+            DOM.walletInfo.classList.add('hidden');
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Market Functions
+    // ---------------------------------------------------------------------
+
+    /**
+     * Update market data
+     */
+    function updateMarketData() {
+        const pair = PAIR_RATES[state.market.selectedPair];
+        const change = (Math.random() - 0.5) * 0.02;
+        const newPrice = pair.price * (1 + change);
+
+        state.market.price = newPrice;
+        state.market.change24h = change * 100;
+        state.market.volume24h += Math.floor(Math.random() * 1000000);
+        state.market.high24h = Math.max(state.market.high24h, newPrice);
+        state.market.low24h = Math.min(state.market.low24h, newPrice);
+
+        // Update chart data
+        const now = new Date();
+        state.market.chartData.labels.push(now.toLocaleTimeString());
+        state.market.chartData.prices.push(newPrice);
+        state.market.chartData.candles.push({
+            open: pair.price,
+            high: Math.max(pair.price, newPrice),
+            low: Math.min(pair.price, newPrice),
+            close: newPrice
+        });
+
+        // Keep only the last 60 data points
+        if (state.market.chartData.labels.length > 60) {
+            state.market.chartData.labels.shift();
+            state.market.chartData.prices.shift();
+            state.market.chartData.candles.shift();
+        }
+
+        // Update UI
+        updateMarketUI();
+        updateChart();
+    }
+
+    /**
+     * Update the market UI
+     */
+    function updateMarketUI() {
+        DOM.marketPrice.textContent = formatCurrency(state.market.price);
+        DOM.marketChange.textContent = `${state.market.change24h >= 0 ? '+' : ''}${formatPercentage(state.market.change24h)}`;
+        DOM.marketChange.classList.toggle('text-green-500', state.market.change24h >= 0);
+        DOM.marketChange.classList.toggle('text-red-500', state.market.change24h < 0);
+        DOM.marketVolume.textContent = formatNumber(state.market.volume24h, 0);
+        DOM.marketHigh.textContent = formatCurrency(state.market.high24h);
+        DOM.marketLow.textContent = formatCurrency(state.market.low24h);
+    }
+
+    /**
+     * Update the chart
+     */
+    function updateChart() {
+        const ctx = DOM.chartCanvas.getContext('2d');
+        const width = DOM.chartCanvas.width;
+        const height = DOM.chartCanvas.height;
+
+        // Clear canvas
+        ctx.clearRect(0, 0, width, height);
+
+        // Draw chart
+        if (state.market.chartData.prices.length > 1) {
+            const minPrice = Math.min(...state.market.chartData.prices);
+            const maxPrice = Math.max(...state.market.chartData.prices);
+            const priceRange = maxPrice - minPrice;
+
+            // Draw grid lines
+            ctx.strokeStyle = '#374151';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 5]);
+
+            for (let i = 1; i < 5; i++) {
+                const y = height - (i * height / 5);
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(width, y);
+                ctx.stroke();
+            }
+
+            ctx.setLineDash([]);
+
+            // Draw price line
+            ctx.strokeStyle = '#3b82f6';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+
+            for (let i = 0; i < state.market.chartData.prices.length; i++) {
+                const x = (i / (state.market.chartData.prices.length - 1)) * width;
+                const y = height - ((state.market.chartData.prices[i] - minPrice) / priceRange) * height;
+
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+
+            ctx.stroke();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Order Book Functions
+    // ---------------------------------------------------------------------
+
+    /**
+     * Update the order book
+     */
+    function updateOrderBook() {
+        const pair = PAIR_RATES[state.market.selectedPair];
+        const midPrice = pair.price;
+        const spread = midPrice * 0.02;
+
+        // Generate random bids and asks
+        const bids = [];
+        const asks = [];
+
+        for (let i = 0; i < state.orderBook.maxDepth; i++) {
+            const bidPrice = midPrice - (i * spread / state.orderBook.maxDepth);
+            const askPrice = midPrice + (i * spread / state.orderBook.maxDepth);
+            const bidSize = Math.random() * 10;
+            const askSize = Math.random() * 10;
+
+            bids.push({ price: bidPrice, size: bidSize });
+            asks.push({ price: askPrice, size: askSize });
+        }
+
+        // Sort bids and asks
+        bids.sort((a, b) => b.price - a.price);
+        asks.sort((a, b) => a.price - b.price);
+
+        state.orderBook.bids = bids;
+        state.orderBook.asks = asks;
+
+        // Update UI
+        updateOrderBookUI();
+    }
+
+    /**
+     * Update the order book UI
+     */
+    function updateOrderBookUI() {
+        // Clear existing entries
         DOM.orderBookBids.innerHTML = '';
         DOM.orderBookAsks.innerHTML = '';
-        bids.slice(0, maxDepth).forEach(b => {
+
+        // Add bids
+        state.orderBook.bids.forEach(bid => {
             const row = document.createElement('tr');
-            row.innerHTML = `<td>${b.price.toFixed(2)}</td><td>${b.amount}</td>`;
+            row.innerHTML = `
+                <td class="text-right pr-2">${formatNumber(bid.price, PAIR_RATES[state.market.selectedPair].decimals)}</td>
+                <td class="text-right pr-2">${formatNumber(bid.size, 2)}</td>
+                <td class="w-full">
+                    <div class="h-4 bg-green-500 opacity-20" style="width: ${bid.size * 10}%"></div>
+                </td>
+            `;
             DOM.orderBookBids.appendChild(row);
         });
-        asks.slice(0, maxDepth).forEach(a => {
+
+        // Add asks
+        state.orderBook.asks.forEach(ask => {
             const row = document.createElement('tr');
-            row.innerHTML = `<td>${a.price.toFixed(2)}</td><td>${a.amount}</td>`;
+            row.innerHTML = `
+                <td class="text-right pr-2">${formatNumber(ask.price, PAIR_RATES[state.market.selectedPair].decimals)}</td>
+                <td class="text-right pr-2">${formatNumber(ask.size, 2)}</td>
+                <td class="w-full">
+                    <div class="h-4 bg-red-500 opacity-20" style="width: ${ask.size * 10}%"></div>
+                </td>
+            `;
             DOM.orderBookAsks.appendChild(row);
         });
     }
 
-    function renderTransactions() {
-        if (!DOM.txList) return;
-        DOM.txList.innerHTML = '';
-        state.transactions.slice().reverse().forEach(tx => {
-            const li = document.createElement('li');
-            li.className = 'tx-item ' + tx.status.toLowerCase();
-            li.textContent = `[${new Date(tx.timestamp).toLocaleTimeString()}] ${tx.type}: ${tx.description} (${tx.status})`;
-            DOM.txList.appendChild(li);
-        });
-    }
-
-    function renderPortfolio() {
-        if (!DOM.portfolioTable) return;
-        const tbody = DOM.portfolioTable.querySelector('tbody');
-        if (!tbody) return;
-        tbody.innerHTML = '';
-        state.portfolio.forEach(p => {
-            const row = document.createElement('tr');
-            const fmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: state.settings.currency });
-            row.innerHTML = `
-                <td>${p.symbol}</td>
-                <td>${p.balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 6})}</td>
-                <td>${fmt.format(p.price)}</td>
-                <td>${fmt.format(p.value)}</td>
-                <td>${p.allocation.toFixed(1)}%</td>
-            `;
-            tbody.appendChild(row);
-        });
-    }
-
-    function renderStaking() {
-        if (!DOM.stakeInfo) return;
-        const { stakedOpus, rewardRateApy, pendingRewards, lastClaimed } = state.staking;
-        const fmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: state.settings.currency });
-        DOM.stakeInfo.innerHTML = `
-            <p>Staked: ${stakedOpus.toLocaleString()} OPUS</p>
-            <p>APY: ${rewardRateApy}%</p>
-            <p>Pending Rewards: ${pendingRewards.toFixed(4)} OPUS (${fmt.format(pendingRewards * PAIR_RATES['OPUS/USDT'].price)})</p>
-            <p>Last Claimed: ${new Date(lastClaimed).toLocaleString()}</p>
-        `;
-    }
-
-    function renderNotifications() {
-        if (!DOM.notificationArea) return;
-        DOM.notificationArea.innerHTML = '';
-        state.notifications.forEach(n => {
-            const div = document.createElement('div');
-            div.className = `notification ${n.type}`;
-            div.textContent = n.message;
-            DOM.notificationArea.appendChild(div);
-        });
-    }
-
     // ---------------------------------------------------------------------
-    // Mock data generators – replace with real API calls in production
+    // Transaction Functions
     // ---------------------------------------------------------------------
-    function mockMarketUpdate() {
-        const pair = PAIR_RATES[state.market.selectedPair];
-        // simulate small random walk
-        const delta = (Math.random() - 0.5) * 0.02 * pair.price;
-        state.market.price = Math.max(pair.price * 0.5, pair.price + delta);
-        state.market.change24h = ((state.market.price - pair.price) / pair.price) * 100;
-        state.market.volume24h = Math.round(state.market.volume24h * (0.95 + Math.random() * 0.1));
-        state.market.high24h = Math.max(state.market.high24h, state.market.price);
-        state.market.low24h = Math.min(state.market.low24h, state.market.price);
-        // push a dummy candle for chart (timestamp, open, high, low, close)
-        const now = Date.now();
-        const candle = {
-            time: now,
-            open: state.market.price - delta,
-            high: state.market.price + Math.abs(delta) * 0.5,
-            low: state.market.price - Math.abs(delta) * 0.5,
-            close: state.market.price
+
+    /**
+     * Add a new transaction to the state
+     * @param {string} type - Transaction type
+     * @param {string} description - Transaction description
+     * @param {string} amount - Transaction amount
+     */
+    function addTransaction(type, description, amount) {
+        const transaction = {
+            hash: generateRandomHash(),
+            type,
+            description,
+            amount,
+            status: 'Pending',
+            timestamp: Date.now(),
+            blockNumber: generateRandomBlockNumber()
         };
-        state.market.chartData.candles.push(candle);
-        if (state.market.chartData.candles.length > 100) state.market.chartData.candles.shift();
+
+        state.transactions.unshift(transaction);
+
+        // Update UI
+        updateTransactionsUI();
+
+        // Simulate transaction confirmation
+        setTimeout(() => {
+            transaction.status = 'Confirmed';
+            updateTransactionsUI();
+        }, 5000);
     }
 
-    function mockGasUpdate() {
-        // random jitter around standard
-        const jitter = Math.floor(Math.random() * 5) - 2; // -2..+2
-        state.gas.slow = Math.max(5, state.gas.standard - 6 + jitter);
-        state.gas.standard = Math.max(10, state.gas.standard + jitter);
-        state.gas.fast = Math.max(15, state.gas.standard + 6 + jitter);
-        // keep current within bounds
-        if (state.gas.current < state.gas.slow) state.gas.current = state.gas.slow;
-        if (state.gas.current > state.gas.fast) state.gas.current = state.gas.fast;
+    /**
+     * Update the transactions UI
+     */
+    function updateTransactionsUI() {
+        DOM.transactionsList.innerHTML = '';
+
+        state.transactions.forEach(tx => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td class="py-2 px-4">
+                    <div class="flex items-center">
+                        <span class="w-2 h-2 rounded-full mr-2 ${tx.status === 'Confirmed' ? 'bg-green-500' : 'bg-yellow-500'} animate-pulse"></span>
+                        <span class="truncate max-w-xs">${tx.hash}</span>
+                    </div>
+                </td>
+                <td class="py-2 px-4">${tx.type}</td>
+                <td class="py-2 px-4">${tx.description}</td>
+                <td class="py-2 px-4">${tx.amount}</td>
+                <td class="py-2 px-4">${tx.status}</td>
+                <td class="py-2 px-4">${formatRelativeTime(tx.timestamp)}</td>
+                <td class="py-2 px-4">${tx.blockNumber}</td>
+            `;
+            DOM.transactionsList.appendChild(row);
+        });
     }
 
-    function mockOrderBookUpdate() {
-        const depth = state.orderBook.maxDepth;
-        const basePrice = state.market.price;
-        const spread = basePrice * 0.001; // 0.1% spread
-        const bids = [];
-        const asks = [];
-        for (let i = 0; i < depth; i++) {
-            const priceBid = basePrice - spread * (i + 1) - Math.random() * spread;
-            const priceAsk = basePrice + spread * (i + 1) + Math.random() * spread;
-            bids.push({ price: priceBid, amount: (Math.random() * 5).toFixed(4) });
-            asks.push({ price: priceAsk, amount: (Math.random() * 5).toFixed(4) });
-        }
-        state.orderBook.bids = bids;
-        state.orderBook.asks = asks;
+    // ---------------------------------------------------------------------
+    // Portfolio Functions
+    // ---------------------------------------------------------------------
+
+    /**
+     * Update the portfolio data
+     */
+    function updatePortfolio() {
+        const totalValue = state.wallet.tokens.reduce((sum, token) => {
+            const tokenValue = token.balance * token.price;
+            return sum + tokenValue;
+        }, 0);
+
+        state.portfolio = state.wallet.tokens.map(token => {
+            const tokenValue = token.balance * token.price;
+            return {
+                symbol: token.symbol,
+                name: token.name,
+                balance: token.balance,
+                price: token.price,
+                value: tokenValue,
+                allocation: (tokenValue / totalValue) * 100
+            };
+        });
+
+        // Update UI
+        updatePortfolioUI();
     }
 
-    function mockStakingUpdate() {
-        // accrue rewards based on APY and time elapsed since last claim
+    /**
+     * Update the portfolio UI
+     */
+    function updatePortfolioUI() {
+        DOM.portfolioList.innerHTML = '';
+
+        state.portfolio.forEach(asset => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td class="py-2 px-4">${asset.symbol}</td>
+                <td class="py-2 px-4">${asset.name}</td>
+                <td class="py-2 px-4">${formatNumber(asset.balance, 4)}</td>
+                <td class="py-2 px-4">${formatCurrency(asset.price)}</td>
+                <td class="py-2 px-4">${formatCurrency(asset.value)}</td>
+                <td class="py-2 px-4">${formatPercentage(asset.allocation)}</td>
+            `;
+            DOM.portfolioList.appendChild(row);
+        });
+    }
+
+    // ---------------------------------------------------------------------
+    // Staking Functions
+    // ---------------------------------------------------------------------
+
+    /**
+     * Update staking data
+     */
+    function updateStaking() {
         const now = Date.now();
-        const seconds = (now - state.staking.lastClaimed) / 1000;
-        const yearlySeconds = 365 * 24 * 60 * 60;
-        const accrued = state.staking.stakedOpus * (state.staking.rewardRateApy / 100) * (seconds / yearlySeconds);
-        state.staking.pendingRewards += accrued;
-        // simulate occasional claim (10% chance per tick)
-        if (Math.random() < 0.1) {
-            state.staking.stakedOpus += state.staking.pendingRewards;
+        const timeSinceLastClaim = now - state.staking.lastClaimed;
+        const hoursSinceLastClaim = timeSinceLastClaim / 3600000;
+
+        // Calculate pending rewards
+        const dailyRewardRate = state.staking.rewardRateApy / 365;
+        const rewardPerHour = (state.staking.stakedOpus * dailyRewardRate) / 24;
+        state.staking.pendingRewards = rewardPerHour * hoursSinceLastClaim;
+
+        // Update UI
+        updateStakingUI();
+    }
+
+    /**
+     * Update the staking UI
+     */
+    function updateStakingUI() {
+        DOM.stakedOpus.textContent = formatNumber(state.staking.stakedOpus, 2);
+        DOM.rewardRate.textContent = formatPercentage(state.staking.rewardRateApy);
+        DOM.pendingRewards.textContent = formatNumber(state.staking.pendingRewards, 2);
+        DOM.lastClaimed.textContent = formatRelativeTime(state.staking.lastClaimed);
+    }
+
+    /**
+     * Claim staking rewards
+     */
+    function claimRewards() {
+        if (state.staking.pendingRewards > 0) {
+            const rewardToken = state.wallet.tokens.find(t => t.symbol === 'OPUS');
+            rewardToken.balance += state.staking.pendingRewards;
+
             state.staking.pendingRewards = 0;
-            state.staking.lastClaimed = now;
-            addNotification('Staking rewards auto‑claimed', 'success');
+            state.staking.lastClaimed = Date.now();
+
+            // Add transaction
+            addTransaction('Reward', 'Claimed staking rewards', `${formatNumber(state.staking.pendingRewards, 2)} OPUS`);
+
+            // Update UI
+            updateStakingUI();
+            updatePortfolio();
+
+            // Play sound
+            playTone(660, 200);
         }
     }
 
     // ---------------------------------------------------------------------
-    // Interval management – start/stop tickers based on settings
+    // Swap Functions
     // ---------------------------------------------------------------------
-    function startTickers() {
-        const interval = state.settings.autoRefreshInterval;
-        marketInterval = setInterval(() => { mockMarketUpdate(); renderMarket(); }, interval);
-        gasInterval = setInterval(() => { mockGasUpdate(); renderGas(); }, interval * 2);
-        orderBookInterval = setInterval(() => { mockOrderBookUpdate(); renderOrderBook(); }, interval * 3);
-        stakingInterval = setInterval(() => { mockStakingUpdate(); renderStaking(); }, interval * 5);
-    }
 
-    function stopTickers() {
-        clearInterval(marketInterval);
-        clearInterval(gasInterval);
-        clearInterval(orderBookInterval);
-        clearInterval(stakingInterval);
-    }
+    /**
+     * Perform a token swap
+     */
+    function performSwap() {
+        const fromToken = DOM.swapFromToken.value;
+        const toToken = DOM.swapToToken.value;
+        const amount = parseFloat(DOM.swapAmount.value);
 
-    // ---------------------------------------------------------------------
-    // Public API – expose for debugging / external modules
-    // ---------------------------------------------------------------------
-    window.MagnumOpus = {
-        state,
-        playTone,
-        addNotification,
-        renderAll: function () {
-            renderWalletStatus();
-            renderMarket();
-            renderGas();
-            renderOrderBook();
-            renderTransactions();
-            renderPortfolio();
-            renderStaking();
-            renderNotifications();
+        if (!fromToken || !toToken || isNaN(amount) || amount <= 0) {
+            alert('Please enter valid swap details');
+            return;
         }
-    };
+
+        const fromTokenData = state.wallet.tokens.find(t => t.symbol === fromToken);
+        const toTokenData = state.wallet.tokens.find(t => t.symbol === toToken);
+
+        if (!fromTokenData || !toTokenData) {
+            alert('Invalid token selection');
+            return;
+        }
+
+        if (fromTokenData.balance < amount) {
+            alert('Insufficient balance');
+            return;
+        }
+
+        // Calculate swap
+        const pairKey = `${fromToken}/${toToken}`;
+        const pair = PAIR_RATES[pairKey];
+
+        if (!pair) {
+            alert('Unsupported token pair');
+            return;
+        }
+
+        const receivedAmount = amount * pair.price;
+
+        // Update balances
+        fromTokenData.balance -= amount;
+        toTokenData.balance += receivedAmount;
+
+        // Add transaction
+        addTransaction('Swap', `Swapped ${formatNumber(amount, 4)} ${fromToken} for ${formatNumber(receivedAmount, 4)} ${toToken}`, `${formatNumber(amount, 4)} ${fromToken}`);
+
+        // Update UI
+        updatePortfolio();
+        updateMarketUI();
+        updateOrderBook();
+
+        // Play sound
+        playTone(784, 200);
+    }
 
     // ---------------------------------------------------------------------
-    // Bootstrap – run once DOM is ready
+    // Initialization
     // ---------------------------------------------------------------------
-    document.addEventListener('DOMContentLoaded', () => {
+
+    /**
+     * Initialize the DOM elements cache
+     */
+    function initDOM() {
+        // Wallet elements
+        DOM.walletAddress = document.getElementById('wallet-address');
+        DOM.walletBalance = document.getElementById('wallet-balance');
+        DOM.connectWalletBtn = document.getElementById('connect-wallet-btn');
+        DOM.walletInfo = document.getElementById('wallet-info');
+
+        // Market elements
+        DOM.marketPrice = document.getElementById('market-price');
+        DOM.marketChange = document.getElementById('market-change');
+        DOM.marketVolume = document.getElementById('market-volume');
+        DOM.marketHigh = document.getElementById('market-high');
+        DOM.marketLow = document.getElementById('market-low');
+        DOM.chartCanvas = document.getElementById('chart-canvas');
+
+        // Order book elements
+        DOM.orderBookBids = document.getElementById('order-book-bids');
+        DOM.orderBookAsks = document.getElementById('order-book-asks');
+
+        // Transactions elements
+        DOM.transactionsList = document.getElementById('transactions-list');
+
+        // Portfolio elements
+        DOM.portfolioList = document.getElementById('portfolio-list');
+
+        // Staking elements
+        DOM.stakedOpus = document.getElementById('staked-opus');
+        DOM.rewardRate = document.getElementById('reward-rate');
+        DOM.pendingRewards = document.getElementById('pending-rewards');
+        DOM.lastClaimed = document.getElementById('last-claimed');
+        DOM.claimRewardsBtn = document.getElementById('claim-rewards-btn');
+        DOM.claimRewardsBtn.addEventListener('click', claimRewards);
+
+        // Swap elements
+        DOM.swapFromToken = document.getElementById('swap-from-token');
+        DOM.swapToToken = document.getElementById('swap-to-token');
+        DOM.swapAmount = document.getElementById('swap-amount');
+        DOM.swapBtn = document.getElementById('swap-btn');
+        DOM.swapBtn.addEventListener('click', performSwap);
+
+        // Initialize token selectors
+        const tokens = Object.values(PAIR_RATES).map(pair => pair.base).filter((value, index, self) => self.indexOf(value) === index);
+        tokens.forEach(token => {
+            const option1 = document.createElement('option');
+            option1.value = token;
+            option1.textContent = token;
+            DOM.swapFromToken.appendChild(option1);
+
+            const option2 = document.createElement('option');
+            option2.value = token;
+            option2.textContent = token;
+            DOM.swapToToken.appendChild(option2);
+        });
+    }
+
+    /**
+     * Initialize the application
+     */
+    function init() {
         initDOM();
-        bindEvents();
-        renderAll();
-        startTickers();
-    });
+        updateWalletUI();
+        updateMarketUI();
+        updateOrderBookUI();
+        updateTransactionsUI();
+        updatePortfolioUI();
+        updateStakingUI();
+        updateChart();
 
-    // Helper to render everything in correct order
-    function renderAll() {
-        window.MagnumOpus.renderAll();
+        // Start engine tickers
+        marketInterval = setInterval(updateMarketData, state.settings.autoRefreshInterval);
+        gasInterval = setInterval(updateGasPrices, state.settings.autoRefreshInterval * 2);
+        orderBookInterval = setInterval(updateOrderBook, state.settings.autoRefreshInterval * 3);
+        stakingInterval = setInterval(updateStaking, state.settings.autoRefreshInterval * 4);
     }
 
-    // Graceful shutdown – stop intervals when page unloads
-    window.addEventListener('beforeunload', stopTickers);
+    // Initialize the application when the DOM is loaded
+    document.addEventListener('DOMContentLoaded', init);
+
+    // Expose functions to the global scope for debugging
+    window.magnumOpus = {
+        state,
+        updateMarketData,
+        updateOrderBook,
+        updatePortfolio,
+        updateStaking,
+        addTransaction,
+        playTone
+    };
 
 })();
