@@ -58,7 +58,7 @@
     <!-- Top Global Header -->
     <header id="main-header">
         <div class="logo-container">
-            <div class="logo-icon" aria-hidden="true">Ω</div>
+            <div class="logo-icon" aria-hidden="true">̩</div>
             <div>
                 <span class="logo-text">MAGNUM OPUS</span>
                 <span class="version-tag">v4.8.0-PRO</span>
@@ -99,39 +99,527 @@
             </button>
 
             <button id="open-settings-btn" class="icon-btn" aria-label="Platform Settings" title="Settings">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09a1.65 1.65 0 0 0-1.51-1.51H5a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09a1.65 1.65 0 0 0 1.51-1.51V12a1.65 1.65 0 0 0-1.51-1.51H5a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09a1.65 1.65 0 0 0 1.51-1.51V5a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1.51 1.51H12a1.65 1.65 0 0 0 1.51-1.51V5a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1.51 1.51H19a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1.51V12a1.65 1.65 0 0 0 1.51 1.51H19a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09a1.65 1.65 0 0 0-1.51-1.51H12a1.65 1.65 0 0 0-1.51 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09a1.65 1.65 0 0 0-1.51-1.51H5a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09a1.65 1.65 0 0 0 1.51-1.51V12a1.65 1.65 0 0 0-1.51-1.51H5a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09a1.65 1.65 0 0 0 1.51-1.51V5a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1.51 1.51H12a1.65 1.65 0 0 0 1.51-1.51V5a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1.51 1.51H19a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1.51V12a1.65 1.65 0 0 0 1.51 1.51H19a2 2 0 0 1 2 2 2 2 0 0 1-2 2z"/></svg>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09a1.65 1.65 0 0 0-1.51-1.51H5a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09a1.65 1.65 0 0 0 1.51-1.02 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1.51 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </button>
+
+            <button id="connect-wallet-btn" class="glow-button">
+                <span class="btn-dot"></span>
+                <span id="wallet-btn-text">Connect Wallet</span>
             </button>
         </div>
     </header>
 
-    <main id="dashboard">
-        <section class="wallet-panel">
-            <h2>Wallet Overview</h2>
-            <div id="wallet-balance" class="mono-val">--</div>
-            <button id="refresh-wallet" class="btn-primary">Refresh</button>
-        </section>
+    <!-- Core App Container -->
+    <div id="app-container">
+        <!-- Sidebar Navigation -->
+        <aside id="sidebar">
+            <nav class="nav-menu">
+                <button class="nav-item active" data-target="view-dashboard">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                    <span>Dashboard</span>
+                </button>
 
-        <section class="chart-panel">
-            <h2>Network Activity</h2>
-            <canvas id="activity-chart" width="800" height="400"></canvas>
-        </section>
-    </main>
+                <button class="nav-item" data-target="view-dex">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><line x1="3" y1="5" x2="21" y2="5"/><polyline points="7 23 3 19 7 15"/><line x1="21" y1="19" x2="3" y2="19"/></svg>
+                    <span>DEX Swap & Orderbook</span>
+                </button>
 
-    <footer id="main-footer">
-        <p>© 2026 Magnum Opus. All rights reserved.</p>
+                <button class="nav-item" data-target="view-staking">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                    <span>Yield Staking & Pools</span>
+                </button>
+
+                <button class="nav-item" data-target="view-nfts">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+                    <span>NFT Vault Matrix</span>
+                </button>
+
+                <button class="nav-item" data-target="view-analytics">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                    <span>On-Chain Analytics</span>
+                </button>
+
+                <button class="nav-item" data-target="view-bridge">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+                    <span>Cross-Chain Bridge</span>
+                </button>
+
+                <button class="nav-item" data-target="view-system">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                    <span>System Telemetry</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-micro-status">
+                <div class="status-head">MICROSERVICES TELEMETRY</div>
+                <div class="status-row">
+                    <span class="service-name">C++ CryptoEngine</span>
+                    <span class="status-badge online">18.4 MH/s</span>
+                </div>
+                <div class="status-row">
+                    <span class="service-name">.NET TxProcessor</span>
+                    <span class="status-badge online">0ms Queued</span>
+                </div>
+                <div class="status-row">
+                    <span class="service-name">Go Relay (server.go)</span>
+                    <span class="status-badge online">WS Active</span>
+                </div>
+                <div class="status-row">
+                    <span class="service-name">Rust Program</span>
+                    <span class="status-badge online">Anchor v0.29</span>
+                </div>
+                <div class="status-row">
+                    <span class="service-name">Ruby Oracle Service</span>
+                    <span class="status-badge online">Sync 0.4s</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content View Container -->
+        <main id="main-content">
+            <!-- View 1: DASHBOARD -->
+            <section id="view-dashboard" class="content-view active">
+                <!-- Hero Metrics Banner -->
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-title">TOTAL VALUE LOCKED</span>
+                            <span class="metric-change positive">+12.4%</span>
+                        </div>
+                        <div class="metric-value" id="stat-tvl">$4,821,940,120</div>
+                        <div class="metric-sub">Across 5 Verified Protocol Chains</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-title">24H DEX VOLUME</span>
+                            <span class="metric-change positive">+8.1%</span>
+                        </div>
+                        <div class="metric-value" id="stat-volume">$1,248,590,300</div>
+                        <div class="metric-sub">Quantum Router Executions</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-title">PORTFOLIO BALANCE</span>
+                            <span class="metric-change positive" id="stat-portfolio-change">+5.2%</span>
+                        </div>
+                        <div class="metric-value" id="stat-portfolio">$148,920.45</div>
+                        <div class="metric-sub">Connected Wallet Equity</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-title">STAKING NET APY</span>
+                            <span class="metric-badge">AUTO-COMPOUND</span>
+                        </div>
+                        <div class="metric-value" id="stat-apy">18.42%</div>
+                        <div class="metric-sub">$12,450.18 Accumulated Rewards</div>
+                    </div>
+                </div>
+
+                <!-- Main Grid Layout -->
+                <div class="dashboard-grid">
+                    <!-- Left Primary Column: Interactive Chart & Orderbook -->
+                    <div class="grid-col col-main">
+                        <div class="card chart-card">
+                            <div class="card-header">
+                                <div class="chart-controls-left">
+                                    <div class="symbol-select-container">
+                                        <select id="chart-symbol-select" class="styled-select big-select">
+                                            <option value="ETH-USD">ETH / USD - Ethereum</option>
+                                            <option value="BTC-USD">WBTC / USD - Wrapped Bitcoin</option>
+                                            <option value="SOL-USD">SOL / USD - Solana Cluster</option>
+                                            <option value="MAGNUM-USD">MAGNUM / USD - Nexus Token</option>
+                                        </select>
+                                    </div>
+                                    <div class="chart-price-ticker">
+                                        <span id="chart-price-display" class="ticker-price">$3,482.50</span>
+                                        <span id="chart-price-change" class="ticker-change positive">+3.84%</span>
+                                    </div>
+                                </div>
+
+                                <div class="chart-controls-right">
+                                    <div class="button-group tf-group">
+                                        <button class="btn-group-item active" data-tf="15m">15m</button>
+                                        <button class="btn-group-item" data-tf="1h">1h</button>
+                                        <button class="btn-group-item" data-tf="4h">4h</button>
+                                        <button class="btn-group-item" data-tf="1d">1D</button>
+                                    </div>
+                                    <div class="button-group type-group">
+                                        <button class="btn-group-item active" id="btn-chart-candles" title="Candlestick Chart">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="9" y1="2" x2="9" y2="22"/><rect x="6" y="6" width="6" height="12"/><line x1="17" y1="2" x2="17" y2="22"/><rect x="14" y="10" width="6" height="6"/></svg>
+                                        </button>
+                                        <button class="btn-group-item" id="btn-chart-line" title="Line Chart">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="canvas-wrapper">
+                                <canvas id="main-chart-canvas" width="900" height="420"></canvas>
+                                <div id="chart-tooltip" class="chart-tooltip-box hidden"></div>
+                            </div>
+                        </div>
+
+                        <!-- Orderbook and Trades Dual Container -->
+                        <div class="dual-card-grid">
+                            <div class="card orderbook-card">
+                                <div class="card-header">
+                                    <h3>Order Depth (Live C++ Engine)</h3>
+                                    <span class="tag live-tag">LIVE FEED</span>
+                                </div>
+                                <div class="orderbook-table-wrapper">
+                                    <div class="orderbook-header-row">
+                                        <span>Price (USD)</span>
+                                        <span>Size (ETH)</span>
+                                        <span>Total ($)</span>
+                                    </div>
+                                    <div id="asks-container" class="orderbook-rows asks-rows"></div>
+                                    <div class="spread-bar">
+                                        <span>SPREAD</span>
+                                        <span id="orderbook-spread">$0.05 (0.001%)</span>
+                                    </div>
+                                    <div id="bids-container" class="orderbook-rows bids-rows"></div>
+                                </div>
+                            </div>
+
+                            <div class="card trades-card">
+                                <div class="card-header">
+                                    <h3>Recent Settlement Log</h3>
+                                    <span class="tag glow-tag">ON-CHAIN</span>
+                                </div>
+                                <div id="recent-trades-list" class="trades-feed-list"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Secondary Column: Swap Widget & Engine Relay -->
+                    <div class="grid-col col-side">
+                        <!-- Swap Widget -->
+                        <div class="card swap-card">
+                            <div class="card-header">
+                                <div class="card-tabs">
+                                    <button class="tab-btn active" data-tab="swap">Instant Swap</button>
+                                    <button class="tab-btn" data-tab="limit">Limit Order</button>
+                                </div>
+                                <button class="icon-btn-sm" id="swap-settings-btn" title="Swap Settings">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09a1.65 1.65 0 0 0-1.51-1.51H5a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09a1.65 1.65 0 0 0 1.51-1.02 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1.51 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                                </button>
+                            </div>
+
+                            <div class="swap-body">
+                                <!-- Pay Input Box -->
+                                <div class="token-input-box">
+                                    <div class="input-row">
+                                        <span class="label">YOU PAY</span>
+                                        <span class="balance">Balance: <span id="swap-from-balance">42.50</span></span>
+                                    </div>
+                                    <div class="input-field-wrapper">
+                                        <input type="number" id="swap-from-amount" placeholder="0.0" value="1.0" step="any"/>
+                                        <button class="token-select-btn" id="swap-from-token-btn">
+                                            <span class="token-icon eth-icon">Α</span>
+                                            <span class="token-symbol" id="swap-from-symbol">ETH</span>
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                                        </button>
+                                    </div>
+                                    <div class="usd-equivalent" id="swap-from-usd">≈ $3,482.50</div>
+                                </div>
+
+                                <!-- Swap Flip Switch -->
+                                <div class="swap-divider">
+                                    <button id="swap-reverse-btn" class="reverse-btn" title="Reverse Assets">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 16V4M7 4L3 8M7 4L11 8M17 8V20M17 20L21 16M17 20L13 16"/></svg>
+                                    </button>
+                                </div>
+
+                                <!-- Receive Input Box -->
+                                <div class="token-input-box">
+                                    <div class="input-row">
+                                        <span class="label">YOU RECEIVE</span>
+                                        <span class="balance">Balance: <span id="swap-to-balance">18,250.00</span></span>
+                                    </div>
+                                    <div class="input-field-wrapper">
+                                        <input type="number" id="swap-to-amount" placeholder="0.0" value="3482.50" readonly/>
+                                        <button class="token-select-btn" id="swap-to-token-btn">
+                                            <span class="token-icon usdc-icon">$</span>
+                                            <span class="token-symbol" id="swap-to-symbol">USDC</span>
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                                        </button>
+                                    </div>
+                                    <div class="usd-equivalent" id="swap-to-usd">≈ $3,482.50</div>
+                                </div>
+
+                                <!-- Route & Slippage Preview -->
+                                <div class="route-details-card">
+                                    <div class="detail-row">
+                                        <span>Optimal Routing:</span>
+                                        <span class="highlight-val" id="swap-route-path">Magnum Router → Uniswap V3</span>
+                                    </div>
+                                    <div class="detail-row">
+                                        <span>Expected Price Impact:</span>
+                                        <span class="positive-val" id="swap-price-impact">&lt; 0.01%</span>
+                                    </div>
+                                    <div class="detail-row">
+                                        <span>Max Slippage:</span>
+                                        <span id="swap-slippage-val">0.5%</span>
+                                    </div>
+                                    <div class="detail-row">
+                                        <span>Est. Gas Fee:</span>
+                                        <span id="swap-gas-est">$2.14 (14 Gwei)</span>
+                                    </div>
+                                </div>
+
+                                <button id="execute-swap-btn" class="glow-button full-width large-btn">
+                                    <span>Execute Quantum Swap</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Microservices Relay Card -->
+                        <div class="card relay-card">
+                            <div class="card-header">
+                                <h3>Backend Engine Pipeline</h3>
+                                <span class="tag cyan-tag">8/8 NODES</span>
+                            </div>
+                            <div class="relay-list">
+                                <div class="relay-item">
+                                    <div class="relay-info">
+                                        <span class="relay-title">CryptoEngine.cpp</span>
+                                        <span class="relay-desc">AVX-512 SIMD Hash Validator</span>
+                                    </div>
+                                    <span class="relay-metric">18.4 MH/s</span>
+                                </div>
+                                <div class="relay-item">
+                                    <div class="relay-info">
+                                        <span class="relay-title">TransactionProcessor.cs</span>
+                                        <span class="relay-desc">.NET 8 Concurrent Channel Queue</span>
+                                    </div>
+                                    <span class="relay-metric">0.8 ms</span>
+                                </div>
+                                <div class="relay-item">
+                                    <div class="relay-info">
+                                        <span class="relay-title">server.go (Go Relay)</span>
+                                        <span class="relay-desc">Goroutine Socket & Rate Limiter</span>
+                                    </div>
+                                    <span class="relay-metric">1,420 Conn</span>
+                                </div>
+                                <div class="relay-item">
+                                    <div class="relay-info">
+                                        <span class="relay-title">WalletService.rb</span>
+                                        <span class="relay-desc">Ruby Price Oracle & Key Monitor</span>
+                                    </div>
+                                    <span class="relay-metric">Synced</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- View 2: DEX SWAP & ORDERBOOK -->
+            <section id="view-dex" class="content-view hidden">
+                <div class="view-header">
+                    <h2>Advanced High-Frequency Trading Terminal</h2>
+                    <p>Powered by C++ CryptoEngine & Go WebSockets Relay</p>
+                </div>
+                <div class="placeholder-content-card">
+                    <div class="hft-terminal-placeholder">
+                        <div class="terminal-banner">HFT Order Execution Pipeline Active</div>
+                        <p>Connecting to backend Go WebSocket Relay service on port 8080...</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- View 3: YIELD STAKING -->
+            <section id="view-staking" class="content-view hidden">
+                <div class="view-header">
+                    <h2>DeFi Automated Yield Vaults</h2>
+                    <p>Smart Contract Liquidity Engine & Yield Compounding Protocol</p>
+                </div>
+                <div class="vaults-grid">
+                    <div class="card vault-card">
+                        <div class="vault-badge">32.4% APY</div>
+                        <div class="vault-title">MAGNUM / ETH Dual LP Vault</div>
+                        <div class="vault-tvl">TVL: $142,500,000</div>
+                        <button class="glow-button full-width">Stake Liquidity</button>
+                    </div>
+                    <div class="card vault-card">
+                        <div class="vault-badge">18.2% APY</div>
+                        <div class="vault-title">Solana High-Yield Validator Staking</div>
+                        <div class="vault-tvl">TVL: $89,100,000</div>
+                        <button class="glow-button full-width">Delegate SOL</button>
+                    </div>
+                    <div class="card vault-card">
+                        <div class="vault-badge">14.8% APY</div>
+                        <div class="vault-title">USDC Yield Matrix Vault</div>
+                        <div class="vault-tvl">TVL: $310,000,000</div>
+                        <button class="glow-button full-width">Deposit USDC</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- View 4: NFT VAULT -->
+            <section id="view-nfts" class="content-view hidden">
+                <div class="view-header">
+                    <h2>Quantum Holographic NFT Vault</h2>
+                    <p>On-Chain Verified Digital Asset Protocol</p>
+                </div>
+                <div class="nft-grid">
+                    <div class="card nft-card">
+                        <div class="nft-image-container">
+                            <div class="nft-placeholder-art art-1">̩ #001</div>
+                        </div>
+                        <div class="nft-info">
+                            <span class="nft-title">Genesis Nexus Pass #001</span>
+                            <span class="nft-price">Floor: 12.5 ETH</span>
+                        </div>
+                    </div>
+                    <div class="card nft-card">
+                        <div class="nft-image-container">
+                            <div class="nft-placeholder-art art-2">̩ #042</div>
+                        </div>
+                        <div class="nft-info">
+                            <span class="nft-title">Cybernetic Sovereign #042</span>
+                            <span class="nft-price">Floor: 8.2 ETH</span>
+                        </div>
+                    </div>
+                    <div class="card nft-card">
+                        <div class="nft-image-container">
+                            <div class="nft-placeholder-art art-3">̩ #777</div>
+                        </div>
+                        <div class="nft-info">
+                            <span class="nft-title">Quantum Core AI Avatar</span>
+                            <span class="nft-price">Floor: 25.0 ETH</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- View 5: ANALYTICS -->
+            <section id="view-analytics" class="content-view hidden">
+                <div class="view-header">
+                    <h2>On-Chain Data Intelligence & SQL Telemetry</h2>
+                    <p>PostgreSQL Schema Integrated Analytics</p>
+                </div>
+                <div class="card p-4">
+                    <h3>Multi-Chain Transaction Analytics</h3>
+                    <div class="analytics-metrics-row">
+                        <div class="analytic-item">Total Users: 148,290</div>
+                        <div class="analytic-item">Total Wallets Tracked: 392,100</div>
+                        <div class="analytic-item">Confirmed Tx Count: 14,892,104</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- View 6: BRIDGE -->
+            <section id="view-bridge" class="content-view hidden">
+                <div class="view-header">
+                    <h2>Cross-Chain Lock & Mint Relayer</h2>
+                    <p>Trustless Atomic Asset Transfer Protocol</p>
+                </div>
+                <div class="card bridge-box">
+                    <h3>Transfer Assets Between Blockchains</h3>
+                    <p>Select origin and destination networks to execute atomic bridge swap.</p>
+                </div>
+            </section>
+
+            <!-- View 7: SYSTEM TELEMETRY & LOGS -->
+            <section id="view-system" class="content-view hidden">
+                <div class="view-header">
+                    <h2>System Telemetry & Live Kernel Logs</h2>
+                    <p>Multi-Language Subsystem Stream</p>
+                </div>
+                <div class="card console-card">
+                    <div class="console-header">
+                        <span>SYS_LOG_STREAM // MAGNUM_OPUS_CORE</span>
+                        <button id="clear-logs-btn" class="icon-btn-sm">Clear</button>
+                    </div>
+                    <div id="terminal-logs" class="terminal-body">
+                        <div class="log-line sys">[SYSTEM] Magnum Opus v4.8.0 Kernel initialized successfully.</div>
+                        <div class="log-line cpp">[C++ CryptoEngine] Thread pool allocated: 16 SIMD workers online.</div>
+                        <div class="log-line cs">[.NET TxProcessor] Channel reader background worker running.</div>
+                        <div class="log-line go">[Go Relay] WebSocket handler listening on :8080/ws</div>
+                        <div class="log-line sol">[Solidity Protocol] SmartContract deployed at 0x3F8...b9A1</div>
+                        <div class="log-line rust">[Rust Solana] Program MagnumOpus1111111111111111111111111111111111 ready.</div>
+                        <div class="log-line rb">[Ruby Oracle] Price feeds initialized from remote endpoint.</div>
+                        <div class="log-line sql">[SQL DataLayer] PostgreSQL pool connected (20 connections).</div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Bottom Event Ticker Bar -->
+    <footer id="bottom-ticker-bar">
+        <div class="ticker-badge">LIVE TRADES</div>
+        <div class="ticker-content-wrapper">
+            <div id="live-ticker-feed" class="ticker-feed">
+                <span class="ticker-item"><strong class="green">SWAP:</strong> 12.5 ETH → 43,531 USDC ($3,482/ETH)</span>
+                <span class="ticker-item"><strong class="purple">MINT:</strong> Genesis Pass #892 minted on Ethereum</span>
+                <span class="ticker-item"><strong class="amber">STAKE:</strong> 500 SOL deposited into Staking Pool</span>
+            </div>
+        </div>
     </footer>
 
+    <!-- Wallet Connection Modal -->
+    <div id="wallet-modal" class="modal-backdrop hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Connect Web3 Wallet</h3>
+                <button class="modal-close-btn" id="close-wallet-modal">&times;</button>
+            </div>
+            <div class="wallet-options-list">
+                <button class="wallet-option-btn" data-wallet="metamask">
+                    <span class="wallet-icon">🦊</span>
+                    <span class="wallet-name">MetaMask</span>
+                    <span class="wallet-tag">Popular</span>
+                </button>
+                <button class="wallet-option-btn" data-wallet="phantom">
+                    <span class="wallet-icon">👻</span>
+                    <span class="wallet-name">Phantom</span>
+                    <span class="wallet-tag">Solana</span>
+                </button>
+                <button class="wallet-option-btn" data-wallet="walletconnect">
+                    <span class="wallet-icon">🔗</span>
+                    <span class="wallet-name">WalletConnect</span>
+                    <span class="wallet-tag">QR Code</span>
+                </button>
+                <button class="wallet-option-btn" data-wallet="ledger">
+                    <span class="wallet-icon">🛡️</span>
+                    <span class="wallet-name">Ledger Hardware</span>
+                    <span class="wallet-tag">Hardware</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Platform Settings Modal -->
+    <div id="settings-modal" class="modal-backdrop hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Platform Settings</h3>
+                <button class="modal-close-btn" id="close-settings-modal">&times;</button>
+            </div>
+            <div class="settings-body">
+                <div class="setting-group">
+                    <label for="setting-rpc">Custom RPC Endpoint</label>
+                    <input type="text" id="setting-rpc" class="styled-input" value="https://eth-mainnet.g.alchemy.com/v2/demo"/>
+                </div>
+                <div class="setting-group">
+                    <label for="setting-slippage">Default Slippage (%)</label>
+                    <input type="number" id="setting-slippage" class="styled-input" value="0.5" step="0.1"/>
+                </div>
+                <div class="setting-group">
+                    <label for="setting-audio-vol">Web Audio FX Volume</label>
+                    <input type="range" id="setting-audio-vol" min="0" max="100" value="70"/>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main JavaScript Logic -->
     <script src="app.js"></script>
-    <script>
-        // Simple wallet refresh handler (placeholder)
-        const balEl = document.getElementById('wallet-balance');
-        document.getElementById('refresh-wallet')?.addEventListener('click', () => {
-            balEl.textContent = 'Loading...';
-            fetch('/api/wallet/balance')
-                .then(r => r.json())
-                .then(d => { balEl.textContent = d.balance + ' ETH'; })
-                .catch(() => { balEl.textContent = 'Error'; });
-        });
-    </script>
 </body>
 </html>
