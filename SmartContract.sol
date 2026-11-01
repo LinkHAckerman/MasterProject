@@ -175,122 +175,103 @@ abstract contract Pausable is Context {
 }
 
 // -----------------------------------------------------------------------------
-// ERC20 Interface (minimal)
+// ERC20 Token Implementation
 // -----------------------------------------------------------------------------
-interface IERC20 {
-    function totalSupply() external view returns (uint256);
-    function balanceOf(address account) external view returns (uint256);
-    function transfer(address recipient, uint256 amount) external returns (bool);
-    function allowance(address owner, address spender) external view returns (uint256);
-    function approve(address spender, uint256 amount) external returns (bool);
-    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(address indexed owner, address indexed spender, uint256 value);
-}
+contract MagnumToken is Context, Ownable, ReentrancyGuard {
+    using MagnumMath for uint256;
 
-// -----------------------------------------------------------------------------
-// MAGNUM ERC20 Token
-// -----------------------------------------------------------------------------
-contract MagnumToken is IERC20, Ownable, ReentrancyGuard, Pausable {
-    string private _name = "Magnum Token";
-    string private _symbol = "MAG";
-    uint8 private constant _decimals = 18;
+    string public name = "Magnum Token";
+    string public symbol = "MAG";
+    uint8 public constant decimals = 18;
     uint256 private _totalSupply;
 
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
 
-    event Mint(address indexed to, uint256 amount);
-    event Burn(address indexed from, uint256 amount);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
 
-    constructor(address initialOwner) Ownable(initialOwner) {}
-
-    // -----------------------------------------------------
-    // ERC20 standard view functions
-    // -----------------------------------------------------
-    function name() public view returns (string memory) { return _name; }
-    function symbol() public view returns (string memory) { return _symbol; }
-    function decimals() public pure returns (uint8) { return _decimals; }
-    function totalSupply() public view override returns (uint256) { return _totalSupply; }
-    function balanceOf(address account) public view override returns (uint256) { return _balances[account]; }
-    function allowance(address owner, address spender) public view override returns (uint256) { return _allowances[owner][spender]; }
-
-    // -----------------------------------------------------
-    // ERC20 core logic
-    // -----------------------------------------------------
-    function transfer(address recipient, uint256 amount) public override whenNotPaused nonReentrant returns (bool) {
-        _transfer(_msgSender(), recipient, amount);
-        return true;
+    constructor(address initialOwner, uint256 initialSupply) Ownable(initialOwner) {
+        _mint(initialOwner, initialSupply);
     }
 
-    function approve(address spender, uint256 amount) public override whenNotPaused returns (bool) {
+    function totalSupply() public view returns (uint256) { return _totalSupply; }
+    function balanceOf(address account) public view returns (uint256) { return _balances[account]; }
+    function transfer(address to, uint256 amount) public returns (bool) {
+        _transfer(_msgSender(), to, amount);
+        return true;
+    }
+    function allowance(address owner, address spender) public view returns (uint256) {
+        return _allowances[owner][spender];
+    }
+    function approve(address spender, uint256 amount) public returns (bool) {
         _approve(_msgSender(), spender, amount);
         return true;
     }
-
-    function transferFrom(address sender, address recipient, uint256 amount) public override whenNotPaused nonReentrant returns (bool) {
-        uint256 currentAllowance = _allowances[sender][_msgSender()];
+    function transferFrom(address from, address to, uint256 amount) public returns (bool) {
+        uint256 currentAllowance = _allowances[from][_msgSender()];
         if (currentAllowance < amount) revert InsufficientAllowance(currentAllowance, amount);
-        _transfer(sender, recipient, amount);
-        _approve(sender, _msgSender(), currentAllowance - amount);
+        _transfer(from, to, amount);
+        _approve(from, _msgSender(), currentAllowance - amount);
         return true;
     }
 
-    // -----------------------------------------------------
-    // Mint / Burn – onlyOwner
-    // -----------------------------------------------------
-    function mint(address to, uint256 amount) external onlyOwner whenNotPaused {
+    function _transfer(address from, address to, uint256 amount) internal {
         if (to == address(0)) revert ZeroAddress();
-        if (amount == 0) revert ZeroAmount();
-        _totalSupply += amount;
-        _balances[to] += amount;
-        emit Mint(to, amount);
-        emit Transfer(address(0), to, amount);
+        uint256 fromBalance = _balances[from];
+        if (fromBalance < amount) revert InsufficientBalance(fromBalance, amount);
+        unchecked {
+            _balances[from] = fromBalance - amount;
+            _balances[to] += amount;
+        }
+        emit Transfer(from, to, amount);
     }
 
-    function burn(uint256 amount) external whenNotPaused {
-        address account = _msgSender();
-        uint256 balance = _balances[account];
-        if (balance < amount) revert InsufficientBalance(balance, amount);
-        _balances[account] = balance - amount;
-        _totalSupply -= amount;
-        emit Burn(account, amount);
+    function _mint(address account, uint256 amount) internal {
+        if (account == address(0)) revert ZeroAddress();
+        unchecked {
+            _totalSupply += amount;
+            _balances[account] += amount;
+        }
+        emit Transfer(address(0), account, amount);
+    }
+
+    function _burn(address account, uint256 amount) internal {
+        if (account == address(0)) revert ZeroAddress();
+        uint256 accountBalance = _balances[account];
+        if (accountBalance < amount) revert InsufficientBalance(accountBalance, amount);
+        unchecked {
+            _balances[account] = accountBalance - amount;
+            _totalSupply -= amount;
+        }
         emit Transfer(account, address(0), amount);
     }
 
-    // -----------------------------------------------------
-    // Internal helpers
-    // -----------------------------------------------------
-    function _transfer(address sender, address recipient, uint256 amount) internal {
-        if (sender == address(0) || recipient == address(0)) revert ZeroAddress();
-        if (amount == 0) revert ZeroAmount();
-        uint256 senderBal = _balances[sender];
-        if (senderBal < amount) revert InsufficientBalance(senderBal, amount);
-        _balances[sender] = senderBal - amount;
-        _balances[recipient] += amount;
-        emit Transfer(sender, recipient, amount);
+    function _approve(address owner, address spender, uint256 amount) internal {
+        if (owner == address(0) || spender == address(0)) revert ZeroAddress();
+        _allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
     }
 
-    function _approve(address ownerAddr, address spender, uint256 amount) internal {
-        if (ownerAddr == address(0) || spender == address(0)) revert ZeroAddress();
-        _allowances[ownerAddr][spender] = amount;
-        emit Approval(ownerAddr, spender, amount);
+    // Owner privileged mint & burn
+    function mint(address to, uint256 amount) external onlyOwner {
+        _mint(to, amount);
     }
 
-    // -----------------------------------------------------
-    // Pausable controls – onlyOwner
-    // -----------------------------------------------------
-    function pause() external onlyOwner { _pause(); }
-    function unpause() external onlyOwner { _unpause(); }
+    function burn(address from, uint256 amount) external onlyOwner {
+        _burn(from, amount);
+    }
 }
 
 // -----------------------------------------------------------------------------
-// ERC721 Minimal Implementation
+// ERC721 NFT Implementation
 // -----------------------------------------------------------------------------
-contract MagnumNFT is Ownable, Pausable {
-    string private _name = "Magnum NFT";
-    string private _symbol = "MAGNFT";
-    uint256 private _currentTokenId;
+contract MagnumNFT is Context, Ownable, ReentrancyGuard {
+    using MagnumMath for uint256;
+
+    string public name = "Magnum NFT";
+    string public symbol = "MNFT";
+    uint256 private _tokenIdCounter;
 
     mapping(uint256 => address) private _owners;
     mapping(address => uint256) private _balances;
@@ -300,177 +281,175 @@ contract MagnumNFT is Ownable, Pausable {
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
     event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
-    event Mint(address indexed to, uint256 indexed tokenId);
 
     constructor(address initialOwner) Ownable(initialOwner) {}
 
-    function name() public view returns (string memory) { return _name; }
-    function symbol() public view returns (string memory) { return _symbol; }
-    function balanceOf(address ownerAddr) public view returns (uint256) {
-        if (ownerAddr == address(0)) revert ZeroAddress();
-        return _balances[ownerAddr];
-    }
-    function ownerOf(uint256 tokenId) public view returns (address) {
-        address ownerAddr = _owners[tokenId];
-        if (ownerAddr == address(0)) revert TokenDoesNotExist();
-        return ownerAddr;
+    function balanceOf(address owner) public view returns (uint256) {
+        if (owner == address(0)) revert ZeroAddress();
+        return _balances[owner];
     }
 
-    function approve(address to, uint256 tokenId) public whenNotPaused {
-        address ownerAddr = ownerOf(tokenId);
-        if (to == ownerAddr) revert InvalidRoyaltyPercentage(); // reuse error for brevity
-        if (_msgSender() != ownerAddr && !isApprovedForAll(ownerAddr, _msgSender())) revert Unauthorized();
+    function ownerOf(uint256 tokenId) public view returns (address) {
+        address owner = _owners[tokenId];
+        if (owner == address(0)) revert TokenDoesNotExist();
+        return owner;
+    }
+
+    function _exists(uint256 tokenId) internal view returns (bool) {
+        return _owners[tokenId] != address(0);
+    }
+
+    function _safeMint(address to) internal {
+        if (to == address(0)) revert ZeroAddress();
+        uint256 tokenId = ++_tokenIdCounter;
+        _owners[tokenId] = to;
+        _balances[to] += 1;
+        emit Transfer(address(0), to, tokenId);
+    }
+
+    function mint(address to) external onlyOwner {
+        _safeMint(to);
+    }
+
+    function approve(address to, uint256 tokenId) external {
+        address owner = ownerOf(tokenId);
+        if (to == owner) revert InvalidRoyaltyPercentage(); // placeholder error
+        if (_msgSender() != owner && !isApprovedForAll(owner, _msgSender())) revert Unauthorized();
         _tokenApprovals[tokenId] = to;
-        emit Approval(ownerAddr, to, tokenId);
+        emit Approval(owner, to, tokenId);
     }
 
     function getApproved(uint256 tokenId) public view returns (address) {
-        if (_owners[tokenId] == address(0)) revert TokenDoesNotExist();
+        if (!_exists(tokenId)) revert TokenDoesNotExist();
         return _tokenApprovals[tokenId];
     }
 
-    function setApprovalForAll(address operator, bool approved) public whenNotPaused {
+    function setApprovalForAll(address operator, bool approved) external {
         if (operator == _msgSender()) revert IdenticalAddresses();
         _operatorApprovals[_msgSender()][operator] = approved;
         emit ApprovalForAll(_msgSender(), operator, approved);
     }
 
-    function isApprovedForAll(address ownerAddr, address operator) public view returns (bool) {
-        return _operatorApprovals[ownerAddr][operator];
+    function isApprovedForAll(address owner, address operator) public view returns (bool) {
+        return _operatorApprovals[owner][operator];
     }
 
-    function transferFrom(address from, address to, uint256 tokenId) public whenNotPaused {
+    function transferFrom(address from, address to, uint256 tokenId) public {
         if (!_isApprovedOrOwner(_msgSender(), tokenId)) revert Unauthorized();
         _transfer(from, to, tokenId);
     }
 
-    function safeTransferFrom(address from, address to, uint256 tokenId) public whenNotPaused {
-        transferFrom(from, to, tokenId);
-        // Note: ERC721Receiver check omitted for brevity
-    }
-
-    function mint(address to) external onlyOwner whenNotPaused returns (uint256) {
-        if (to == address(0)) revert ZeroAddress();
-        _currentTokenId++;
-        uint256 newTokenId = _currentTokenId;
-        _owners[newTokenId] = to;
-        _balances[to] += 1;
-        emit Mint(to, newTokenId);
-        emit Transfer(address(0), to, newTokenId);
-        return newTokenId;
+    function _isApprovedOrOwner(address spender, uint256 tokenId) internal view returns (bool) {
+        address owner = ownerOf(tokenId);
+        return (spender == owner || getApproved(tokenId) == spender || isApprovedForAll(owner, spender));
     }
 
     function _transfer(address from, address to, uint256 tokenId) internal {
         if (ownerOf(tokenId) != from) revert Unauthorized();
         if (to == address(0)) revert ZeroAddress();
+
         // clear approvals
         delete _tokenApprovals[tokenId];
+
         _balances[from] -= 1;
         _balances[to] += 1;
         _owners[tokenId] = to;
+
         emit Transfer(from, to, tokenId);
     }
-
-    function _isApprovedOrOwner(address spender, uint256 tokenId) internal view returns (bool) {
-        address ownerAddr = ownerOf(tokenId);
-        return (spender == ownerAddr || getApproved(tokenId) == spender || isApprovedForAll(ownerAddr, spender));
-    }
-
-    // Pausable controls – onlyOwner
-    function pause() external onlyOwner { _pause(); }
-    function unpause() external onlyOwner { _unpause(); }
 }
 
 // -----------------------------------------------------------------------------
-// Simple Constant-Product AMM Swap (ERC20 <-> ERC20)
+// Staking Contract for MAG Token
 // -----------------------------------------------------------------------------
-contract SimpleSwap is Ownable, ReentrancyGuard, Pausable {
-    IERC20 public tokenA;
-    IERC20 public tokenB;
-    uint256 public reserveA;
-    uint256 public reserveB;
-    uint256 public constant FEE_BPS = 30; // 0.30% fee
+contract MagnumStaking is Context, Ownable, ReentrancyGuard, Pausable {
+    using MagnumMath for uint256;
 
-    event LiquidityAdded(address indexed provider, uint256 amountA, uint256 amountB);
-    event LiquidityRemoved(address indexed provider, uint256 amountA, uint256 amountB);
-    event Swapped(address indexed trader, address indexed tokenIn, uint256 amountIn, address indexed tokenOut, uint256 amountOut);
+    MagnumToken public immutable token;
+    uint256 public rewardRate; // tokens per second
+    uint256 public lastUpdateTime;
+    uint256 public rewardPerTokenStored;
 
-    constructor(address _owner, address _tokenA, address _tokenB) Ownable(_owner) {
-        if (_tokenA == address(0) || _tokenB == address(0)) revert ZeroAddress();
-        if (_tokenA == _tokenB) revert IdenticalAddresses();
-        tokenA = IERC20(_tokenA);
-        tokenB = IERC20(_tokenB);
+    struct StakeInfo {
+        uint256 amount;
+        uint256 rewardDebt;
     }
 
-    // -----------------------------------------------------
-    // Add liquidity – provider must approve tokens beforehand
-    // -----------------------------------------------------
-    function addLiquidity(uint256 amountA, uint256 amountB) external whenNotPaused nonReentrant {
-        if (amountA == 0 || amountB == 0) revert ZeroAmount();
-        // Transfer tokens from provider
-        tokenA.transferFrom(_msgSender(), address(this), amountA);
-        tokenB.transferFrom(_msgSender(), address(this), amountB);
-        reserveA += amountA;
-        reserveB += amountB;
-        emit LiquidityAdded(_msgSender(), amountA, amountB);
+    mapping(address => StakeInfo) public stakes;
+    uint256 public totalStaked;
+
+    event Staked(address indexed user, uint256 amount);
+    event Withdrawn(address indexed user, uint256 amount);
+    event RewardPaid(address indexed user, uint256 reward);
+    event RewardRateChanged(uint256 newRate);
+
+    constructor(address tokenAddress, uint256 initialRewardRate, address initialOwner) Ownable(initialOwner) {
+        token = MagnumToken(tokenAddress);
+        rewardRate = initialRewardRate;
+        lastUpdateTime = block.timestamp;
     }
 
-    // -----------------------------------------------------
-    // Remove liquidity – simple proportional withdrawal
-    // -----------------------------------------------------
-    function removeLiquidity(uint256 sharePercentBps) external whenNotPaused nonReentrant {
-        if (sharePercentBps == 0 || sharePercentBps > MagnumMath.PERCENT_BPS) revert InvalidRoyaltyPercentage();
-        uint256 amountA = MagnumMath.wmul(reserveA, sharePercentBps) / MagnumMath.PERCENT_BPS;
-        uint256 amountB = MagnumMath.wmul(reserveB, sharePercentBps) / MagnumMath.PERCENT_BPS;
-        if (amountA == 0 && amountB == 0) revert ZeroAmount();
-        reserveA -= amountA;
-        reserveB -= amountB;
-        tokenA.transfer(_msgSender(), amountA);
-        tokenB.transfer(_msgSender(), amountB);
-        emit LiquidityRemoved(_msgSender(), amountA, amountB);
-    }
-
-    // -----------------------------------------------------
-    // Swap – constant product formula with fee
-    // -----------------------------------------------------
-    function swap(address tokenIn, uint256 amountIn, uint256 minAmountOut) external whenNotPaused nonReentrant returns (uint256 amountOut) {
-        if (amountIn == 0) revert ZeroAmount();
-        bool isAtoB = tokenIn == address(tokenA);
-        if (!isAtoB && tokenIn != address(tokenB)) revert IdenticalAddresses();
-        IERC20 inToken = isAtoB ? tokenA : tokenB;
-        IERC20 outToken = isAtoB ? tokenB : tokenA;
-        uint256 reserveIn = isAtoB ? reserveA : reserveB;
-        uint256 reserveOut = isAtoB ? reserveB : reserveA;
-        // Transfer in
-        inToken.transferFrom(_msgSender(), address(this), amountIn);
-        // Apply fee
-        uint256 amountInWithFee = amountIn - MagnumMath.wmul(amountIn, FEE_BPS) / MagnumMath.PERCENT_BPS;
-        // Constant product: x*y = k => dy = y - k/(x+dx)
-        uint256 numerator = amountInWithFee * reserveOut;
-        uint256 denominator = reserveIn + amountInWithFee;
-        amountOut = numerator / denominator;
-        if (amountOut < minAmountOut) revert InsufficientOutputAmount(amountOut, minAmountOut);
-        // Update reserves
-        if (isAtoB) {
-            reserveA += amountIn;
-            reserveB -= amountOut;
-        } else {
-            reserveB += amountIn;
-            reserveA -= amountOut;
+    modifier updateReward(address account) {
+        rewardPerTokenStored = rewardPerToken();
+        lastUpdateTime = block.timestamp;
+        if (account != address(0)) {
+            stakes[account].rewardDebt = earned(account);
         }
-        // Transfer out
-        outToken.transfer(_msgSender(), amountOut);
-        emit Swapped(_msgSender(), tokenIn, amountIn, address(outToken), amountOut);
+        _;
     }
 
-    // -----------------------------------------------------
-    // View helpers
-    // -----------------------------------------------------
-    function getReserves() external view returns (uint256 _reserveA, uint256 _reserveB) {
-        return (reserveA, reserveB);
+    function rewardPerToken() public view returns (uint256) {
+        if (totalStaked == 0) {
+            return rewardPerTokenStored;
+        }
+        uint256 timeDiff = block.timestamp - lastUpdateTime;
+        return rewardPerTokenStored + (timeDiff * rewardRate * 1e18) / totalStaked;
     }
 
-    // Pausable controls – onlyOwner
-    function pause() external onlyOwner { _pause(); }
-    function unpause() external onlyOwner { _unpause(); }
+    function earned(address account) public view returns (uint256) {
+        StakeInfo memory info = stakes[account];
+        uint256 accrued = (info.amount * (rewardPerToken() - info.rewardDebt)) / 1e18;
+        return accrued;
+    }
+
+    function stake(uint256 amount) external nonReentrant whenNotPaused updateReward(_msgSender()) {
+        if (amount == 0) revert ZeroAmount();
+        token.transferFrom(_msgSender(), address(this), amount);
+        totalStaked += amount;
+        stakes[_msgSender()].amount += amount;
+        emit Staked(_msgSender(), amount);
+    }
+
+    function withdraw(uint256 amount) external nonReentrant updateReward(_msgSender()) {
+        if (amount == 0) revert ZeroAmount();
+        StakeInfo storage info = stakes[_msgSender()];
+        if (info.amount < amount) revert InsufficientBalance(info.amount, amount);
+        info.amount -= amount;
+        totalStaked -= amount;
+        token.transfer(_msgSender(), amount);
+        emit Withdrawn(_msgSender(), amount);
+    }
+
+    function claimReward() external nonReentrant updateReward(_msgSender()) {
+        uint256 reward = earned(_msgSender());
+        if (reward > 0) {
+            stakes[_msgSender()].rewardDebt = rewardPerToken();
+            token.mint(_msgSender(), reward);
+            emit RewardPaid(_msgSender(), reward);
+        }
+    }
+
+    // Owner functions
+    function setRewardRate(uint256 newRate) external onlyOwner {
+        rewardRate = newRate;
+        emit RewardRateChanged(newRate);
+    }
+
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
 }
