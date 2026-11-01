@@ -1,8 +1,3 @@
-#!/usr/bin/env dotnet
-// MAGNUM OPUS // Web3 & DeFi Nexus Engine - Transaction Processing Core
-// High-performance transaction engine with validation, fee calculation, and receipt generation.
-// Built with .NET 8.0 for maximum performance and cross-platform compatibility.
-
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -10,6 +5,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -151,134 +147,208 @@ namespace MagnumOpus.Backend.Core
         [JsonPropertyName("executionMessage")]
         public string ExecutionMessage { get; set; } = string.Empty;
 
-        [JsonPropertyName("logs")]
-        public List<string> Logs { get; set; } = new List<string>();
-
-        [JsonPropertyName("contractAddress")]
-        public string ContractAddress { get; set; } = string.Empty;
-
-        [JsonPropertyName("events")]
-        public List<TransactionEvent> Events { get; set; } = new List<TransactionEvent>();
+        [JsonPropertyName("receiptId")]
+        public string ReceiptId { get; set; } = string.Empty;
     }
 
     // ============================================================================
-    // Transaction Event Entity
+    // Core Transaction Processor Service
     // ============================================================================
-    public sealed class TransactionEvent
+    public sealed class TransactionProcessor : IDisposable
     {
-        [JsonPropertyName("eventName")]
-        public string EventName { get; set; } = string.Empty;
+        private readonly ConcurrentDictionary<string, Transaction> _inFlight;
+        private readonly ConcurrentQueue<Transaction> _queue;
+        private readonly CancellationTokenSource _cts;
+        private readonly Task _processingTask;
+        private readonly SemaphoreSlim _signal;
+        private bool _disposed;
 
-        [JsonPropertyName("eventData")]
-        public Dictionary<string, object> EventData { get; set; } = new Dictionary<string, object>();
-    }
-
-    // ============================================================================
-    // Transaction Processor
-    // ============================================================================
-    public sealed class TransactionProcessor
-    {
-        private readonly ConcurrentDictionary<string, Transaction> _pendingTransactions = new ConcurrentDictionary<string, Transaction>();
-        private readonly ConcurrentDictionary<string, Transaction> _confirmedTransactions = new ConcurrentDictionary<string, Transaction>();
-        private readonly ConcurrentDictionary<string, TransactionReceipt> _transactionReceipts = new ConcurrentDictionary<string, TransactionReceipt>();
-        private readonly ConcurrentDictionary<string, ulong> _nonces = new ConcurrentDictionary<string, ulong>();
-        private readonly object _lock = new object();
-
-        public async Task<Transaction> CreateTransactionAsync(string sender, string recipient, decimal amount, string tokenSymbol, string payload, string signature)
+        public TransactionProcessor()
         {
-            var transaction = new Transaction
-            {
-                Id = Guid.NewGuid().ToString(),
-                Sender = sender,
-                Recipient = recipient,
-                Amount = amount,
-                TokenSymbol = tokenSymbol,
-                Payload = payload,
-                Signature = signature,
-                Nonce = GetNextNonce(sender),
-                Timestamp = DateTime.UtcNow
-            };
-
-            if (!transaction.IsValid())
-            {
-                throw new InvalidOperationException("Invalid transaction.");
-            }
-
-            if (!_pendingTransactions.TryAdd(transaction.Id, transaction))
-            {
-                throw new InvalidOperationException("Failed to add transaction to pending list.");
-            }
-
-            return transaction;
+            _inFlight = new ConcurrentDictionary<string, Transaction>();
+            _queue = new ConcurrentQueue<Transaction>();
+            _cts = new CancellationTokenSource();
+            _signal = new SemaphoreSlim(0);
+            _processingTask = Task.Run(ProcessLoopAsync);
         }
 
-        public async Task<TransactionReceipt> ProcessTransactionAsync(Transaction transaction)
+        /// <summary>
+        /// Enqueue a transaction for asynchronous processing.
+        /// Returns the generated transaction Id.
+        /// </summary>
+        public string EnqueueTransaction(Transaction tx)
         {
-            if (transaction == null)
-            {
-                throw new ArgumentNullException(nameof(transaction));
-            }
+            if (tx == null) throw new ArgumentNullException(nameof(tx));
+            if (string.IsNullOrWhiteSpace(tx.Id))
+                tx.Id = Guid.NewGuid().ToString("N");
 
-            if (!_pendingTransactions.TryRemove(transaction.Id, out _))
-            {
-                throw new InvalidOperationException("Transaction not found in pending list.");
-            }
+            // Basic validation before entering the queue
+            if (!tx.IsValid())
+                throw new InvalidOperationException("Transaction failed basic validation.");
 
-            var receipt = new TransactionReceipt
-            {
-                TransactionId = transaction.Id,
-                BlockIndex = GetNextBlockIndex(),
-                BlockHash = ComputeBlockHash(transaction),
-                GasUsed = CalculateGasUsed(transaction),
-                FeePaid = transaction.Fee,
-                Status = TransactionStatus.Confirmed,
-                Timestamp = DateTime.UtcNow,
-                ExecutionMessage = "Transaction processed successfully."
-            };
+            if (!tx.ValidateNetworkConstraints())
+                throw new InvalidOperationException("Transaction violates network constraints.");
 
-            if (!_confirmedTransactions.TryAdd(transaction.Id, transaction))
-            {
-                throw new InvalidOperationException("Failed to add transaction to confirmed list.");
-            }
+            // Store in in‑flight dictionary for quick lookup / deduplication
+            if (!_inFlight.TryAdd(tx.Id, tx))
+                throw new InvalidOperationException($"Transaction with Id {tx.Id} is already being processed.");
 
-            if (!_transactionReceipts.TryAdd(receipt.TransactionId, receipt))
-            {
-                throw new InvalidOperationException("Failed to add transaction receipt.");
-            }
-
-            return receipt;
+            _queue.Enqueue(tx);
+            _signal.Release();
+            return tx.Id;
         }
 
-        private ulong GetNextNonce(string sender)
+        /// <summary>
+        /// Retrieves the current status of a transaction by Id.
+        /// </summary>
+        public TransactionStatus? GetStatus(string transactionId)
         {
-            lock (_lock)
+            if (string.IsNullOrWhiteSpace(transactionId)) return null;
+            if (_inFlight.TryGetValue(transactionId, out var tx))
+                return tx.Status;
+            return null; // Unknown transaction
+        }
+
+        private async Task ProcessLoopAsync()
+        {
+            var token = _cts.Token;
+            while (!token.IsCancellationRequested)
             {
-                if (!_nonces.TryGetValue(sender, out var nonce))
+                try
                 {
-                    nonce = 0;
+                    await _signal.WaitAsync(token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
                 }
 
-                _nonces[sender] = nonce + 1;
-                return nonce;
+                while (_queue.TryDequeue(out var tx))
+                {
+                    try
+                    {
+                        await ProcessTransactionAsync(tx, token);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log and mark as failed
+                        Console.Error.WriteLine($"[TransactionProcessor] Error processing {tx.Id}: {ex.Message}");
+                        tx.Status = TransactionStatus.Failed;
+                        // Generate a minimal receipt for failure
+                        var receipt = new TransactionReceipt
+                        {
+                            TransactionId = tx.Id,
+                            BlockIndex = -1,
+                            BlockHash = string.Empty,
+                            GasUsed = 0,
+                            FeePaid = tx.Fee,
+                            Status = TransactionStatus.Failed,
+                            Timestamp = DateTime.UtcNow,
+                            ExecutionMessage = $"Processing failed: {ex.Message}",
+                            ReceiptId = GenerateReceiptId()
+                        };
+                        tx.ReceiptId = receipt.ReceiptId;
+                        // In a real system we would persist the receipt here.
+                    }
+                    finally
+                    {
+                        // Remove from in‑flight regardless of outcome
+                        _inFlight.TryRemove(tx.Id, out _);
+                    }
+                }
             }
         }
 
+        private async Task ProcessTransactionAsync(Transaction tx, CancellationToken token)
+        {
+            // Simulate async work such as signature verification, gas estimation, etc.
+            await Task.Yield(); // placeholder for real async I/O
+
+            // 1. Verify signature (placeholder – in production use ECDSA/EdDSA verification)
+            if (!VerifySignature(tx))
+            {
+                tx.Status = TransactionStatus.Rejected;
+                throw new InvalidOperationException("Invalid signature.");
+            }
+
+            // 2. Compute gas usage (simple deterministic mock)
+            tx.GasUsed = EstimateGas(tx);
+            tx.FeePaid = tx.Fee; // In a real engine fee could be adjusted based on gas price
+
+            // 3. Apply transaction effects (mock – just mark as confirmed)
+            tx.Status = TransactionStatus.Confirmed;
+            tx.BlockIndex = GetNextBlockIndex();
+            tx.ReceiptId = GenerateReceiptId();
+
+            // 4. Create receipt
+            var receipt = new TransactionReceipt
+            {
+                TransactionId = tx.Id,
+                BlockIndex = tx.BlockIndex,
+                BlockHash = ComputeBlockHash(tx.BlockIndex),
+                GasUsed = tx.GasUsed,
+                FeePaid = tx.FeePaid,
+                Status = tx.Status,
+                Timestamp = DateTime.UtcNow,
+                ExecutionMessage = "Transaction processed successfully.",
+                ReceiptId = tx.ReceiptId
+            };
+
+            // In a real implementation we would persist the receipt to a database or ledger.
+            // For demonstration we simply output to console.
+            Console.WriteLine($"[TransactionProcessor] Receipt generated: {JsonSerializer.Serialize(receipt)}");
+        }
+
+        private bool VerifySignature(Transaction tx)
+        {
+            // Placeholder verification – in production replace with proper cryptographic checks.
+            // Here we simply ensure the Signature field is a non‑empty hex string of length 64.
+            if (string.IsNullOrWhiteSpace(tx.Signature)) return false;
+            return System.Text.RegularExpressions.Regex.IsMatch(tx.Signature, "^[0-9a-fA-F]{64}$");
+        }
+
+        private long EstimateGas(Transaction tx)
+        {
+            // Very naive gas estimation: base 21000 + 10 per token transferred.
+            return 21000 + (long)(10 * tx.Amount);
+        }
+
+        private static long _blockCounter = 0;
         private long GetNextBlockIndex()
         {
-            // Implement logic to get the next block index
-            return 0;
+            return Interlocked.Increment(ref _blockCounter);
         }
 
-        private string ComputeBlockHash(Transaction transaction)
+        private string ComputeBlockHash(long blockIndex)
         {
-            // Implement logic to compute the block hash
-            return string.Empty;
+            // Simple deterministic hash for demo purposes.
+            using var sha256 = SHA256.Create();
+            var bytes = Encoding.UTF8.GetBytes($"block-{blockIndex}");
+            var hash = sha256.ComputeHash(bytes);
+            return Convert.ToHexString(hash).ToLowerInvariant();
         }
 
-        private long CalculateGasUsed(Transaction transaction)
+        private string GenerateReceiptId()
         {
-            // Implement logic to calculate gas used
-            return 0;
+            return Guid.NewGuid().ToString("N");
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _cts.Cancel();
+            _signal.Release(); // Unblock the processing loop if waiting
+            try
+            {
+                _processingTask.Wait();
+            }
+            catch (AggregateException ae) when (ae.InnerExceptions.All(e => e is OperationCanceledException))
+            {
+                // Expected cancellation, ignore.
+            }
+            _cts.Dispose();
+            _signal.Dispose();
+            _disposed = true;
         }
     }
 }
