@@ -53,6 +53,7 @@
             background-attachment: fixed;
         }
     </style>
+    <script defer src="app.js"></script>
 </head>
 <body>
     <!-- Top Global Header -->
@@ -99,34 +100,75 @@
             </button>
 
             <button id="open-settings-btn" class="icon-btn" aria-label="Platform Settings" title="Settings">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09a1.65 1.65 0 0 0-1.51-1.51H5a2 2 0 0 
-"/>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09a1.65 1.65 0 0 0-1.51-1.51H5a2 2 0 0 1-2-2v-1.34a1.65 1.65 0 0 0-1.51-1.51H1a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2h.09a1.65 1.65 0 0 0 1.51-1.51V9a2 2 0 0 1 2-2h1.34a1.65 1.65 0 0 0 1.51-1.51V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1.51 1.51H15a2 2 0 0 1 2 2v1.34a1.65 1.65 0 0 0 1.51 1.51H19a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1.51V15z"/></svg>
             </button>
         </div>
     </header>
 
     <main id="dashboard">
-        <!-- Wallet Overview Section -->
-        <section class="wallet-section">
-            <h2 class="section-title">Wallet Overview</h2>
-            <div id="wallet-balance" class="card">Loading wallet data...</div>
+        <section class="wallet-overview card">
+            <h2>Wallet Overview</h2>
+            <div id="wallet-address" class="mono-val">0x0000000000000000000000000000000000000000</div>
+            <div class="balance-grid">
+                <div class="balance-item">
+                    <span class="label">ETH</span>
+                    <span id="eth-balance" class="value">0.00</span>
+                </div>
+                <div class="balance-item">
+                    <span class="label">USDC</span>
+                    <span id="usdc-balance" class="value">0.00</span>
+                </div>
+                <div class="balance-item">
+                    <span class="label">NFTs</span>
+                    <span id="nft-count" class="value">0</span>
+                </div>
+            </div>
         </section>
 
-        <!-- Network Metrics Section -->
-        <section class="metrics-section">
-            <h2 class="section-title">Network Metrics</h2>
-            <div id="metrics-container" class="grid">
-                <div class="metric-card" id="metric-gas">Gas: <span id="gas-price">--</span></div>
-                <div class="metric-card" id="metric-block">Block: <span id="block-height">--</span></div>
-                <div class="metric-card" id="metric-tps">TPS: <span id="engine-tps">--</span></div>
-            </div>
+        <section class="chart-section card">
+            <h2>Market Chart</h2>
+            <canvas id="price-chart"></canvas>
+        </section>
+
+        <section class="transactions card">
+            <h2>Recent Transactions</h2>
+            <table id="tx-table">
+                <thead>
+                    <tr><th>Hash</th><th>Type</th><th>Amount</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                    <!-- Rows will be injected by JavaScript -->
+                </tbody>
+            </table>
         </section>
     </main>
 
-    <footer id="main-footer">
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="modal-content">
+            <h2 id="settings-title">Platform Settings</h2>
+            <button id="close-settings-btn" class="icon-btn" aria-label="Close Settings">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6L18 18M6 18L18 6"/></svg>
+            </button>
+            <form id="settings-form">
+                <label>
+                    <span>Theme</span>
+                    <select id="theme-select">
+                        <option value="dark">Dark</option>
+                        <option value="light">Light</option>
+                    </select>
+                </label>
+                <label>
+                    <span>Refresh Interval (seconds)</span>
+                    <input type="number" id="refresh-interval" min="5" max="60" step="5" value="15"/>
+                </label>
+                <button type="submit" class="primary-btn">Save</button>
+            </form>
+        </div>
+    </div>
+
+    <footer class="footer">
         <p>&copy; 2026 Magnum Opus. All rights reserved.</p>
     </footer>
-
-    <script src="app.js" defer></script>
 </body>
 </html>
