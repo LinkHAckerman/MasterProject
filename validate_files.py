@@ -11,6 +11,8 @@ BLOCKING checks (the specific failing file is reverted - see below):
   .go   -> gofmt -l        (parses syntax; doesn't need a go.mod)
   .cpp  -> g++ -fsyntax-only
   .rb   -> ruby -c          (syntax check only, no gem dependencies needed)
+  .ex   -> elixir parse check (Code.string_to_quoted!; skipped if Elixir
+           isn't installed)
 
 ADVISORY checks (printed as a warning only, never reverts anything):
   .sql  -> sqlite3 parse (schema.sql may use dialect features sqlite
@@ -87,6 +89,12 @@ def validate_ruby(path):
     return run(["ruby", "-c", path])
 
 
+def validate_elixir(path):
+    # Parses only (no compile, no deps). `path` comes from the fixed
+    # ALL_PROJECT_FILES list, never from model output.
+    return run(["elixir", "-e", f'Code.string_to_quoted!(File.read!("{path}"))'])
+
+
 def validate_rust_advisory(path):
     return run(["rustc", "--edition", "2021", "--crate-type", "lib",
                 "--emit=metadata", "-o", "/dev/null", path])
@@ -102,6 +110,7 @@ BLOCKING_VALIDATORS = {
     ".go": validate_go,
     ".cpp": validate_cpp,
     ".rb": validate_ruby,
+    ".ex": validate_elixir,   # skipped automatically if Elixir isn't installed
 }
 
 ADVISORY_VALIDATORS = {
