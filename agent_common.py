@@ -36,8 +36,17 @@ ALL_PROJECT_FILES = [
     "CryptoEngine.cpp", "TransactionProcessor.cs",
     "SmartContract.sol", "server.go", "schema.sql",
     "OnChainProgram.rs", "WalletService.rb",
+    "GossipNode.ex",
     "README.md"
 ]
+
+# Optional per-agent settings, supplied through environment variables in the
+# workflow step of that agent:
+#   AGENT_PINNED_FILE - this agent is assigned this file first (if it is still
+#                       unclaimed today), instead of the stalest-first pick.
+#   AGENT_COAUTHOR    - "Name <email>" credited via a Co-authored-by trailer
+#                       on the daily commit, if this agent's file makes it in.
+COAUTHORS_FILE = ".coauthors.tmp"
 
 # Prompt-size limits. The file an agent is ASSIGNED gets a big window so it
 # can see (nearly) all of it before rewriting; every other file only gets a
@@ -95,6 +104,9 @@ It must be the best thing ever made, showcasing full-stack mastery across multip
 - DATA LAYER (SQL): Schema for users, wallets, and transaction history (schema.sql).
 - ON-CHAIN PROGRAMS (Rust): High-performance, memory-safe on-chain program logic (OnChainProgram.rs).
 - SCRIPTING/GLUE LAYER (Ruby): Lightweight wallet balance and exchange-rate service (WalletService.rb).
+- CONCURRENT NETWORKING (Elixir/OTP): A supervised peer-to-peer gossip node (GossipNode.ex) - a GenServer-based
+  mempool, a peer registry, and transaction gossip/broadcast between nodes, using idiomatic OTP (Supervisor,
+  GenServer, Registry/ETS). Single self-contained .ex file that compiles without external dependencies.
 """
 
 # The file(s) this agent is allowed to pick. Set by get_available_files()
@@ -197,6 +209,13 @@ def get_available_files(claimed_files):
     """
     global _current_assignment
     _warn_if_shallow_clone()
+
+    # A pinned file takes priority for this agent, if nobody claimed it yet.
+    pinned = os.environ.get("AGENT_PINNED_FILE", "").strip()
+    if pinned in ALL_PROJECT_FILES and pinned not in claimed_files:
+        _current_assignment = [pinned]
+        print(f"Assigned file(s) by pin: {_current_assignment}")
+        return list(_current_assignment)
 
     candidates = [f for f in ALL_PROJECT_FILES if f not in claimed_files]
     if not candidates:
@@ -500,3 +519,10 @@ def write_file_and_claim(target_file, file_content, claimed_files):
     save_claim(claimed_files, target_file)
     if target_file == "README.md":
         record_readme_updated_today()
+
+    coauthor = os.environ.get("AGENT_COAUTHOR", "").strip()
+    if coauthor:
+        # "<file>\t<Name <email>>" - the workflow only credits the co-author
+        # if that file actually survives validation into the commit.
+        with open(COAUTHORS_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{target_file}\t{coauthor}\n")
