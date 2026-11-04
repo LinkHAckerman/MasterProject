@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 0   # full history, so agents can rank files by last-modified date
 
       - name: Reset Daily Agent State
-        run: rm -f .agent_state.json
+        run: rm -f .agent_state.json .coauthors.tmp
 
       - name: Set up Python Cloud Environment
         uses: actions/setup-python@v5
@@ -31,6 +31,15 @@ jobs:
           go-version: 'stable'
           cache: false   # no go.sum in the repo, so skip the cache warning
 
+      # Elixir is only used for the syntax check of GossipNode.ex. If this
+      # step ever fails, validation simply skips .ex files - nothing breaks.
+      - name: Set up Elixir (for GossipNode.ex syntax checks)
+        continue-on-error: true
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '27'
+          elixir-version: '1.17'
+
       - name: Install Necessary Web Libraries
         run: pip install requests
 
@@ -39,6 +48,17 @@ jobs:
       # reported as failed (shown as a warning in the run summary) but the
       # job keeps going to the remaining agents, validation, and commit -
       # a single provider outage no longer costs the whole day's progress.
+
+      # Community agent: runs on a contributor's own free-tier key and works
+      # on the Elixir file. The contributor is credited as co-author on the
+      # daily commit only if their file makes it through validation.
+      - name: Execute Mistral Agent (community key - RSRatPoison)
+        continue-on-error: true
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY_2 }}
+          AGENT_PINNED_FILE: GossipNode.ex
+          AGENT_COAUTHOR: "RSRatPoison <352177804+RSRatPoison@users.noreply.github.com>"
+        run: python ai_agent_mistral.py
 
       - name: Execute Gemini Agent
         continue-on-error: true
@@ -78,8 +98,29 @@ jobs:
         run: |
           git config --global user.name "LinkHAckerman"
           git config --global user.email "151451018+LinkHAckerman@users.noreply.github.com"
+
+          # Keep the co-author record out of the commit itself.
+          mv .coauthors.tmp "$RUNNER_TEMP/coauthors.tmp" 2>/dev/null || true
+
           git add -A
-          git commit -m "Autonomous multi-language architecture evolution (5 agents)" || echo "No changes to commit"
+          git diff --cached --name-only > "$RUNNER_TEMP/changed.txt"
+
+          MSG_FILE="$RUNNER_TEMP/commit_msg.txt"
+          echo "Autonomous multi-language architecture evolution (6 agents)" > "$MSG_FILE"
+
+          # Credit a co-author only if the file they worked on is in this commit.
+          if [ -f "$RUNNER_TEMP/coauthors.tmp" ]; then
+            awk -F'\t' 'NR==FNR{c[$0]=1;next} ($1 in c){print $2}' \
+              "$RUNNER_TEMP/changed.txt" "$RUNNER_TEMP/coauthors.tmp" | sort -u > "$RUNNER_TEMP/credit.txt"
+            if [ -s "$RUNNER_TEMP/credit.txt" ]; then
+              echo "" >> "$MSG_FILE"
+              while IFS= read -r who; do
+                echo "Co-authored-by: $who" >> "$MSG_FILE"
+              done < "$RUNNER_TEMP/credit.txt"
+            fi
+          fi
+
+          git commit -F "$MSG_FILE" || echo "No changes to commit"
 
           for i in 1 2 3 4 5; do
             git pull --rebase origin main && git push && break
