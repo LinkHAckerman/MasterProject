@@ -22,6 +22,18 @@ from datetime import date
 
 STATE_FILE = ".agent_state.json"
 
+# Each agent runs as its own process, so this measures that agent's runtime.
+# Once the budget is spent, no NEW model attempt or retry is started (a call
+# already in flight is allowed to finish). This stops one overloaded provider
+# from burning an hour of the daily run on timeouts.
+_PROCESS_START = time.monotonic()
+AGENT_TIME_BUDGET_SECONDS = int(os.environ.get("AGENT_TIME_BUDGET_SECONDS", "720"))
+
+
+def budget_exceeded():
+    return (time.monotonic() - _PROCESS_START) > AGENT_TIME_BUDGET_SECONDS
+
+
 # Tracks README.md's last-updated date. Unlike STATE_FILE (which is reset
 # at the start of every workflow run), this file is NOT reset daily - it
 # persists across runs so the cooldown below actually works over time.
@@ -405,7 +417,7 @@ def call_with_retry(url, headers, payload, params=None, max_retries=3, base_dela
             )
         except requests.exceptions.RequestException as e:
             print(f"  Attempt {attempt}/{max_retries}: network error ({e})")
-            if attempt == max_retries:
+            if attempt == max_retries or budget_exceeded():
                 return None
             time.sleep(base_delay * (2 ** (attempt - 1)))
             continue
@@ -416,7 +428,7 @@ def call_with_retry(url, headers, payload, params=None, max_retries=3, base_dela
         print(f"  Attempt {attempt}/{max_retries}: status {response.status_code}")
         print(f"  {response.text}")
 
-        if response.status_code in transient_statuses and attempt < max_retries:
+        if response.status_code in transient_statuses and attempt < max_retries and not budget_exceeded():
             delay = base_delay * (2 ** (attempt - 1))
             print(f"  Transient error, retrying in {delay} seconds...")
             time.sleep(delay)
@@ -439,6 +451,9 @@ def try_generate(model_names, call_fn, extract_text_fn):
     candidate failed one way or another.
     """
     for i, model in enumerate(model_names, start=1):
+        if budget_exceeded():
+            print(f"Time budget of {AGENT_TIME_BUDGET_SECONDS}s used up - not trying further models.")
+            break
         print(f"Trying model {i}/{len(model_names)}: {model}")
         response = call_fn(model)
 
@@ -482,8 +497,12 @@ def pick_unclaimed_file(model_names, call_fn, extract_text_fn, claimed_files, ma
         f for f in ALL_PROJECT_FILES if f not in claimed_files
     ]
 
+    remaining_models = list(model_names)
+
     for pick_attempt in range(1, max_pick_attempts + 1):
-        raw_text, model = try_generate(model_names, call_fn, extract_text_fn)
+        if not remaining_models:
+            break
+        raw_text, model = try_generate(remaining_models, call_fn, extract_text_fn)
 
         if raw_text is None:
             raise GenerationFailed("All candidate models failed to return usable content.")
@@ -493,21 +512,25 @@ def pick_unclaimed_file(model_names, call_fn, extract_text_fn, claimed_files, ma
             candidate_file = action["filename"]
             candidate_content = repair_double_escaped_content(action["content"])
         except Exception as e:
-            print(f"Attempt {pick_attempt}/{max_pick_attempts}: could not parse model output as JSON ({e}). Retrying.")
+            print(f"Attempt {pick_attempt}/{max_pick_attempts}: could not parse model output as JSON ({e}). "
+                  f"Not asking {model} again; trying a different model.")
+            remaining_models = [m for m in remaining_models if m != model]
             continue
 
         if candidate_file in allowed and candidate_file not in claimed_files:
             if candidate_file == "README.md":
                 if len(candidate_content) < README_MIN_CHARS:
                     print(f"Attempt {pick_attempt}/{max_pick_attempts}: README too short "
-                          f"({len(candidate_content)} chars), likely a bad generation. Retrying.")
+                          f"({len(candidate_content)} chars), likely a bad generation. Trying a different model.")
+                    remaining_models = [m for m in remaining_models if m != model]
                     continue
                 candidate_content = enforce_readme_requirements(candidate_content)
             return candidate_file, candidate_content
 
         print(f"Attempt {pick_attempt}/{max_pick_attempts}: picked '{candidate_file}', "
               f"but the assignment is {allowed} (claimed today: {claimed_files}). "
-              f"Asking again for the assigned file.")
+              f"Asking a different model for the assigned file.")
+        remaining_models = [m for m in remaining_models if m != model]
 
     print(f"Could not get the assigned file after {max_pick_attempts} attempts. Skipping this agent's turn.")
     return None, None
