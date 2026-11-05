@@ -64,8 +64,10 @@ def call_fn(model):
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"}
+        "temperature": 0.2
+        # No "response_format": Groq's JSON mode rejects large generations
+        # server-side (400 json_validate_failed) even when our parser can
+        # handle them, so we rely on the prompt + common.extract_json instead.
     }
     return common.call_with_retry(f"{BASE_URL}/chat/completions", headers_base, payload)
 
