@@ -329,7 +329,8 @@ Your assigned file today (it has gone the longest without an update): {available
 Instructions:
 1. Work on the assigned file above and no other. If it is truncated in the snapshot,
    keep its existing structure and improve/extend it - do not discard what is there.
-   If it does not exist yet, create it.
+   If it does not exist yet, create it. Your output must be a real improvement:
+   add or fix functionality, never hand back an unchanged copy of the file.
 2. Respond with ONLY a strict JSON object: {{"filename": "...", "content": "...complete updated file content..."}}
 3. No markdown code fences. No commentary. Just the raw JSON object.
 4. Inside the "content" string, use real single-backslash JSON escapes
@@ -478,6 +479,17 @@ def try_generate(model_names, call_fn, extract_text_fn):
     return None, None
 
 
+def _is_unchanged(filename, new_content):
+    """True if the file exists and the model handed back what is already there
+    (ignoring surrounding whitespace) - a wasted turn that also produces no
+    commit and no credit."""
+    try:
+        with open(filename, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read().strip() == new_content.strip()
+    except FileNotFoundError:
+        return False
+
+
 def pick_unclaimed_file(model_names, call_fn, extract_text_fn, claimed_files, max_pick_attempts=3):
     """
     Full generation flow: ask for the assigned file's new content (trying
@@ -518,6 +530,11 @@ def pick_unclaimed_file(model_names, call_fn, extract_text_fn, claimed_files, ma
             continue
 
         if candidate_file in allowed and candidate_file not in claimed_files:
+            if _is_unchanged(candidate_file, candidate_content):
+                print(f"Attempt {pick_attempt}/{max_pick_attempts}: {model} returned '{candidate_file}' "
+                      f"unchanged (a copy of the current file). Trying a different model.")
+                remaining_models = [m for m in remaining_models if m != model]
+                continue
             if candidate_file == "README.md":
                 if len(candidate_content) < README_MIN_CHARS:
                     print(f"Attempt {pick_attempt}/{max_pick_attempts}: README too short "
