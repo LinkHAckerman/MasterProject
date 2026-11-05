@@ -31,7 +31,17 @@ def get_ranked_models(api_key):
     if not candidates:
         raise RuntimeError("No usable chat models returned by Mistral.")
 
-    candidates.sort(key=lambda n: (0 if ("medium" in n or "large" in n) else 1, n))
+    # Codestral first: this project is all code, and in practice the larger
+    # general models hit rate limits / capacity errors on the free tier far
+    # more often. The "-latest" alias is tried before dated versions.
+    def rank(n):
+        if "codestral" in n:
+            return (0, 0 if n.endswith("latest") else 1, n)
+        if "medium" in n or "large" in n:
+            return (1, 0, n)
+        return (2, 0, n)
+
+    candidates.sort(key=rank)
     print(f"Mistral model preference order: {candidates}")
     return candidates
 
