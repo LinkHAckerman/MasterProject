@@ -124,174 +124,241 @@ module MagnumOpus
       }
     end
 
-    # Generic balance fetcher for supported native chains
-    def get_balance(chain_sym)
-      chain = chain_sym.to_sym
-      unless SUPPORTED_CHAINS.include?(chain)
-        raise InvalidAddressError, "Unsupported chain: #{chain}"
-      end
-      usd_rate = fetch_market_rate(chain.to_s)
-      balance  = @wallet_address ? query_chain_balance(@wallet_address, chain) : BigDecimal('0')
+    # Returns SOL balance and USD representation
+    def get_sol_balance
+      usd_rate = fetch_market_rate('solana')
+      balance  = @wallet_address ? query_chain_balance(@wallet_address, :solana) : BigDecimal('42.00')
       usd_val  = (balance * usd_rate).round(2)
+
       {
         success: true,
-        chain: chain,
+        chain: :solana,
         address: @wallet_address,
-        symbol: CHAIN_METADATA[chain][:native],
+        symbol: 'SOL',
         balance: balance.to_s('F'),
-        price_usd: usd_rate.to_f,
+        sol_price_usd: usd_rate.to_f,
         usd_value: usd_val.to_f,
         timestamp: Time.now.utc.iso8601
       }
     end
 
-    # Returns a hash of balances for all supported native chains
-    def get_all_balances
-      result = {}
-      SUPPORTED_CHAINS.each do |chain|
-        result[chain] = get_balance(chain)
-      end
-      result
+    # Returns MATIC balance and USD representation
+    def get_matic_balance
+      usd_rate = fetch_market_rate('polygon')
+      balance  = @wallet_address ? query_chain_balance(@wallet_address, :polygon) : BigDecimal('1200.00')
+      usd_val  = (balance * usd_rate).round(2)
+
+      {
+        success: true,
+        chain: :polygon,
+        address: @wallet_address,
+        symbol: 'MATIC',
+        balance: balance.to_s('F'),
+        matic_price_usd: usd_rate.to_f,
+        usd_value: usd_val.to_f,
+        timestamp: Time.now.utc.iso8601
+      }
     end
 
-    # Fetches current gas price (in gwei) for a given chain where applicable
-    def get_gas_price(chain_sym)
-      chain = chain_sym.to_sym
-      unless CHAIN_METADATA.key?(chain)
-        raise InvalidAddressError, "Gas price not available for chain: #{chain}"
-      end
-      case chain
-      when :ethereum, :arbitrum, :optimism
-        # Use ethgasstation or similar – fallback to static value
-        begin
-          resp = request_with_retry(URI('https://ethgasstation.info/api/ethgasAPI.json'))
-          data = JSON.parse(resp.body)
-          # ethgasstation returns price *10, convert to gwei
-          price_gwei = (data['average'].to_f / 10).round(1)
-        rescue StandardError => e
-          @logger.warn "Gas price fetch failed (#{e.class}), using fallback"
-          price_gwei = 30.0
-        end
-        { chain: chain, gas_price_gwei: price_gwei, timestamp: Time.now.utc.iso8601 }
-      when :solana
-        # Solana uses lamports per signature; 0.000005 SOL is typical (~0.5 gwei equivalent)
-        { chain: chain, gas_price_lamports: 5000, timestamp: Time.now.utc.iso8601 }
-      else
-        { chain: chain, gas_price: nil, note: 'No gas model defined', timestamp: Time.now.utc.iso8601 }
+    # Returns AVAX balance and USD representation
+    def get_avax_balance
+      usd_rate = fetch_market_rate('avalanche')
+      balance  = @wallet_address ? query_chain_balance(@wallet_address, :avalanche) : BigDecimal('25.00')
+      usd_val  = (balance * usd_rate).round(2)
+
+      {
+        success: true,
+        chain: :avalanche,
+        address: @wallet_address,
+        symbol: 'AVAX',
+        balance: balance.to_s('F'),
+        avax_price_usd: usd_rate.to_f,
+        usd_value: usd_val.to_f,
+        timestamp: Time.now.utc.iso8601
+      }
+    end
+
+    # ---------------------------------------------------------------------
+    # Public API - Market Data helpers
+    # ---------------------------------------------------------------------
+
+    # Returns current market rate for a given cryptocurrency
+    def fetch_market_rate(crypto_id)
+      cache_key = "market_rate_#{crypto_id}"
+      cached_data = get_cached_data(cache_key)
+
+      return cached_data if cached_data
+
+      begin
+        rate = fetch_market_rate_from_coingecko(crypto_id)
+        set_cached_data(cache_key, rate)
+        rate
+      rescue NetworkError, RateLimitError => e
+        @logger.warn "Failed to fetch market rate for #{crypto_id}: #{e.message}. Using fallback rate."
+        FALLBACK_RATES[crypto_id] || BigDecimal('1.00')
       end
     end
 
     # ---------------------------------------------------------------------
-    # Private helper methods
+    # Private API - Internal helpers
     # ---------------------------------------------------------------------
+
     private
 
-    # Normalizes and validates an address. Returns nil if no address supplied.
+    # Validates and normalizes a wallet address based on the primary chain
     def validate_and_normalize_address(address)
-      return nil if address.nil? || address.strip.empty?
-      addr = address.strip
-      if addr.start_with?('0x') && addr.match?(/^0x[0-9a-fA-F]{40}$/)
-        addr.downcase
-      elsif addr.match?(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/) # simple Base58 check for Solana
-        addr
+      return nil unless address
+
+      case @primary_chain
+      when :ethereum
+        validate_eth_address(address)
+      when :solana
+        validate_sol_address(address)
       else
-        raise InvalidAddressError, "Invalid wallet address format: #{address}"
+        raise InvalidAddressError, "Unsupported chain: #{@primary_chain}"
       end
     end
 
-    # Simple in‑memory cache with TTL
-    def cache_fetch(key)
-      entry = @cache[key]
-      return nil unless entry
-      if Time.now.utc - entry[:timestamp] < DEFAULT_CACHE_TTL_SEC
-        entry[:value]
-      else
-        @cache.delete(key)
+    # Validates an Ethereum address
+    def validate_eth_address(address)
+      unless address.match?(/^0x[a-fA-F0-9]{40}$/)
+        raise InvalidAddressError, "Invalid Ethereum address: #{address}"
+      end
+      address.downcase
+    end
+
+    # Validates a Solana address
+    def validate_sol_address(address)
+      unless address.match?(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)
+        raise InvalidAddressError, "Invalid Solana address: #{address}"
+      end
+      address
+    end
+
+    # Fetches market rate from CoinGecko API
+    def fetch_market_rate_from_coingecko(crypto_id)
+      enforce_rate_limit('coingecko')
+
+      uri = URI.join(BASE_COINGECKO_URI, "simple/price?ids=#{crypto_id}&vs_currencies=usd")
+      response = make_http_request(uri)
+
+      unless response.is_a?(Net::HTTPSuccess)
+        raise NetworkError, "Failed to fetch market rate: #{response.code} #{response.message}"
+      end
+
+      data = JSON.parse(response.body)
+      rate = data.dig(crypto_id, 'usd')
+
+      unless rate
+        raise OracleError, "Invalid market rate data for #{crypto_id}"
+      end
+
+      BigDecimal(rate.to_s)
+    end
+
+    # Makes an HTTP request with retry logic
+    def make_http_request(uri, method: :get, body: nil, headers: {})
+      retries = 0
+
+      begin
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = true
+        http.verify_mode = OpenSSL::SSL::VERIFY_PEER
+        http.read_timeout = DEFAULT_TIMEOUT_SEC
+        http.open_timeout = DEFAULT_TIMEOUT_SEC
+
+        request = case method
+                  when :get
+                    Net::HTTP::Get.new(uri)
+                  when :post
+                    Net::HTTP::Post.new(uri)
+                  else
+                    raise ArgumentError, "Unsupported HTTP method: #{method}"
+                  end
+
+        request['Content-Type'] = 'application/json' unless body.nil?
+        headers.each { |k, v| request[k] = v }
+        request.body = body.to_json unless body.nil?
+
+        response = http.request(request)
+
+        if response.is_a?(Net::HTTPTooManyRequests)
+          raise RateLimitError, "Rate limit exceeded for #{uri}"
+        end
+
+        response
+      rescue Net::OpenTimeout, Net::ReadTimeout => e
+        retries += 1
+        if retries < MAX_RETRY_ATTEMPTS
+          sleep(2 ** retries)
+          retry
+        else
+          raise NetworkError, "Request timed out after #{MAX_RETRY_ATTEMPTS} attempts: #{e.message}"
+        end
+      rescue StandardError => e
+        raise NetworkError, "HTTP request failed: #{e.message}"
+      end
+    end
+
+    # Enforces rate limiting for a given API
+    def enforce_rate_limit(api_name)
+      synchronize do
+        now = Time.now.to_i
+        @rate_limiter[api_name].reject! { |t| t < now - 60 }
+
+        if @rate_limiter[api_name].size >= MAX_REQUESTS_PER_MIN
+          sleep_time = 60 - (now - @rate_limiter[api_name].first)
+          sleep(sleep_time) if sleep_time > 0
+          @rate_limiter[api_name].shift
+        end
+
+        @rate_limiter[api_name] << now
+      end
+    end
+
+    # Gets cached data if it exists and is not expired
+    def get_cached_data(key)
+      synchronize do
+        cached = @cache[key]
+        return cached[:data] if cached && cached[:expires_at] > Time.now.to_i
+
         nil
       end
     end
 
-    def cache_store(key, value)
-      @cache[key] = { value: value, timestamp: Time.now.utc }
-    end
-
-    # Rate‑limit per endpoint (key) – simple token bucket style
-    def enforce_rate_limit(key)
-      now = Time.now.utc
-      timestamps = @rate_limiter[key]
-      # Remove entries older than 60 seconds
-      timestamps.reject! { |t| now - t > 60 }
-      if timestamps.size >= MAX_REQUESTS_PER_MIN
-        raise RateLimitError, "Rate limit exceeded for #{key}"
-      end
-      timestamps << now
-    end
-
-    # Generic HTTP request with retry, timeout and rate‑limit handling
-    def request_with_retry(uri, method: :get, body: nil, headers: {})
-      enforce_rate_limit(uri.host)
-      attempts = 0
-      begin
-        attempts += 1
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = (uri.scheme == 'https')
-        http.read_timeout = DEFAULT_TIMEOUT_SEC
-        request = case method
-                  when :post then Net::HTTP::Post.new(uri)
-                  else Net::HTTP::Get.new(uri)
-                  end
-        headers.each { |k, v| request[k] = v }
-        request.body = body if body
-        response = http.request(request)
-        unless response.is_a?(Net::HTTPSuccess)
-          raise NetworkError, "HTTP #{response.code} #{response.message}"
-        end
-        response
-      rescue RateLimitError
-        raise
-      rescue StandardError => e
-        @logger.warn "Request attempt #{attempts} failed: #{e.class} – #{e.message}"
-        retry if attempts < MAX_RETRY_ATTEMPTS
-        raise NetworkError, "Failed after #{attempts} attempts: #{e.message}"
+    # Sets cached data with an expiration time
+    def set_cached_data(key, data, ttl: DEFAULT_CACHE_TTL_SEC)
+      synchronize do
+        @cache[key] = {
+          data: data,
+          expires_at: Time.now.to_i + ttl
+        }
       end
     end
 
-    # Fetch market price in USD for a given token/chain identifier
-    def fetch_market_rate(token_id)
-      cache_key = "price_#{token_id}"
-      cached = cache_fetch(cache_key)
-      return cached if cached
-
-      begin
-        endpoint = "/simple/price?ids=#{URI.encode_www_form_component(token_id)}&vs_currencies=usd"
-        uri = BASE_COINGECKO_URI + endpoint
-        resp = request_with_retry(uri)
-        data = JSON.parse(resp.body)
-        price = data[token_id]['usd']
-        bd_price = BigDecimal(price.to_s)
-        cache_store(cache_key, bd_price)
-        bd_price
-      rescue StandardError => e
-        @logger.warn "Market rate fetch failed for #{token_id}: #{e.class} – #{e.message}. Using fallback."
-        FALLBACK_RATES[token_id] || BigDecimal('0')
+    # Queries the blockchain for a native balance
+    def query_chain_balance(address, chain)
+      # Placeholder for actual blockchain query logic
+      # In a real implementation, this would interact with blockchain nodes or APIs
+      case chain
+      when :ethereum
+        BigDecimal('14.8520')
+      when :solana
+        BigDecimal('42.00')
+      when :polygon
+        BigDecimal('1200.00')
+      when :avalanche
+        BigDecimal('25.00')
+      else
+        raise InvalidAddressError, "Unsupported chain: #{chain}"
       end
     end
 
-    # Placeholder for native chain balance query – in real implementation this would call
-    # an RPC endpoint (e.g., Infura, Alchemy, Solana RPC) and parse the result.
-    def query_chain_balance(address, chain_sym)
-      # For demo purposes we return a deterministic pseudo‑random balance based on address hash.
-      seed = address.unpack1('H*').to_i(16) ^ chain_sym.hash
-      rand_bal = (seed % 10_000) / 1000.0 + 0.5 # between 0.5 and 10.5
-      BigDecimal(rand_bal.to_s).round(4)
-    end
-
-    # Placeholder for ERC‑20 / SPL token balance query.
+    # Queries the blockchain for a token balance
     def query_token_balance_internal(address, contract_address)
-      # Deterministic pseudo‑random balance for demo.
-      seed = address.unpack1('H*').to_i(16) ^ contract_address.unpack1('H*').to_i(16)
-      rand_bal = (seed % 1_000_000) / 10_000.0 + 10.0 # between 10 and 110
-      BigDecimal(rand_bal.to_s).round(4)
+      # Placeholder for actual blockchain query logic
+      # In a real implementation, this would interact with blockchain nodes or APIs
+      BigDecimal('42500.00')
     end
   end
 end

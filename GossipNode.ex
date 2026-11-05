@@ -122,3 +122,50 @@ defmodule GossipNode.GossipServer do
     {:noreply, Map.delete(state, :pending)}
   end
 end
+
+# Add a new module for handling peer connections
+
+defmodule GossipNode.PeerConnection do
+  use GenServer
+
+  def start_link(peer_pid) do
+    GenServer.start_link(__MODULE__, peer_pid, name: {:peer_connection, peer_pid})
+  end
+
+  def init(peer_pid) do
+    {:ok, peer_pid}
+  end
+
+  def handle_info({:tx, hash, tx}, peer_pid) do
+    GossipNode.Mempool.submit_tx(tx)
+    {:noreply, peer_pid}
+  end
+
+  def handle_info(:disconnect, peer_pid) do
+    {:stop, :normal, peer_pid}
+  end
+end
+
+# Add a new module for handling peer discovery
+
+defmodule GossipNode.PeerDiscovery do
+  use GenServer
+
+  def start_link(_args) do
+    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
+  end
+
+  def init(state) do
+    {:ok, state}
+  end
+
+  def discover_peers do
+    GenServer.call(__MODULE__, :discover_peers)
+  end
+
+  def handle_call(:discover_peers, _from, state) do
+    # Simulate peer discovery
+    new_peers = [self(), self(), self()]
+    {:reply, new_peers, state}
+  end
+end
