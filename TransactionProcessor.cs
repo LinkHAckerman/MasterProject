@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace MagnumOpus.Backend.Core
 {
@@ -152,169 +153,124 @@ namespace MagnumOpus.Backend.Core
     }
 
     // ============================================================================
-    // Repository Abstraction for Persistence (In‑Memory for demo)
+    // Repository Abstraction
     // ============================================================================
     public interface ITransactionRepository
     {
-        Task AddAsync(Transaction tx);
-        Task<Transaction?> GetAsync(string id);
-        Task UpdateAsync(Transaction tx);
-        Task AddReceiptAsync(TransactionReceipt receipt);
-        Task<TransactionReceipt?> GetReceiptAsync(string receiptId);
+        Task AddAsync(Transaction tx, CancellationToken ct = default);
+        Task<Transaction?> GetByIdAsync(string id, CancellationToken ct = default);
+        Task UpdateStatusAsync(string id, TransactionStatus newStatus, CancellationToken ct = default);
+        Task<IReadOnlyCollection<Transaction>> GetPendingAsync(CancellationToken ct = default);
     }
 
+    // ============================================================================
+    // In-Memory Repository Implementation (for testing / mock)
+    // ============================================================================
     public sealed class InMemoryTransactionRepository : ITransactionRepository
     {
-        private readonly ConcurrentDictionary<string, Transaction> _transactions = new();
-        private readonly ConcurrentDictionary<string, TransactionReceipt> _receipts = new();
+        private readonly ConcurrentDictionary<string, Transaction> _store = new();
 
-        public Task AddAsync(Transaction tx)
+        public Task AddAsync(Transaction tx, CancellationToken ct = default)
         {
-            _transactions[tx.Id] = tx;
+            _store[tx.Id] = tx;
             return Task.CompletedTask;
         }
 
-        public Task<Transaction?> GetAsync(string id)
+        public Task<Transaction?> GetByIdAsync(string id, CancellationToken ct = default)
         {
-            _transactions.TryGetValue(id, out var tx);
+            _store.TryGetValue(id, out var tx);
             return Task.FromResult<Transaction?>(tx);
         }
 
-        public Task UpdateAsync(Transaction tx)
+        public Task UpdateStatusAsync(string id, TransactionStatus newStatus, CancellationToken ct = default)
         {
-            _transactions[tx.Id] = tx;
+            if (_store.TryGetValue(id, out var tx))
+            {
+                tx.Status = newStatus;
+            }
             return Task.CompletedTask;
         }
 
-        public Task AddReceiptAsync(TransactionReceipt receipt)
+        public Task<IReadOnlyCollection<Transaction>> GetPendingAsync(CancellationToken ct = default)
         {
-            _receipts[receipt.ReceiptId] = receipt;
-            return Task.CompletedTask;
-        }
-
-        public Task<TransactionReceipt?> GetReceiptAsync(string receiptId)
-        {
-            _receipts.TryGetValue(receiptId, out var receipt);
-            return Task.FromResult<TransactionReceipt?>(receipt);
+            var pending = _store.Values.Where(t => t.Status == TransactionStatus.Pending).ToList();
+            return Task.FromResult<IReadOnlyCollection<Transaction>>(pending);
         }
     }
 
     // ============================================================================
-    // Core Transaction Processor
+    // Transaction Processor Service
     // ============================================================================
-    public sealed class TransactionProcessor : IDisposable
+    public sealed class TransactionProcessor
     {
         private readonly ITransactionRepository _repository;
-        private readonly ConcurrentQueue<string> _pendingQueue = new();
-        private readonly CancellationTokenSource _cts = new();
-        private readonly Task _processingTask;
-        private readonly TimeSpan _processingDelay = TimeSpan.FromMilliseconds(250);
+        private readonly ILogger<TransactionProcessor> _logger;
+        private readonly TimeSpan _networkDelay = TimeSpan.FromMilliseconds(250);
 
-        /// <summary>
-        /// Fires when a transaction has been fully processed and a receipt is generated.
-        /// </summary>
-        public event Action<TransactionReceipt>? ReceiptGenerated;
-
-        public TransactionProcessor(ITransactionRepository repository)
+        public TransactionProcessor(ITransactionRepository repository, ILogger<TransactionProcessor> logger)
         {
             _repository = repository ?? throw new ArgumentNullException(nameof(repository));
-            _processingTask = Task.Run(ProcessLoopAsync);
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         /// <summary>
-        /// Enqueue a transaction for asynchronous processing.
+        /// Validates, stores and asynchronously confirms a transaction.
         /// </summary>
-        public async Task EnqueueAsync(Transaction tx)
+        public async Task<TransactionReceipt> ProcessTransactionAsync(Transaction tx, CancellationToken ct = default)
         {
             if (tx == null) throw new ArgumentNullException(nameof(tx));
 
-            // Assign a deterministic Id if missing
-            if (string.IsNullOrWhiteSpace(tx.Id))
-                tx.Id = Guid.NewGuid().ToString("N");
+            _logger.LogInformation("Processing transaction {TxId}", tx.Id);
 
-            // Basic validation before accepting
-            if (!tx.IsValid() || !tx.ValidateNetworkConstraints())
+            // Basic validation
+            if (!tx.IsValid())
             {
                 tx.Status = TransactionStatus.Rejected;
-                await _repository.AddAsync(tx);
-                return;
+                await _repository.AddAsync(tx, ct);
+                _logger.LogWarning("Transaction {TxId} rejected: basic validation failed", tx.Id);
+                return CreateReceipt(tx, "Basic validation failed", TransactionStatus.Rejected);
             }
 
+            if (!tx.ValidateNetworkConstraints())
+            {
+                tx.Status = TransactionStatus.Rejected;
+                await _repository.AddAsync(tx, ct);
+                _logger.LogWarning("Transaction {TxId} rejected: network constraints", tx.Id);
+                return CreateReceipt(tx, "Network constraints violation", TransactionStatus.Rejected);
+            }
+
+            if (!SignatureVerifier.Verify(tx.Signature, tx.GetRawPayloadBytes(), tx.Sender))
+            {
+                tx.Status = TransactionStatus.Rejected;
+                await _repository.AddAsync(tx, ct);
+                _logger.LogWarning("Transaction {TxId} rejected: invalid signature", tx.Id);
+                return CreateReceipt(tx, "Invalid signature", TransactionStatus.Rejected);
+            }
+
+            // Store as pending
             tx.Status = TransactionStatus.Pending;
-            await _repository.AddAsync(tx);
-            _pendingQueue.Enqueue(tx.Id);
+            await _repository.AddAsync(tx, ct);
+
+            // Simulate network propagation / mining delay
+            await Task.Delay(_networkDelay, ct);
+
+            // Confirm transaction (in a real system this would involve consensus)
+            tx.Status = TransactionStatus.Confirmed;
+            tx.GasUsed = EstimateGas(tx);
+            tx.FeePaid = tx.Fee; // Simplified
+            await _repository.UpdateStatusAsync(tx.Id, TransactionStatus.Confirmed, ct);
+
+            _logger.LogInformation("Transaction {TxId} confirmed", tx.Id);
+            return CreateReceipt(tx, "Transaction confirmed", TransactionStatus.Confirmed);
         }
 
-        private async Task ProcessLoopAsync()
+        private long EstimateGas(Transaction tx)
         {
-            while (!_cts.IsCancellationRequested)
-            {
-                if (_pendingQueue.TryDequeue(out var txId))
-                {
-                    var tx = await _repository.GetAsync(txId);
-                    if (tx == null) continue; // Should never happen
-
-                    try
-                    {
-                        // Simulate work (hashing, gas calculation, etc.)
-                        await Task.Delay(_processingDelay, _cts.Token);
-                        tx.GasUsed = new Random().Next(21000, 50000);
-                        tx.FeePaid = tx.Fee;
-                        tx.BlockIndex = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                        tx.Status = TransactionStatus.Confirmed;
-                        tx.ReceiptId = Guid.NewGuid().ToString("N");
-                        await _repository.UpdateAsync(tx);
-
-                        var receipt = tx.CreateReceipt();
-                        await _repository.AddReceiptAsync(receipt);
-                        ReceiptGenerated?.Invoke(receipt);
-                    }
-                    catch (Exception ex)
-                    {
-                        tx.Status = TransactionStatus.Failed;
-                        await _repository.UpdateAsync(tx);
-                        var receipt = new TransactionReceipt
-                        {
-                            TransactionId = tx.Id,
-                            BlockIndex = tx.BlockIndex,
-                            BlockHash = string.Empty,
-                            GasUsed = tx.GasUsed,
-                            FeePaid = tx.FeePaid,
-                            Status = TransactionStatus.Failed,
-                            Timestamp = DateTime.UtcNow,
-                            ExecutionMessage = $"Processing failed: {ex.Message}",
-                            ReceiptId = Guid.NewGuid().ToString("N")
-                        };
-                        await _repository.AddReceiptAsync(receipt);
-                        ReceiptGenerated?.Invoke(receipt);
-                    }
-                }
-                else
-                {
-                    // No pending work – back‑off a little
-                    await Task.Delay(100, _cts.Token);
-                }
-            }
+            // Very naive gas estimation: 21000 base + 10 per token transferred
+            return 21000 + (long)(10 * tx.Amount);
         }
 
-        public void Dispose()
-        {
-            _cts.Cancel();
-            try
-            {
-                _processingTask.Wait();
-            }
-            catch (AggregateException) { }
-            _cts.Dispose();
-        }
-    }
-
-    // ============================================================================
-    // Extension helpers for Transaction
-    // ============================================================================
-    public static class TransactionExtensions
-    {
-        public static TransactionReceipt CreateReceipt(this Transaction tx)
+        private TransactionReceipt CreateReceipt(Transaction tx, string message, TransactionStatus status)
         {
             return new TransactionReceipt
             {
@@ -323,11 +279,49 @@ namespace MagnumOpus.Backend.Core
                 BlockHash = tx.ComputeHash(),
                 GasUsed = tx.GasUsed,
                 FeePaid = tx.FeePaid,
-                Status = tx.Status,
+                Status = status,
                 Timestamp = DateTime.UtcNow,
-                ExecutionMessage = $"Transaction {tx.Id} processed successfully.",
-                ReceiptId = tx.ReceiptId
+                ExecutionMessage = message,
+                ReceiptId = Guid.NewGuid().ToString()
             };
         }
+    }
+
+    // ============================================================================
+    // Simple Signature Verification Stub (replace with real crypto in production)
+    // ============================================================================
+    internal static class SignatureVerifier
+    {
+        public static bool Verify(string signatureBase64, byte[] payload, string publicKey)
+        {
+            // In a real implementation you would decode the publicKey (e.g., PEM or raw bytes)
+            // and use ECDSA or Ed25519 verification. Here we perform a deterministic placeholder
+            // that treats the signature as the SHA256 hash of the payload.
+            if (string.IsNullOrWhiteSpace(signatureBase64)) return false;
+            try
+            {
+                var expectedHash = Convert.ToBase64String(SHA256.Create().ComputeHash(payload));
+                return expectedHash == signatureBase64;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+
+    // ============================================================================
+    // Extension helpers for JSON serialization (useful for logging / API responses)
+    // ============================================================================
+    public static class TransactionExtensions
+    {
+        private static readonly JsonSerializerOptions _options = new JsonSerializerOptions
+        {
+            WriteIndented = false,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+
+        public static string ToJson(this Transaction tx) => JsonSerializer.Serialize(tx, _options);
+        public static string ToJson(this TransactionReceipt receipt) => JsonSerializer.Serialize(receipt, _options);
     }
 }

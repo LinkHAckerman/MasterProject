@@ -5,7 +5,8 @@ defmodule GossipNode.Application do
     children = [
       {Registry, keys: :unique, name: GossipNode.PeerRegistry},
       {GossipNode.Mempool, []},
-      {GossipNode.GossipServer, []}
+      {GossipNode.GossipServer, []},
+      {GossipNode.PeerDiscovery, []}
     ]
 
     opts = [strategy: :one_for_one, name: GossipNode.Supervisor]
@@ -79,6 +80,11 @@ defmodule GossipNode.PeerRegistry do
   def list_peers do
     Registry.select(GossipNode.PeerRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
   end
+
+  # Remove a peer from the registry
+  def remove_peer(pid) when is_pid(pid) do
+    Registry.delete(GossipNode.PeerRegistry, pid)
+  end
 end
 
 defmodule GossipNode.GossipServer do
@@ -121,9 +127,12 @@ defmodule GossipNode.GossipServer do
     # Clear pending after broadcasting
     {:noreply, Map.delete(state, :pending)}
   end
-end
 
-# Add a new module for handling peer connections
+  def handle_info({:peer_disconnected, pid}, state) do
+    GossipNode.PeerRegistry.remove_peer(pid)
+    {:noreply, state}
+  end
+end
 
 defmodule GossipNode.PeerConnection do
   use GenServer
@@ -142,11 +151,10 @@ defmodule GossipNode.PeerConnection do
   end
 
   def handle_info(:disconnect, peer_pid) do
+    GossipNode.GossipServer.handle_info({:peer_disconnected, peer_pid}, nil)
     {:stop, :normal, peer_pid}
   end
 end
-
-# Add a new module for handling peer discovery
 
 defmodule GossipNode.PeerDiscovery do
   use GenServer
