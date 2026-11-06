@@ -1,1 +1,1 @@
-{"modified_files": ["GossipNode.ex", "CryptoEngine.cpp", "WalletService.rb", "schema.sql"]}
+{"modified_files": ["GossipNode.ex", "SmartContract.sol", "server.go", "OnChainProgram.rs", "TransactionProcessor.cs"]}

@@ -200,3 +200,45 @@ defmodule GossipNode.PeerHandler do
     {:stop, :normal, peer_pid}
   end
 end
+
+# Add a new module for handling peer connections and transactions
+defmodule GossipNode.PeerConnectionManager do
+  use GenServer
+
+  def start_link(_args) do
+    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
+  end
+
+  def init(state) do
+    {:ok, state}
+  end
+
+  def connect_to_peer(peer_pid) do
+    GenServer.call(__MODULE__, {:connect_to_peer, peer_pid})
+  end
+
+  def disconnect_from_peer(peer_pid) do
+    GenServer.call(__MODULE__, {:disconnect_from_peer, peer_pid})
+  end
+
+  def handle_call({:connect_to_peer, peer_pid}, _from, state) do
+    case Registry.lookup(GossipNode.PeerRegistry, peer_pid) do
+      [] ->
+        GossipNode.PeerRegistry.add_peer(peer_pid)
+        GossipNode.PeerHandler.start_link(peer_pid)
+        {:reply, :ok, state}
+      _ ->
+        {:reply, :already_connected, state}
+    end
+  end
+
+  def handle_call({:disconnect_from_peer, peer_pid}, _from, state) do
+    case Registry.lookup(GossipNode.PeerRegistry, peer_pid) do
+      [] ->
+        {:reply, :not_connected, state}
+      _ ->
+        GenServer.cast({:peer_handler, peer_pid}, :disconnect)
+        {:reply, :ok, state}
+    end
+  end
+end
