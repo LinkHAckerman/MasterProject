@@ -124,7 +124,7 @@ module MagnumOpus
       }
     end
 
-    # Returns SOL balance and USD representation
+    # Returns native SOL balance and USD representation
     def get_sol_balance
       usd_rate = fetch_market_rate('solana')
       balance  = @wallet_address ? query_chain_balance(@wallet_address, :solana) : BigDecimal('42.00')
@@ -142,10 +142,10 @@ module MagnumOpus
       }
     end
 
-    # Returns MATIC balance and USD representation
+    # Returns native MATIC balance and USD representation
     def get_matic_balance
       usd_rate = fetch_market_rate('polygon')
-      balance  = @wallet_address ? query_chain_balance(@wallet_address, :polygon) : BigDecimal('1200.00')
+      balance  = @wallet_address ? query_chain_balance(@wallet_address, :polygon) : BigDecimal('120.50')
       usd_val  = (balance * usd_rate).round(2)
 
       {
@@ -160,7 +160,7 @@ module MagnumOpus
       }
     end
 
-    # Returns AVAX balance and USD representation
+    # Returns native AVAX balance and USD representation
     def get_avax_balance
       usd_rate = fetch_market_rate('avalanche')
       balance  = @wallet_address ? query_chain_balance(@wallet_address, :avalanche) : BigDecimal('25.00')
@@ -178,34 +178,74 @@ module MagnumOpus
       }
     end
 
+    # Returns portfolio summary across all supported chains
+    def get_portfolio_summary
+      eth_balance = get_eth_balance
+      sol_balance = get_sol_balance
+      matic_balance = get_matic_balance
+      avax_balance = get_avax_balance
+      usdt_balance = get_usdt_balance
+
+      total_usd_value = eth_balance[:usd_value] + sol_balance[:usd_value] + matic_balance[:usd_value] + avax_balance[:usd_value] + usdt_balance[:usd_value]
+
+      {
+        success: true,
+        address: @wallet_address,
+        chains: SUPPORTED_CHAINS,
+        balances: {
+          ethereum: eth_balance,
+          solana: sol_balance,
+          polygon: matic_balance,
+          avalanche: avax_balance,
+          usdt: usdt_balance
+        },
+        total_usd_value: total_usd_value.round(2),
+        timestamp: Time.now.utc.iso8601
+      }
+    end
+
     # ---------------------------------------------------------------------
-    # Public API - Market Data helpers
+    # Public API - Market Data
     # ---------------------------------------------------------------------
 
-    # Returns current market rate for a given cryptocurrency
-    def fetch_market_rate(crypto_id)
-      cache_key = "market_rate_#{crypto_id}"
+    # Fetches current market rate for a given cryptocurrency
+    # @param coin_id [String] CoinGecko coin ID (e.g., 'ethereum', 'bitcoin')
+    # @return [BigDecimal] Current market rate in USD
+    def fetch_market_rate(coin_id)
+      cache_key = "market_rate_#{coin_id}"
       cached_data = get_cached_data(cache_key)
 
       return cached_data if cached_data
 
       begin
-        rate = fetch_market_rate_from_coingecko(crypto_id)
-        set_cached_data(cache_key, rate)
-        rate
-      rescue NetworkError, RateLimitError => e
-        @logger.warn "Failed to fetch market rate for #{crypto_id}: #{e.message}. Using fallback rate."
-        FALLBACK_RATES[crypto_id] || BigDecimal('1.00')
+        enforce_rate_limit('coingecko')
+        uri = URI.join(BASE_COINGECKO_URI, "simple/price?ids=#{coin_id}&vs_currencies=usd")
+        response = make_http_request(uri)
+
+        if response.code == '200'
+          data = JSON.parse(response.body)
+          rate = BigDecimal(data[coin_id]['usd'].to_s)
+          set_cached_data(cache_key, rate)
+          rate
+        else
+          @logger.warn("Failed to fetch market rate for #{coin_id}: #{response.code} - #{response.message}")
+          FALLBACK_RATES[coin_id] || BigDecimal('0.00')
+        end
+      rescue StandardError => e
+        @logger.error("Error fetching market rate for #{coin_id}: #{e.message}")
+        FALLBACK_RATES[coin_id] || BigDecimal('0.00')
       end
     end
 
     # ---------------------------------------------------------------------
-    # Private API - Internal helpers
+    # Private API - Internal Helpers
     # ---------------------------------------------------------------------
 
     private
 
     # Validates and normalizes a wallet address based on the primary chain
+    # @param address [String, nil] Wallet address to validate
+    # @return [String, nil] Normalized address or nil if invalid
     def validate_and_normalize_address(address)
       return nil unless address
 
@@ -215,51 +255,69 @@ module MagnumOpus
       when :solana
         validate_sol_address(address)
       else
-        raise InvalidAddressError, "Unsupported chain: #{@primary_chain}"
+        raise WalletServiceError, "Unsupported primary chain: #{@primary_chain}"
       end
     end
 
     # Validates an Ethereum address
+    # @param address [String] Ethereum address to validate
+    # @return [String] Normalized address
+    # @raise [InvalidAddressError] If address is invalid
     def validate_eth_address(address)
+      address = address.strip.downcase
       unless address.match?(/^0x[a-fA-F0-9]{40}$/)
         raise InvalidAddressError, "Invalid Ethereum address: #{address}"
       end
-      address.downcase
+      address
     end
 
     # Validates a Solana address
+    # @param address [String] Solana address to validate
+    # @return [String] Normalized address
+    # @raise [InvalidAddressError] If address is invalid
     def validate_sol_address(address)
+      address = address.strip
       unless address.match?(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)
         raise InvalidAddressError, "Invalid Solana address: #{address}"
       end
       address
     end
 
-    # Fetches market rate from CoinGecko API
-    def fetch_market_rate_from_coingecko(crypto_id)
-      enforce_rate_limit('coingecko')
-
-      uri = URI.join(BASE_COINGECKO_URI, "simple/price?ids=#{crypto_id}&vs_currencies=usd")
-      response = make_http_request(uri)
-
-      unless response.is_a?(Net::HTTPSuccess)
-        raise NetworkError, "Failed to fetch market rate: #{response.code} #{response.message}"
+    # Queries chain balance for a given address and chain
+    # @param address [String] Wallet address
+    # @param chain [Symbol] Blockchain symbol
+    # @return [BigDecimal] Balance in native currency
+    def query_chain_balance(address, chain)
+      # Placeholder implementation - replace with actual blockchain API calls
+      case chain
+      when :ethereum
+        BigDecimal('14.8520')
+      when :solana
+        BigDecimal('42.00')
+      when :polygon
+        BigDecimal('120.50')
+      when :avalanche
+        BigDecimal('25.00')
+      else
+        BigDecimal('0.00')
       end
+    end
 
-      data = JSON.parse(response.body)
-      rate = data.dig(crypto_id, 'usd')
-
-      unless rate
-        raise OracleError, "Invalid market rate data for #{crypto_id}"
-      end
-
-      BigDecimal(rate.to_s)
+    # Queries token balance for a given address and contract
+    # @param address [String] Wallet address
+    # @param contract_address [String] Token contract address
+    # @return [BigDecimal] Token balance
+    def query_token_balance_internal(address, contract_address)
+      # Placeholder implementation - replace with actual blockchain API calls
+      BigDecimal('42500.00')
     end
 
     # Makes an HTTP request with retry logic
-    def make_http_request(uri, method: :get, body: nil, headers: {})
-      retries = 0
-
+    # @param uri [URI] Request URI
+    # @return [Net::HTTPResponse] Response object
+    # @raise [NetworkError] If request fails after max retries
+    def make_http_request(uri)
+      attempt = 0
       begin
         http = Net::HTTP.new(uri.host, uri.port)
         http.use_ssl = true
@@ -267,98 +325,71 @@ module MagnumOpus
         http.read_timeout = DEFAULT_TIMEOUT_SEC
         http.open_timeout = DEFAULT_TIMEOUT_SEC
 
-        request = case method
-                  when :get
-                    Net::HTTP::Get.new(uri)
-                  when :post
-                    Net::HTTP::Post.new(uri)
-                  else
-                    raise ArgumentError, "Unsupported HTTP method: #{method}"
-                  end
-
-        request['Content-Type'] = 'application/json' unless body.nil?
-        headers.each { |k, v| request[k] = v }
-        request.body = body.to_json unless body.nil?
-
+        request = Net::HTTP::Get.new(uri)
         response = http.request(request)
 
-        if response.is_a?(Net::HTTPTooManyRequests)
-          raise RateLimitError, "Rate limit exceeded for #{uri}"
+        case response
+        when Net::HTTPSuccess
+          response
+        when Net::HTTPTooManyRequests
+          raise RateLimitError, "Rate limited by #{uri.host}"
+        else
+          raise NetworkError, "HTTP request failed: #{response.code} - #{response.message}"
         end
-
-        response
-      rescue Net::OpenTimeout, Net::ReadTimeout => e
-        retries += 1
-        if retries < MAX_RETRY_ATTEMPTS
-          sleep(2 ** retries)
+      rescue RateLimitError => e
+        raise e
+      rescue StandardError => e
+        attempt += 1
+        if attempt < MAX_RETRY_ATTEMPTS
+          sleep(2 ** attempt)
           retry
         else
-          raise NetworkError, "Request timed out after #{MAX_RETRY_ATTEMPTS} attempts: #{e.message}"
+          raise NetworkError, "Failed after #{MAX_RETRY_ATTEMPTS} attempts: #{e.message}"
         end
-      rescue StandardError => e
-        raise NetworkError, "HTTP request failed: #{e.message}"
       end
     end
 
-    # Enforces rate limiting for a given API
-    def enforce_rate_limit(api_name)
+    # Enforces rate limiting for a given service
+    # @param service [String] Service identifier
+    # @raise [RateLimitError] If rate limit is exceeded
+    def enforce_rate_limit(service)
       synchronize do
         now = Time.now.to_i
-        @rate_limiter[api_name].reject! { |t| t < now - 60 }
+        @rate_limiter[service].reject! { |t| t < now - 60 }
 
-        if @rate_limiter[api_name].size >= MAX_REQUESTS_PER_MIN
-          sleep_time = 60 - (now - @rate_limiter[api_name].first)
-          sleep(sleep_time) if sleep_time > 0
-          @rate_limiter[api_name].shift
+        if @rate_limiter[service].size >= MAX_REQUESTS_PER_MIN
+          raise RateLimitError, "Rate limit exceeded for #{service}"
         end
 
-        @rate_limiter[api_name] << now
+        @rate_limiter[service] << now
       end
     end
 
     # Gets cached data if it exists and is not expired
+    # @param key [String] Cache key
+    # @return [Object, nil] Cached data or nil if not found or expired
     def get_cached_data(key)
       synchronize do
         cached = @cache[key]
-        return cached[:data] if cached && cached[:expires_at] > Time.now.to_i
-
-        nil
+        if cached && cached[:expires_at] > Time.now.to_i
+          cached[:data]
+        else
+          @cache.delete(key)
+          nil
+        end
       end
     end
 
-    # Sets cached data with an expiration time
-    def set_cached_data(key, data, ttl: DEFAULT_CACHE_TTL_SEC)
+    # Sets cached data with expiration time
+    # @param key [String] Cache key
+    # @param data [Object] Data to cache
+    def set_cached_data(key, data)
       synchronize do
         @cache[key] = {
           data: data,
-          expires_at: Time.now.to_i + ttl
+          expires_at: Time.now.to_i + DEFAULT_CACHE_TTL_SEC
         }
       end
-    end
-
-    # Queries the blockchain for a native balance
-    def query_chain_balance(address, chain)
-      # Placeholder for actual blockchain query logic
-      # In a real implementation, this would interact with blockchain nodes or APIs
-      case chain
-      when :ethereum
-        BigDecimal('14.8520')
-      when :solana
-        BigDecimal('42.00')
-      when :polygon
-        BigDecimal('1200.00')
-      when :avalanche
-        BigDecimal('25.00')
-      else
-        raise InvalidAddressError, "Unsupported chain: #{chain}"
-      end
-    end
-
-    # Queries the blockchain for a token balance
-    def query_token_balance_internal(address, contract_address)
-      # Placeholder for actual blockchain query logic
-      # In a real implementation, this would interact with blockchain nodes or APIs
-      BigDecimal('42500.00')
     end
   end
 end

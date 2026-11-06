@@ -177,3 +177,26 @@ defmodule GossipNode.PeerDiscovery do
     {:reply, new_peers, state}
   end
 end
+
+# Add a new module for handling peer connections and transactions
+defmodule GossipNode.PeerHandler do
+  use GenServer
+
+  def start_link(peer_pid) do
+    GenServer.start_link(__MODULE__, peer_pid, name: {:peer_handler, peer_pid})
+  end
+
+  def init(peer_pid) do
+    {:ok, peer_pid}
+  end
+
+  def handle_info({:tx, hash, tx}, peer_pid) do
+    GossipNode.Mempool.submit_tx(tx)
+    {:noreply, peer_pid}
+  end
+
+  def handle_info(:disconnect, peer_pid) do
+    GossipNode.GossipServer.handle_info({:peer_disconnected, peer_pid}, nil)
+    {:stop, :normal, peer_pid}
+  end
+end

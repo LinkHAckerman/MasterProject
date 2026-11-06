@@ -119,12 +119,12 @@ CREATE TABLE IF NOT EXISTS balances (
     balance_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     wallet_id UUID NOT NULL REFERENCES wallets(wallet_id) ON DELETE CASCADE,
     asset_id UUID NOT NULL REFERENCES assets(asset_id) ON DELETE CASCADE,
-    amount NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (amount >= 0),
-    locked_amount NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (locked_amount >= 0),
-    staked_amount NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (staked_amount >= 0),
+    amount NUMERIC(38,18) NOT NULL DEFAULT 0,
+    last_updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (wallet_id, asset_id)
+    metadata JSONB DEFAULT '{}'::jsonb,
+    CONSTRAINT uq_balances_wallet_asset UNIQUE (wallet_id, asset_id)
 );
 
 CREATE TRIGGER trg_balances_updated_at
@@ -133,64 +133,24 @@ FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
 -- =============================================================
--- NFT Collection and Token Metadata
--- =============================================================
-CREATE TABLE IF NOT EXISTS nft_collections (
-    collection_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    asset_id UUID NOT NULL UNIQUE REFERENCES assets(asset_id) ON DELETE CASCADE,
-    name VARCHAR(255) NOT NULL,
-    description TEXT,
-    image_url VARCHAR(512),
-    metadata_uri VARCHAR(512),
-    royalty_fee_bps INT DEFAULT 250 CHECK (royalty_fee_bps BETWEEN 0 AND 10000),
-    attributes JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TRIGGER trg_nft_collections_updated_at
-BEFORE UPDATE ON nft_collections
-FOR EACH ROW
-EXECUTE FUNCTION set_updated_at();
-
-CREATE TABLE IF NOT EXISTS nft_tokens (
-    token_item_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    collection_id UUID NOT NULL REFERENCES nft_collections(collection_id) ON DELETE CASCADE,
-    token_id VARCHAR(78) NOT NULL,
-    owner_wallet_id UUID NOT NULL REFERENCES wallets(wallet_id),
-    metadata_uri VARCHAR(512),
-    attributes JSONB DEFAULT '{}'::jsonb,
-    is_listed BOOLEAN DEFAULT FALSE,
-    listing_price_usd NUMERIC(24,8) DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (collection_id, token_id)
-);
-
-CREATE TRIGGER trg_nft_tokens_updated_at
-BEFORE UPDATE ON nft_tokens
-FOR EACH ROW
-EXECUTE FUNCTION set_updated_at();
-
--- =============================================================
--- Blockchain Transactions
+-- Transaction Ledger
 -- =============================================================
 CREATE TABLE IF NOT EXISTS transactions (
-    tx_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tx_hash VARCHAR(66) UNIQUE,
-    from_wallet_id UUID REFERENCES wallets(wallet_id),
-    to_address VARCHAR(66) NOT NULL,
-    asset_id UUID REFERENCES assets(asset_id),
-    amount NUMERIC(38,18) NOT NULL DEFAULT 0,
-    gas_fee NUMERIC(38,18) DEFAULT 0,
-    gas_price_gwei NUMERIC(18,8) DEFAULT 0,
-    block_number BIGINT,
-    network VARCHAR(30) NOT NULL,
-    type tx_type NOT NULL,
+    transaction_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    wallet_id UUID NOT NULL REFERENCES wallets(wallet_id) ON DELETE SET NULL,
+    to_wallet_id UUID REFERENCES wallets(wallet_id) ON DELETE SET NULL,
+    asset_id UUID NOT NULL REFERENCES assets(asset_id) ON DELETE RESTRICT,
+    amount NUMERIC(38,18) NOT NULL,
+    tx_type tx_type NOT NULL,
     status tx_status NOT NULL DEFAULT 'pending',
-    raw_payload JSONB DEFAULT '{}'::jsonb,
+    tx_hash VARCHAR(66) UNIQUE,
+    block_number BIGINT,
+    gas_price NUMERIC(38,0),
+    gas_used BIGINT,
+    nonce BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'::jsonb
 );
 
 CREATE TRIGGER trg_transactions_updated_at
@@ -198,34 +158,28 @@ BEFORE UPDATE ON transactions
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
--- =============================================================
--- DEX Orderbook Engine & Trade History
--- =============================================================
-CREATE TABLE IF NOT EXISTS orderbook_pairs (
-    pair_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    base_asset_id UUID NOT NULL REFERENCES assets(asset_id),
-    quote_asset_id UUID NOT NULL REFERENCES assets(asset_id),
-    pair_symbol VARCHAR(30) NOT NULL UNIQUE,
-    min_order_size NUMERIC(38,18) DEFAULT 0.0001,
-    tick_size NUMERIC(24,8) DEFAULT 0.00000001,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (base_asset_id, quote_asset_id)
-);
+CREATE INDEX idx_transactions_wallet_id ON transactions(wallet_id);
+CREATE INDEX idx_transactions_to_wallet_id ON transactions(to_wallet_id);
+CREATE INDEX idx_transactions_asset_id ON transactions(asset_id);
+CREATE INDEX idx_transactions_status ON transactions(status);
+CREATE INDEX idx_transactions_type ON transactions(tx_type);
 
+-- =============================================================
+-- Order Book
+-- =============================================================
 CREATE TABLE IF NOT EXISTS orders (
     order_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    pair_id UUID NOT NULL REFERENCES orderbook_pairs(pair_id),
+    wallet_id UUID NOT NULL REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+    asset_id UUID NOT NULL REFERENCES assets(asset_id) ON DELETE RESTRICT,
     side order_side NOT NULL,
-    type order_type NOT NULL,
-    price NUMERIC(24,8) NOT NULL CHECK (price >= 0),
-    quantity NUMERIC(38,18) NOT NULL CHECK (quantity > 0),
-    filled_quantity NUMERIC(38,18) DEFAULT 0 CHECK (filled_quantity >= 0),
+    order_type order_type NOT NULL,
+    price NUMERIC(24,8) NOT NULL,
+    amount NUMERIC(38,18) NOT NULL,
+    filled_amount NUMERIC(38,18) NOT NULL DEFAULT 0,
     status order_status NOT NULL DEFAULT 'open',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'::jsonb
 );
 
 CREATE TRIGGER trg_orders_updated_at
@@ -233,223 +187,134 @@ BEFORE UPDATE ON orders
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
-CREATE TABLE IF NOT EXISTS trades (
-    trade_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    pair_id UUID NOT NULL REFERENCES orderbook_pairs(pair_id),
-    buy_order_id UUID NOT NULL REFERENCES orders(order_id),
-    sell_order_id UUID NOT NULL REFERENCES orders(order_id),
-    price NUMERIC(24,8) NOT NULL,
-    quantity NUMERIC(38,18) NOT NULL,
-    maker_fee NUMERIC(24,8) DEFAULT 0,
-    taker_fee NUMERIC(24,8) DEFAULT 0,
-    tx_hash VARCHAR(66),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+CREATE INDEX idx_orders_wallet_id ON orders(wallet_id);
+CREATE INDEX idx_orders_asset_id ON orders(asset_id);
+CREATE INDEX idx_orders_status ON orders(status);
+CREATE INDEX idx_orders_side_type ON orders(side, order_type);
 
 -- =============================================================
--- Perpetual Leverage & Margin Positions
+-- Positions (for margin/futures)
 -- =============================================================
-CREATE TABLE IF NOT EXISTS perpetual_positions (
+CREATE TABLE IF NOT EXISTS positions (
     position_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    pair_id UUID NOT NULL REFERENCES orderbook_pairs(pair_id),
+    wallet_id UUID NOT NULL REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+    asset_id UUID NOT NULL REFERENCES assets(asset_id) ON DELETE RESTRICT,
     side order_side NOT NULL,
-    leverage INT NOT NULL DEFAULT 1 CHECK (leverage BETWEEN 1 AND 125),
-    entry_price NUMERIC(24,8) NOT NULL,
-    liquidation_price NUMERIC(24,8) NOT NULL,
-    collateral_amount NUMERIC(38,18) NOT NULL,
-    position_size NUMERIC(38,18) NOT NULL,
-    unrealized_pnl NUMERIC(24,8) DEFAULT 0,
-    status position_status NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TRIGGER trg_perpetual_positions_updated_at
-BEFORE UPDATE ON perpetual_positions
-FOR EACH ROW
-EXECUTE FUNCTION set_updated_at();
-
--- =============================================================
--- Staking & Yield Farming Pools
--- =============================================================
-CREATE TABLE IF NOT EXISTS staking_pools (
-    pool_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    asset_id UUID NOT NULL REFERENCES assets(asset_id),
-    reward_asset_id UUID NOT NULL REFERENCES assets(asset_id),
-    pool_name VARCHAR(100) NOT NULL,
-    apy_percentage NUMERIC(8,4) NOT NULL DEFAULT 0,
-    min_stake NUMERIC(38,18) DEFAULT 0,
-    lockup_period_days INT DEFAULT 0,
-    total_staked NUMERIC(38,18) DEFAULT 0,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS user_stakes (
-    stake_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    pool_id UUID NOT NULL REFERENCES staking_pools(pool_id),
-    amount NUMERIC(38,18) NOT NULL CHECK (amount > 0),
-    staked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    unlocks_at TIMESTAMPTZ,
-    accumulated_rewards NUMERIC(38,18) DEFAULT 0,
-    is_active BOOLEAN DEFAULT TRUE
-);
-
--- =============================================================
--- Money Market & Lending Protocol
--- =============================================================
-CREATE TABLE IF NOT EXISTS lending_markets (
-    market_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    asset_id UUID NOT NULL UNIQUE REFERENCES assets(asset_id),
-    total_supplied NUMERIC(38,18) DEFAULT 0,
-    total_borrowed NUMERIC(38,18) DEFAULT 0,
-    supply_rate_apy NUMERIC(8,4) DEFAULT 0,
-    borrow_rate_apy NUMERIC(8,4) DEFAULT 0,
-    collateral_factor NUMERIC(5,4) DEFAULT 0.75 CHECK (collateral_factor BETWEEN 0 AND 1),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS lending_positions (
-    position_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    market_id UUID NOT NULL REFERENCES lending_markets(market_id),
-    supplied_amount NUMERIC(38,18) DEFAULT 0 CHECK (supplied_amount >= 0),
-    borrowed_amount NUMERIC(38,18) DEFAULT 0 CHECK (borrowed_amount >= 0),
-    health_factor NUMERIC(10,4) DEFAULT 1.0,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- =============================================================
--- Cross-Chain Bridge Infrastructure
--- =============================================================
-CREATE TABLE IF NOT EXISTS cross_chain_bridges (
-    bridge_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    source_network VARCHAR(30) NOT NULL,
-    destination_network VARCHAR(30) NOT NULL,
-    source_tx_hash VARCHAR(66),
-    destination_tx_hash VARCHAR(66),
-    asset_id UUID NOT NULL REFERENCES assets(asset_id),
     amount NUMERIC(38,18) NOT NULL,
-    relayer_fee NUMERIC(38,18) DEFAULT 0,
-    status bridge_status NOT NULL DEFAULT 'initiated',
+    entry_price NUMERIC(24,8) NOT NULL,
+    liquidation_price NUMERIC(24,8),
+    status position_status NOT NULL DEFAULT 'active',
+    opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    closed_at TIMESTAMPTZ,
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE TRIGGER trg_positions_updated_at
+BEFORE UPDATE ON positions
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX idx_positions_wallet_id ON positions(wallet_id);
+CREATE INDEX idx_positions_asset_id ON positions(asset_id);
+CREATE INDEX idx_positions_status ON positions(status);
+
+-- =============================================================
+-- DAO Proposals
+-- =============================================================
+CREATE TABLE IF NOT EXISTS proposals (
+    proposal_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    creator_wallet_id UUID NOT NULL REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    status proposal_status NOT NULL DEFAULT 'draft',
+    start_time TIMESTAMPTZ,
+    end_time TIMESTAMPTZ,
+    votes_for BIGINT DEFAULT 0,
+    votes_against BIGINT DEFAULT 0,
+    metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TRIGGER trg_cross_chain_bridges_updated_at
-BEFORE UPDATE ON cross_chain_bridges
+CREATE TRIGGER trg_proposals_updated_at
+BEFORE UPDATE ON proposals
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
+CREATE INDEX idx_proposals_status ON proposals(status);
+CREATE INDEX idx_proposals_creator ON proposals(creator_wallet_id);
+
 -- =============================================================
--- DAO Governance Protocols
+-- Bridge Transactions
 -- =============================================================
-CREATE TABLE IF NOT EXISTS governance_proposals (
-    proposal_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    proposer_wallet_id UUID NOT NULL REFERENCES wallets(wallet_id),
-    title VARCHAR(255) NOT NULL,
-    description TEXT NOT NULL,
-    target_contract VARCHAR(66),
-    execution_payload TEXT,
-    votes_for NUMERIC(38,18) DEFAULT 0,
-    votes_against NUMERIC(38,18) DEFAULT 0,
-    quorum_required NUMERIC(38,18) NOT NULL,
-    status proposal_status NOT NULL DEFAULT 'draft',
-    start_time TIMESTAMPTZ NOT NULL,
-    end_time TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS bridge_transactions (
+    bridge_tx_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    from_wallet_id UUID NOT NULL REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+    to_wallet_id UUID NOT NULL REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+    asset_id UUID NOT NULL REFERENCES assets(asset_id) ON DELETE RESTRICT,
+    amount NUMERIC(38,18) NOT NULL,
+    status bridge_status NOT NULL DEFAULT 'initiated',
+    tx_hash VARCHAR(66) UNIQUE,
+    source_chain VARCHAR(30) NOT NULL,
+    destination_chain VARCHAR(30) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'::jsonb
 );
 
-CREATE TABLE IF NOT EXISTS governance_votes (
-    vote_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    proposal_id UUID NOT NULL REFERENCES governance_proposals(proposal_id) ON DELETE CASCADE,
-    voter_wallet_id UUID NOT NULL REFERENCES wallets(wallet_id),
-    support BOOLEAN NOT NULL,
-    voting_power NUMERIC(38,18) NOT NULL,
-    voted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (proposal_id, voter_wallet_id)
+CREATE TRIGGER trg_bridge_transactions_updated_at
+BEFORE UPDATE ON bridge_transactions
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX idx_bridge_from_wallet ON bridge_transactions(from_wallet_id);
+CREATE INDEX idx_bridge_to_wallet ON bridge_transactions(to_wallet_id);
+CREATE INDEX idx_bridge_status ON bridge_transactions(status);
+CREATE INDEX idx_bridge_asset ON bridge_transactions(asset_id);
+
+-- =============================================================
+-- Lending Protocol Actions
+-- =============================================================
+CREATE TABLE IF NOT EXISTS lending_actions (
+    action_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    wallet_id UUID NOT NULL REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+    asset_id UUID NOT NULL REFERENCES assets(asset_id) ON DELETE RESTRICT,
+    action lending_action NOT NULL,
+    amount NUMERIC(38,18) NOT NULL,
+    interest_rate NUMERIC(10,4),
+    collateral_asset_id UUID REFERENCES assets(asset_id),
+    collateral_amount NUMERIC(38,18),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'::jsonb
 );
 
--- =============================================================
--- Oracle Price Logs & System Audit Logging
--- =============================================================
-CREATE TABLE IF NOT EXISTS oracle_price_logs (
-    log_id BIGSERIAL PRIMARY KEY,
-    asset_id UUID NOT NULL REFERENCES assets(asset_id),
-    oracle_source VARCHAR(100) NOT NULL,
-    price_usd NUMERIC(24,8) NOT NULL,
-    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+CREATE TRIGGER trg_lending_actions_updated_at
+BEFORE UPDATE ON lending_actions
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
 
-CREATE TABLE IF NOT EXISTS audit_logs (
-    log_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    action VARCHAR(100) NOT NULL,
-    ip_address VARCHAR(45),
-    user_agent TEXT,
-    details JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+CREATE INDEX idx_lending_wallet ON lending_actions(wallet_id);
+CREATE INDEX idx_lending_asset ON lending_actions(asset_id);
+CREATE INDEX idx_lending_action ON lending_actions(action);
 
 -- =============================================================
--- Performance Indexes
+-- Aggregated View: User Portfolio Summary
 -- =============================================================
-CREATE INDEX IF NOT EXISTS idx_wallets_user ON wallets(user_id);
-CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
-CREATE INDEX IF NOT EXISTS idx_assets_symbol_net ON assets(symbol, network);
-CREATE INDEX IF NOT EXISTS idx_balances_wallet ON balances(wallet_id);
-CREATE INDEX IF NOT EXISTS idx_balances_asset ON balances(asset_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_hash ON transactions(tx_hash);
-CREATE INDEX IF NOT EXISTS idx_transactions_from_wallet ON transactions(from_wallet_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
-CREATE INDEX IF NOT EXISTS idx_orders_pair_status ON orders(pair_id, status);
-CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id);
-CREATE INDEX IF NOT EXISTS idx_trades_pair ON trades(pair_id);
-CREATE INDEX IF NOT EXISTS idx_perpetuals_user ON perpetual_positions(user_id);
-CREATE INDEX IF NOT EXISTS idx_perpetuals_status ON perpetual_positions(status);
-CREATE INDEX IF NOT EXISTS idx_oracle_logs_asset_time ON oracle_price_logs(asset_id, timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time ON audit_logs(user_id, created_at DESC);
-
--- =============================================================
--- Analytical Portfolio Views
--- =============================================================
-CREATE OR REPLACE VIEW v_user_portfolio AS
-SELECT 
+CREATE OR REPLACE VIEW user_portfolio_summary AS
+SELECT
     u.id AS user_id,
     u.email,
     w.wallet_id,
-    w.address,
     w.network,
-    a.symbol AS asset_symbol,
-    a.name AS asset_name,
-    b.amount AS total_balance,
-    b.locked_amount,
-    b.staked_amount,
+    a.asset_id,
+    a.symbol,
+    a.name,
+    b.amount,
     a.price_usd,
-    ((b.amount + b.staked_amount) * a.price_usd) AS estimated_value_usd
+    (b.amount * a.price_usd) AS usd_value
 FROM users u
-JOIN wallets w ON u.id = w.user_id
-JOIN balances b ON w.wallet_id = b.wallet_id
-JOIN assets a ON b.asset_id = a.asset_id
-WHERE w.is_active = TRUE;
-
-CREATE OR REPLACE VIEW v_market_ticker_24h AS
-SELECT 
-    p.pair_id,
-    p.pair_symbol,
-    COALESCE(last_t.price, 0) AS last_price,
-    COALESCE(SUM(t.quantity), 0) AS volume_24h,
-    COALESCE(MAX(t.price), 0) AS high_24h,
-    COALESCE(MIN(t.price), 0) AS low_24h
-FROM orderbook_pairs p
-LEFT JOIN trades t ON p.pair_id = t.pair_id AND t.created_at >= (NOW() - INTERVAL '24 hours')
-LEFT JOIN LATERAL (
-    SELECT price FROM trades WHERE pair_id = p.pair_id ORDER BY created_at DESC LIMIT 1
-) last_t ON TRUE
-WHERE p.is_active = TRUE
-GROUP BY p.pair_id, p.pair_symbol, last_t.price;
+JOIN wallets w ON w.user_id = u.id
+JOIN balances b ON b.wallet_id = w.wallet_id
+JOIN assets a ON a.asset_id = b.asset_id
+WHERE b.amount > 0;
