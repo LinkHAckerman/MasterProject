@@ -151,7 +151,7 @@ defmodule GossipNode.PeerConnection do
   end
 
   def handle_info(:disconnect, peer_pid) do
-    GossipNode.GossipServer.handle_info({:peer_disconnected, peer_pid}, nil)
+    GossipNode.GossipServer.handle_info({:peer_disconnected, pid}, nil)
     {:stop, :normal, peer_pid}
   end
 end

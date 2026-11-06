@@ -129,7 +129,7 @@
     /**
      * Play a short tone for UI feedback
      * @param {number} frequency - Tone frequency in Hz
-     * @param {number} duration - Duration in milliseconds
+     * @param {number} duration - Tone duration in milliseconds
      */
     function playTone(frequency, duration) {
         if (!state.settings.enableSounds) return;
@@ -141,18 +141,17 @@
         const oscillator = audioCtx.createOscillator();
         const gainNode = audioCtx.createGain();
 
+        oscillator.type = 'sine';
+        oscillator.frequency.value = frequency;
+
+        gainNode.gain.value = 0.1;
+        gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duration / 1000);
+
         oscillator.connect(gainNode);
         gainNode.connect(audioCtx.destination);
 
-        oscillator.frequency.value = frequency;
-        gainNode.gain.value = 0.1;
-
         oscillator.start();
-
-        setTimeout(() => {
-            gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.1);
-            oscillator.stop(audioCtx.currentTime + 0.2);
-        }, duration);
+        oscillator.stop(audioCtx.currentTime + duration / 1000);
     }
 
     // ---------------------------------------------------------------------
@@ -160,50 +159,30 @@
     // ---------------------------------------------------------------------
 
     /**
-     * Format a number with the specified number of decimal places
-     * @param {number} num - The number to format
+     * Format a number as currency
+     * @param {number} value - The value to format
+     * @param {string} currency - The currency symbol
      * @param {number} decimals - Number of decimal places
-     * @returns {string} Formatted number string
-     */
-    function formatNumber(num, decimals) {
-        return num.toLocaleString('en-US', {
-            minimumFractionDigits: decimals,
-            maximumFractionDigits: decimals
-        });
-    }
-
-    /**
-     * Format a cryptocurrency amount with the appropriate decimal places
-     * @param {number} amount - The amount to format
-     * @param {number} decimals - Number of decimal places
-     * @returns {string} Formatted cryptocurrency string
-     */
-    function formatCrypto(amount, decimals) {
-        return formatNumber(amount, decimals);
-    }
-
-    /**
-     * Format a currency amount with the appropriate decimal places
-     * @param {number} amount - The amount to format
      * @returns {string} Formatted currency string
      */
-    function formatCurrency(amount) {
-        return formatNumber(amount, 2);
+    function formatCurrency(value, currency = '$', decimals = 2) {
+        return `${currency}${value.toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
     }
 
     /**
-     * Format a percentage value
-     * @param {number} value - The percentage value to format
+     * Format a number as percentage
+     * @param {number} value - The value to format
+     * @param {number} decimals - Number of decimal places
      * @returns {string} Formatted percentage string
      */
-    function formatPercentage(value) {
-        return `${formatNumber(value, 2)}%`;
+    function formatPercentage(value, decimals = 2) {
+        return `${value.toFixed(decimals)}%`;
     }
 
     /**
      * Format a timestamp as a relative time string
      * @param {number} timestamp - The timestamp to format
-     * @returns {string} Formatted relative time string
+     * @returns {string} Relative time string
      */
     function formatRelativeTime(timestamp) {
         const now = Date.now();
@@ -220,31 +199,15 @@
         }
     }
 
-    /**
-     * Generate a random transaction hash
-     * @returns {string} Random transaction hash
-     */
-    function generateRandomHash() {
-        return `0x${Math.random().toString(16).substr(2, 10)}...${Math.random().toString(16).substr(2, 4)}`;
-    }
-
-    /**
-     * Generate a random block number
-     * @returns {number} Random block number
-     */
-    function generateRandomBlockNumber() {
-        return Math.floor(Math.random() * 10000000) + 19800000;
-    }
-
     // ---------------------------------------------------------------------
-    // DOM Initialization
+    // Core Application Functions
     // ---------------------------------------------------------------------
 
     /**
-     * Initialize DOM elements and cache references
+     * Initialize the DOM elements cache
      */
     function initDOM() {
-        // Wallet Section
+        // Wallet section
         DOM.walletConnectBtn = document.getElementById('wallet-connect-btn');
         DOM.walletAddress = document.getElementById('wallet-address');
         DOM.walletBalanceEth = document.getElementById('wallet-balance-eth');
@@ -254,210 +217,111 @@
         DOM.walletNetwork = document.getElementById('wallet-network');
         DOM.walletTokensList = document.getElementById('wallet-tokens-list');
 
-        // Market Section
+        // Market section
         DOM.marketPairSelect = document.getElementById('market-pair-select');
         DOM.marketPrice = document.getElementById('market-price');
         DOM.marketChange24h = document.getElementById('market-change-24h');
         DOM.marketVolume24h = document.getElementById('market-volume-24h');
         DOM.marketHigh24h = document.getElementById('market-high-24h');
         DOM.marketLow24h = document.getElementById('market-low-24h');
-        DOM.marketChartCanvas = document.getElementById('market-chart-canvas');
+        DOM.marketChart = document.getElementById('market-chart');
 
-        // Order Book Section
+        // Order book section
         DOM.orderBookBids = document.getElementById('order-book-bids');
         DOM.orderBookAsks = document.getElementById('order-book-asks');
 
-        // Transactions Section
+        // Transactions section
         DOM.transactionsList = document.getElementById('transactions-list');
 
-        // Portfolio Section
+        // Portfolio section
         DOM.portfolioList = document.getElementById('portfolio-list');
-        DOM.portfolioChartCanvas = document.getElementById('portfolio-chart-canvas');
+        DOM.portfolioChart = document.getElementById('portfolio-chart');
 
-        // Staking Section
+        // Staking section
         DOM.stakingStakedOpus = document.getElementById('staking-staked-opus');
         DOM.stakingRewardRateApy = document.getElementById('staking-reward-rate-apy');
         DOM.stakingPendingRewards = document.getElementById('staking-pending-rewards');
         DOM.stakingLastClaimed = document.getElementById('staking-last-claimed');
         DOM.stakingClaimBtn = document.getElementById('staking-claim-btn');
 
-        // Notifications Section
+        // Notifications section
         DOM.notificationsList = document.getElementById('notifications-list');
 
-        // Settings Section
-        DOM.settingsThemeSelect = document.getElementById('settings-theme-select');
-        DOM.settingsCurrencySelect = document.getElementById('settings-currency-select');
-        DOM.settingsLanguageSelect = document.getElementById('settings-language-select');
-        DOM.settingsSlippageInput = document.getElementById('settings-slippage-input');
-        DOM.settingsSoundsCheckbox = document.getElementById('settings-sounds-checkbox');
-        DOM.settingsAutoRefreshInput = document.getElementById('settings-auto-refresh-input');
-
-        // Event Listeners
-        DOM.walletConnectBtn.addEventListener('click', handleWalletConnect);
-        DOM.marketPairSelect.addEventListener('change', handleMarketPairChange);
-        DOM.stakingClaimBtn.addEventListener('click', handleStakingClaim);
-        DOM.settingsThemeSelect.addEventListener('change', handleSettingsThemeChange);
-        DOM.settingsCurrencySelect.addEventListener('change', handleSettingsCurrencyChange);
-        DOM.settingsLanguageSelect.addEventListener('change', handleSettingsLanguageChange);
-        DOM.settingsSlippageInput.addEventListener('change', handleSettingsSlippageChange);
-        DOM.settingsSoundsCheckbox.addEventListener('change', handleSettingsSoundsChange);
-        DOM.settingsAutoRefreshInput.addEventListener('change', handleSettingsAutoRefreshChange);
-    }
-
-    // ---------------------------------------------------------------------
-    // Event Handlers
-    // ---------------------------------------------------------------------
-
-    /**
-     * Handle wallet connect button click
-     */
-    function handleWalletConnect() {
-        state.wallet.connected = true;
-        state.wallet.address = `0x${Math.random().toString(16).substr(2, 10)}...${Math.random().toString(16).substr(2, 4)}`;
-        updateWalletUI();
-        playTone(880, 200);
+        // Settings section
+        DOM.settingsTheme = document.getElementById('settings-theme');
+        DOM.settingsCurrency = document.getElementById('settings-currency');
+        DOM.settingsLanguage = document.getElementById('settings-language');
+        DOM.settingsSlippageTolerance = document.getElementById('settings-slippage-tolerance');
+        DOM.settingsEnableSounds = document.getElementById('settings-enable-sounds');
+        DOM.settingsAutoRefreshInterval = document.getElementById('settings-auto-refresh-interval');
     }
 
     /**
-     * Handle market pair selection change
-     */
-    function handleMarketPairChange() {
-        state.market.selectedPair = DOM.marketPairSelect.value;
-        updateMarketUI();
-        playTone(660, 200);
-    }
-
-    /**
-     * Handle staking claim button click
-     */
-    function handleStakingClaim() {
-        const rewards = state.staking.pendingRewards;
-        state.staking.pendingRewards = 0;
-        state.staking.lastClaimed = Date.now();
-        updateStakingUI();
-        addNotification(`Claimed ${formatCrypto(rewards, 2)} OPUS rewards`);
-        playTone(1046, 200);
-    }
-
-    /**
-     * Handle theme setting change
-     */
-    function handleSettingsThemeChange() {
-        state.settings.theme = DOM.settingsThemeSelect.value;
-        updateTheme();
-        playTone(784, 200);
-    }
-
-    /**
-     * Handle currency setting change
-     */
-    function handleSettingsCurrencyChange() {
-        state.settings.currency = DOM.settingsCurrencySelect.value;
-        updateMarketUI();
-        updatePortfolioUI();
-        playTone(784, 200);
-    }
-
-    /**
-     * Handle language setting change
-     */
-    function handleSettingsLanguageChange() {
-        state.settings.language = DOM.settingsLanguageSelect.value;
-        updateLanguage();
-        playTone(784, 200);
-    }
-
-    /**
-     * Handle slippage tolerance setting change
-     */
-    function handleSettingsSlippageChange() {
-        state.settings.slippageTolerance = parseFloat(DOM.settingsSlippageInput.value);
-        playTone(784, 200);
-    }
-
-    /**
-     * Handle sounds setting change
-     */
-    function handleSettingsSoundsChange() {
-        state.settings.enableSounds = DOM.settingsSoundsCheckbox.checked;
-        playTone(784, 200);
-    }
-
-    /**
-     * Handle auto-refresh interval setting change
-     */
-    function handleSettingsAutoRefreshChange() {
-        state.settings.autoRefreshInterval = parseInt(DOM.settingsAutoRefreshInput.value);
-        restartEngineTickers();
-        playTone(784, 200);
-    }
-
-    // ---------------------------------------------------------------------
-    // UI Update Functions
-    // ---------------------------------------------------------------------
-
-    /**
-     * Update the wallet UI with current state
+     * Update the wallet section in the UI
      */
     function updateWalletUI() {
         if (state.wallet.connected) {
             DOM.walletConnectBtn.textContent = 'Disconnect Wallet';
             DOM.walletAddress.textContent = state.wallet.address;
-            DOM.walletAddress.style.display = 'block';
+            DOM.walletAddress.classList.remove('hidden');
         } else {
             DOM.walletConnectBtn.textContent = 'Connect Wallet';
-            DOM.walletAddress.style.display = 'none';
+            DOM.walletAddress.textContent = '';
+            DOM.walletAddress.classList.add('hidden');
         }
 
-        DOM.walletBalanceEth.textContent = formatCrypto(state.wallet.balanceEth, 3);
-        DOM.walletBalanceUsdt.textContent = formatCurrency(state.wallet.balanceUsdt);
-        DOM.walletBalanceBtc.textContent = formatCrypto(state.wallet.balanceBtc, 4);
-        DOM.walletBalanceSol.textContent = formatCrypto(state.wallet.balanceSol, 1);
+        DOM.walletBalanceEth.textContent = `${state.wallet.balanceEth.toFixed(4)} ETH`;
+        DOM.walletBalanceUsdt.textContent = `${formatCurrency(state.wallet.balanceUsdt)}`;
+        DOM.walletBalanceBtc.textContent = `${state.wallet.balanceBtc.toFixed(4)} BTC`;
+        DOM.walletBalanceSol.textContent = `${state.wallet.balanceSol.toFixed(4)} SOL`;
         DOM.walletNetwork.textContent = state.wallet.networkName;
 
         // Update tokens list
         DOM.walletTokensList.innerHTML = '';
         state.wallet.tokens.forEach(token => {
             const li = document.createElement('li');
+            li.className = 'wallet-token';
             li.innerHTML = `
-                <span class="token-symbol">${token.symbol}</span>
-                <span class="token-name">${token.name}</span>
-                <span class="token-balance">${formatCrypto(token.balance, token.decimals)}</span>
-                <span class="token-value">${formatCurrency(token.balance * token.price)}</span>
+                <div class="token-symbol">${token.symbol}</div>
+                <div class="token-name">${token.name}</div>
+                <div class="token-balance">${token.balance.toFixed(4)}</div>
+                <div class="token-value">${formatCurrency(token.balance * token.price)}</div>
             `;
             DOM.walletTokensList.appendChild(li);
         });
     }
 
     /**
-     * Update the market UI with current state
+     * Update the market section in the UI
      */
     function updateMarketUI() {
         const pair = state.market.selectedPair;
         const rate = PAIR_RATES[pair];
 
-        DOM.marketPrice.textContent = formatCurrency(rate.price);
-        DOM.marketChange24h.textContent = formatPercentage(state.market.change24h);
-        DOM.marketVolume24h.textContent = formatCurrency(state.market.volume24h);
-        DOM.marketHigh24h.textContent = formatCurrency(state.market.high24h);
-        DOM.marketLow24h.textContent = formatCurrency(state.market.low24h);
+        DOM.marketPairSelect.value = pair;
+        DOM.marketPrice.textContent = formatCurrency(state.market.price, '', rate.decimals);
+        DOM.marketChange24h.textContent = `${formatPercentage(state.market.change24h)} (${formatCurrency(state.market.change24h * state.market.price / 100, '', rate.decimals)})`;
+        DOM.marketVolume24h.textContent = formatCurrency(state.market.volume24h, '', rate.decimals);
+        DOM.marketHigh24h.textContent = formatCurrency(state.market.high24h, '', rate.decimals);
+        DOM.marketLow24h.textContent = formatCurrency(state.market.low24h, '', rate.decimals);
 
         // Update chart
-        renderMarketChart();
+        renderChart();
     }
 
     /**
-     * Update the order book UI with current state
+     * Update the order book section in the UI
      */
     function updateOrderBookUI() {
         // Update bids
         DOM.orderBookBids.innerHTML = '';
         state.orderBook.bids.slice(0, state.orderBook.maxDepth).forEach(bid => {
             const li = document.createElement('li');
+            li.className = 'order-book-item';
             li.innerHTML = `
-                <span class="order-price">${formatCurrency(bid.price)}</span>
-                <span class="order-amount">${formatCrypto(bid.amount, 4)}</span>
-                <span class="order-total">${formatCurrency(bid.price * bid.amount)}</span>
+                <div class="order-book-price">${formatCurrency(bid.price, '', PAIR_RATES[state.market.selectedPair].decimals)}</div>
+                <div class="order-book-amount">${bid.amount.toFixed(4)}</div>
+                <div class="order-book-total">${formatCurrency(bid.total, '', PAIR_RATES[state.market.selectedPair].decimals)}</div>
             `;
             DOM.orderBookBids.appendChild(li);
         });
@@ -466,103 +330,256 @@
         DOM.orderBookAsks.innerHTML = '';
         state.orderBook.asks.slice(0, state.orderBook.maxDepth).forEach(ask => {
             const li = document.createElement('li');
+            li.className = 'order-book-item';
             li.innerHTML = `
-                <span class="order-price">${formatCurrency(ask.price)}</span>
-                <span class="order-amount">${formatCrypto(ask.amount, 4)}</span>
-                <span class="order-total">${formatCurrency(ask.price * ask.amount)}</span>
+                <div class="order-book-price">${formatCurrency(ask.price, '', PAIR_RATES[state.market.selectedPair].decimals)}</div>
+                <div class="order-book-amount">${ask.amount.toFixed(4)}</div>
+                <div class="order-book-total">${formatCurrency(ask.total, '', PAIR_RATES[state.market.selectedPair].decimals)}</div>
             `;
             DOM.orderBookAsks.appendChild(li);
         });
     }
 
     /**
-     * Update the transactions UI with current state
+     * Update the transactions section in the UI
      */
     function updateTransactionsUI() {
         DOM.transactionsList.innerHTML = '';
         state.transactions.forEach(tx => {
             const li = document.createElement('li');
+            li.className = 'transaction-item';
             li.innerHTML = `
-                <span class="tx-hash">${tx.hash}</span>
-                <span class="tx-type">${tx.type}</span>
-                <span class="tx-description">${tx.description}</span>
-                <span class="tx-amount">${tx.amount}</span>
-                <span class="tx-status">${tx.status}</span>
-                <span class="tx-timestamp">${formatRelativeTime(tx.timestamp)}</span>
-                <span class="tx-block">Block ${tx.blockNumber}</span>
+                <div class="transaction-hash">${tx.hash}</div>
+                <div class="transaction-type">${tx.type}</div>
+                <div class="transaction-description">${tx.description}</div>
+                <div class="transaction-amount">${tx.amount}</div>
+                <div class="transaction-status">${tx.status}</div>
+                <div class="transaction-timestamp">${formatRelativeTime(tx.timestamp)}</div>
+                <div class="transaction-block-number">Block #${tx.blockNumber}</div>
             `;
             DOM.transactionsList.appendChild(li);
         });
     }
 
     /**
-     * Update the portfolio UI with current state
+     * Update the portfolio section in the UI
      */
     function updatePortfolioUI() {
+        // Update portfolio list
         DOM.portfolioList.innerHTML = '';
         state.portfolio.forEach(asset => {
             const li = document.createElement('li');
+            li.className = 'portfolio-item';
             li.innerHTML = `
-                <span class="asset-symbol">${asset.symbol}</span>
-                <span class="asset-name">${asset.name}</span>
-                <span class="asset-balance">${formatCrypto(asset.balance, 4)}</span>
-                <span class="asset-price">${formatCurrency(asset.price)}</span>
-                <span class="asset-value">${formatCurrency(asset.value)}</span>
-                <span class="asset-allocation">${formatPercentage(asset.allocation)}</span>
+                <div class="portfolio-symbol">${asset.symbol}</div>
+                <div class="portfolio-name">${asset.name}</div>
+                <div class="portfolio-balance">${asset.balance.toFixed(4)}</div>
+                <div class="portfolio-price">${formatCurrency(asset.price)}</div>
+                <div class="portfolio-value">${formatCurrency(asset.value)}</div>
+                <div class="portfolio-allocation">${formatPercentage(asset.allocation)}</div>
             `;
             DOM.portfolioList.appendChild(li);
         });
 
-        // Update chart
+        // Update portfolio chart
         renderPortfolioChart();
     }
 
     /**
-     * Update the staking UI with current state
+     * Update the staking section in the UI
      */
     function updateStakingUI() {
-        DOM.stakingStakedOpus.textContent = formatCrypto(state.staking.stakedOpus, 2);
-        DOM.stakingRewardRateApy.textContent = formatPercentage(state.staking.rewardRateApy);
-        DOM.stakingPendingRewards.textContent = formatCrypto(state.staking.pendingRewards, 2);
+        DOM.stakingStakedOpus.textContent = `${state.staking.stakedOpus.toFixed(2)} OPUS`;
+        DOM.stakingRewardRateApy.textContent = `${formatPercentage(state.staking.rewardRateApy)}`;
+        DOM.stakingPendingRewards.textContent = `${state.staking.pendingRewards.toFixed(2)} OPUS`;
         DOM.stakingLastClaimed.textContent = formatRelativeTime(state.staking.lastClaimed);
     }
 
     /**
-     * Update the notifications UI with current state
+     * Update the notifications section in the UI
      */
     function updateNotificationsUI() {
         DOM.notificationsList.innerHTML = '';
         state.notifications.forEach(notification => {
             const li = document.createElement('li');
-            li.textContent = notification;
+            li.className = 'notification-item';
+            li.innerHTML = `
+                <div class="notification-message">${notification.message}</div>
+                <div class="notification-timestamp">${formatRelativeTime(notification.timestamp)}</div>
+            `;
             DOM.notificationsList.appendChild(li);
         });
     }
 
     /**
-     * Update the settings UI with current state
+     * Update the settings section in the UI
      */
     function updateSettingsUI() {
-        DOM.settingsThemeSelect.value = state.settings.theme;
-        DOM.settingsCurrencySelect.value = state.settings.currency;
-        DOM.settingsLanguageSelect.value = state.settings.language;
-        DOM.settingsSlippageInput.value = state.settings.slippageTolerance;
-        DOM.settingsSoundsCheckbox.checked = state.settings.enableSounds;
-        DOM.settingsAutoRefreshInput.value = state.settings.autoRefreshInterval;
+        DOM.settingsTheme.value = state.settings.theme;
+        DOM.settingsCurrency.value = state.settings.currency;
+        DOM.settingsLanguage.value = state.settings.language;
+        DOM.settingsSlippageTolerance.value = state.settings.slippageTolerance;
+        DOM.settingsEnableSounds.checked = state.settings.enableSounds;
+        DOM.settingsAutoRefreshInterval.value = state.settings.autoRefreshInterval;
+    }
+
+    // ---------------------------------------------------------------------
+    // Event Handlers
+    // ---------------------------------------------------------------------
+
+    /**
+     * Handle wallet connect/disconnect button click
+     */
+    function handleWalletConnectClick() {
+        state.wallet.connected = !state.wallet.connected;
+        if (state.wallet.connected) {
+            state.wallet.address = '0x1234...5678';
+            playTone(440, 200); // Play a tone when wallet is connected
+        } else {
+            state.wallet.address = null;
+            playTone(220, 200); // Play a lower tone when wallet is disconnected
+        }
+        updateWalletUI();
     }
 
     /**
-     * Update the entire UI with current state
+     * Handle market pair selection change
      */
-    function updateUI() {
-        updateWalletUI();
+    function handleMarketPairChange() {
+        state.market.selectedPair = DOM.marketPairSelect.value;
         updateMarketUI();
         updateOrderBookUI();
-        updateTransactionsUI();
-        updatePortfolioUI();
+    }
+
+    /**
+     * Handle staking claim button click
+     */
+    function handleStakingClaimClick() {
+        if (state.staking.pendingRewards > 0) {
+            state.staking.stakedOpus += state.staking.pendingRewards;
+            state.staking.pendingRewards = 0;
+            state.staking.lastClaimed = Date.now();
+            playTone(523, 200); // Play a higher tone when rewards are claimed
+            updateStakingUI();
+            addNotification('Rewards claimed successfully!');
+        }
+    }
+
+    /**
+     * Handle settings change
+     */
+    function handleSettingsChange() {
+        state.settings.theme = DOM.settingsTheme.value;
+        state.settings.currency = DOM.settingsCurrency.value;
+        state.settings.language = DOM.settingsLanguage.value;
+        state.settings.slippageTolerance = parseFloat(DOM.settingsSlippageTolerance.value);
+        state.settings.enableSounds = DOM.settingsEnableSounds.checked;
+        state.settings.autoRefreshInterval = parseInt(DOM.settingsAutoRefreshInterval.value);
+
+        // Update auto-refresh intervals
+        clearInterval(marketInterval);
+        clearInterval(gasInterval);
+        clearInterval(orderBookInterval);
+        clearInterval(stakingInterval);
+
+        marketInterval = setInterval(updateMarketData, state.settings.autoRefreshInterval);
+        gasInterval = setInterval(updateGasPrices, state.settings.autoRefreshInterval);
+        orderBookInterval = setInterval(updateOrderBook, state.settings.autoRefreshInterval);
+        stakingInterval = setInterval(updateStakingData, state.settings.autoRefreshInterval);
+    }
+
+    // ---------------------------------------------------------------------
+    // Data Simulation Functions
+    // ---------------------------------------------------------------------
+
+    /**
+     * Simulate market data updates
+     */
+    function updateMarketData() {
+        const pair = state.market.selectedPair;
+        const rate = PAIR_RATES[pair];
+
+        // Simulate price change
+        const change = (Math.random() - 0.5) * 0.01;
+        state.market.price = rate.price * (1 + change);
+        state.market.change24h = change * 100;
+        state.market.volume24h = Math.random() * 1000000000;
+        state.market.high24h = state.market.price * (1 + Math.random() * 0.02);
+        state.market.low24h = state.market.price * (1 - Math.random() * 0.02);
+
+        // Simulate chart data
+        const now = new Date();
+        state.market.chartData.labels.push(now.toISOString());
+        state.market.chartData.prices.push(state.market.price);
+        state.market.chartData.candles.push({
+            open: state.market.price * (1 - Math.random() * 0.01),
+            high: state.market.high24h,
+            low: state.market.low24h,
+            close: state.market.price
+        });
+
+        // Keep only the last 100 data points
+        if (state.market.chartData.labels.length > 100) {
+            state.market.chartData.labels.shift();
+            state.market.chartData.prices.shift();
+            state.market.chartData.candles.shift();
+        }
+
+        updateMarketUI();
+    }
+
+    /**
+     * Simulate gas price updates
+     */
+    function updateGasPrices() {
+        state.gas.slow = Math.max(10, state.gas.slow + (Math.random() - 0.5) * 2);
+        state.gas.standard = Math.max(15, state.gas.standard + (Math.random() - 0.5) * 3);
+        state.gas.fast = Math.max(20, state.gas.fast + (Math.random() - 0.5) * 4);
+        state.gas.current = state.gas.standard;
+    }
+
+    /**
+     * Simulate order book updates
+     */
+    function updateOrderBook() {
+        const pair = state.market.selectedPair;
+        const rate = PAIR_RATES[pair];
+
+        // Simulate bids
+        state.orderBook.bids = [];
+        for (let i = 0; i < state.orderBook.maxDepth; i++) {
+            const price = state.market.price * (1 - Math.random() * 0.02);
+            const amount = Math.random() * 10;
+            state.orderBook.bids.push({
+                price: price,
+                amount: amount,
+                total: price * amount
+            });
+        }
+        state.orderBook.bids.sort((a, b) => b.price - a.price);
+
+        // Simulate asks
+        state.orderBook.asks = [];
+        for (let i = 0; i < state.orderBook.maxDepth; i++) {
+            const price = state.market.price * (1 + Math.random() * 0.02);
+            const amount = Math.random() * 10;
+            state.orderBook.asks.push({
+                price: price,
+                amount: amount,
+                total: price * amount
+            });
+        }
+        state.orderBook.asks.sort((a, b) => a.price - b.price);
+
+        updateOrderBookUI();
+    }
+
+    /**
+     * Simulate staking data updates
+     */
+    function updateStakingData() {
+        state.staking.pendingRewards += state.staking.stakedOpus * state.staking.rewardRateApy / 100 / 365 / 24;
         updateStakingUI();
-        updateNotificationsUI();
-        updateSettingsUI();
     }
 
     // ---------------------------------------------------------------------
@@ -572,129 +589,85 @@
     /**
      * Render the market chart
      */
-    function renderMarketChart() {
-        const ctx = DOM.marketChartCanvas.getContext('2d');
-        const width = DOM.marketChartCanvas.width;
-        const height = DOM.marketChartCanvas.height;
+    function renderChart() {
+        const ctx = DOM.marketChart.getContext('2d');
+        const width = DOM.marketChart.width;
+        const height = DOM.marketChart.height;
 
-        // Clear canvas
+        // Clear the canvas
         ctx.clearRect(0, 0, width, height);
 
-        // Draw chart
-        // ... (chart rendering logic)
+        // Draw the chart
+        if (state.market.chartData.prices.length > 0) {
+            const minPrice = Math.min(...state.market.chartData.prices);
+            const maxPrice = Math.max(...state.market.chartData.prices);
+            const priceRange = maxPrice - minPrice;
+
+            // Draw the price line
+            ctx.beginPath();
+            ctx.strokeStyle = '#4f46e5';
+            ctx.lineWidth = 2;
+
+            const xStep = width / (state.market.chartData.prices.length - 1);
+            for (let i = 0; i < state.market.chartData.prices.length; i++) {
+                const x = i * xStep;
+                const y = height - ((state.market.chartData.prices[i] - minPrice) / priceRange) * height;
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.stroke();
+        }
     }
 
     /**
      * Render the portfolio chart
      */
     function renderPortfolioChart() {
-        const ctx = DOM.portfolioChartCanvas.getContext('2d');
-        const width = DOM.portfolioChartCanvas.width;
-        const height = DOM.portfolioChartCanvas.height;
+        const ctx = DOM.portfolioChart.getContext('2d');
+        const width = DOM.portfolioChart.width;
+        const height = DOM.portfolioChart.height;
 
-        // Clear canvas
+        // Clear the canvas
         ctx.clearRect(0, 0, width, height);
 
-        // Draw chart
-        // ... (chart rendering logic)
-    }
+        // Draw the chart
+        if (state.portfolio.length > 0) {
+            const totalValue = state.portfolio.reduce((sum, asset) => sum + asset.value, 0);
+            let startAngle = 0;
 
-    // ---------------------------------------------------------------------
-    // Engine Tickers
-    // ---------------------------------------------------------------------
+            state.portfolio.forEach(asset => {
+                const sliceAngle = (asset.value / totalValue) * 2 * Math.PI;
+                const endAngle = startAngle + sliceAngle;
 
-    /**
-     * Start the market data ticker
-     */
-    function startMarketTicker() {
-        marketInterval = setInterval(() => {
-            // Simulate market data updates
-            state.market.price = PAIR_RATES[state.market.selectedPair].price * (1 + (Math.random() - 0.5) * 0.01);
-            state.market.change24h = (Math.random() - 0.5) * 10;
-            state.market.volume24h = Math.random() * 1000000000;
-            state.market.high24h = state.market.price * (1 + Math.random() * 0.1);
-            state.market.low24h = state.market.price * (1 - Math.random() * 0.1);
+                // Draw the pie slice
+                ctx.beginPath();
+                ctx.moveTo(width / 2, height / 2);
+                ctx.arc(width / 2, height / 2, Math.min(width, height) / 2, startAngle, endAngle);
+                ctx.closePath();
+                ctx.fillStyle = getColorForAsset(asset.symbol);
+                ctx.fill();
 
-            // Update chart data
-            // ... (update chart data logic)
-
-            updateMarketUI();
-        }, state.settings.autoRefreshInterval);
+                startAngle = endAngle;
+            });
+        }
     }
 
     /**
-     * Start the gas price ticker
+     * Get a color for an asset based on its symbol
+     * @param {string} symbol - The asset symbol
+     * @returns {string} The color in hex format
      */
-    function startGasTicker() {
-        gasInterval = setInterval(() => {
-            // Simulate gas price updates
-            state.gas.slow = Math.max(10, state.gas.slow + (Math.random() - 0.5) * 2);
-            state.gas.standard = Math.max(15, state.gas.standard + (Math.random() - 0.5) * 3);
-            state.gas.fast = Math.max(20, state.gas.fast + (Math.random() - 0.5) * 4);
-            state.gas.current = state.gas.standard;
-
-            // Update UI
-            // ... (update gas price UI logic)
-        }, state.settings.autoRefreshInterval);
-    }
-
-    /**
-     * Start the order book ticker
-     */
-    function startOrderBookTicker() {
-        orderBookInterval = setInterval(() => {
-            // Simulate order book updates
-            state.orderBook.bids = Array.from({ length: 20 }, () => ({
-                price: state.market.price * (1 - Math.random() * 0.05),
-                amount: Math.random() * 10
-            })).sort((a, b) => b.price - a.price);
-
-            state.orderBook.asks = Array.from({ length: 20 }, () => ({
-                price: state.market.price * (1 + Math.random() * 0.05),
-                amount: Math.random() * 10
-            })).sort((a, b) => a.price - b.price);
-
-            updateOrderBookUI();
-        }, state.settings.autoRefreshInterval);
-    }
-
-    /**
-     * Start the staking ticker
-     */
-    function startStakingTicker() {
-        stakingInterval = setInterval(() => {
-            // Simulate staking updates
-            state.staking.pendingRewards += state.staking.stakedOpus * (state.staking.rewardRateApy / 100 / 365 / 24 / 60 / 60);
-            updateStakingUI();
-        }, 1000);
-    }
-
-    /**
-     * Start all engine tickers
-     */
-    function startEngineTickers() {
-        startMarketTicker();
-        startGasTicker();
-        startOrderBookTicker();
-        startStakingTicker();
-    }
-
-    /**
-     * Stop all engine tickers
-     */
-    function stopEngineTickers() {
-        clearInterval(marketInterval);
-        clearInterval(gasInterval);
-        clearInterval(orderBookInterval);
-        clearInterval(stakingInterval);
-    }
-
-    /**
-     * Restart all engine tickers
-     */
-    function restartEngineTickers() {
-        stopEngineTickers();
-        startEngineTickers();
+    function getColorForAsset(symbol) {
+        const colors = {
+            'ETH': '#4f46e5',
+            'BTC': '#f59e0b',
+            'SOL': '#10b981',
+            'OPUS': '#8b5cf6'
+        };
+        return colors[symbol] || '#6b7280';
     }
 
     // ---------------------------------------------------------------------
@@ -702,38 +675,18 @@
     // ---------------------------------------------------------------------
 
     /**
-     * Add a notification to the notifications list
+     * Add a notification to the state and UI
      * @param {string} message - The notification message
      */
     function addNotification(message) {
-        state.notifications.unshift(message);
+        state.notifications.unshift({
+            message: message,
+            timestamp: Date.now()
+        });
         if (state.notifications.length > 10) {
             state.notifications.pop();
         }
         updateNotificationsUI();
-    }
-
-    // ---------------------------------------------------------------------
-    // Theme Functions
-    // ---------------------------------------------------------------------
-
-    /**
-     * Update the theme based on the current settings
-     */
-    function updateTheme() {
-        document.documentElement.setAttribute('data-theme', state.settings.theme);
-    }
-
-    // ---------------------------------------------------------------------
-    // Language Functions
-    // ---------------------------------------------------------------------
-
-    /**
-     * Update the language based on the current settings
-     */
-    function updateLanguage() {
-        // Update UI text based on the selected language
-        // ... (language update logic)
     }
 
     // ---------------------------------------------------------------------
@@ -745,13 +698,49 @@
      */
     function init() {
         initDOM();
-        updateTheme();
-        updateLanguage();
-        updateUI();
-        startEngineTickers();
+        updateWalletUI();
+        updateMarketUI();
+        updateOrderBookUI();
+        updateTransactionsUI();
+        updatePortfolioUI();
+        updateStakingUI();
+        updateNotificationsUI();
+        updateSettingsUI();
+
+        // Set up event listeners
+        DOM.walletConnectBtn.addEventListener('click', handleWalletConnectClick);
+        DOM.marketPairSelect.addEventListener('change', handleMarketPairChange);
+        DOM.stakingClaimBtn.addEventListener('click', handleStakingClaimClick);
+        DOM.settingsTheme.addEventListener('change', handleSettingsChange);
+        DOM.settingsCurrency.addEventListener('change', handleSettingsChange);
+        DOM.settingsLanguage.addEventListener('change', handleSettingsChange);
+        DOM.settingsSlippageTolerance.addEventListener('change', handleSettingsChange);
+        DOM.settingsEnableSounds.addEventListener('change', handleSettingsChange);
+        DOM.settingsAutoRefreshInterval.addEventListener('change', handleSettingsChange);
+
+        // Set up data simulation intervals
+        marketInterval = setInterval(updateMarketData, state.settings.autoRefreshInterval);
+        gasInterval = setInterval(updateGasPrices, state.settings.autoRefreshInterval);
+        orderBookInterval = setInterval(updateOrderBook, state.settings.autoRefreshInterval);
+        stakingInterval = setInterval(updateStakingData, state.settings.autoRefreshInterval);
     }
 
-    // Start the application when the DOM is loaded
+    // Initialize the application when the DOM is loaded
     document.addEventListener('DOMContentLoaded', init);
+
+    // Expose the state and functions for debugging and testing
+    window.MagnumOpus = {
+        state: state,
+        updateWalletUI: updateWalletUI,
+        updateMarketUI: updateMarketUI,
+        updateOrderBookUI: updateOrderBookUI,
+        updateTransactionsUI: updateTransactionsUI,
+        updatePortfolioUI: updatePortfolioUI,
+        updateStakingUI: updateStakingUI,
+        updateNotificationsUI: updateNotificationsUI,
+        updateSettingsUI: updateSettingsUI,
+        addNotification: addNotification,
+        playTone: playTone
+    };
 
 })();
