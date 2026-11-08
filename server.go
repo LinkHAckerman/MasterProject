@@ -151,7 +151,7 @@ type WalletStore struct {
 // ------------------------------------------------------------
 
 func NewWalletStore() *WalletStore {
-    return &WalletStore{
+    ws := &WalletStore{
         wallets:      make(map[string]*Wallet),
         txHistory:    make(map[string][]*RelayedTx),
         allTxs:       make(map[string]*RelayedTx),
@@ -161,426 +161,120 @@ func NewWalletStore() *WalletStore {
         startTime:    time.Now(),
         currentBlock: 0,
         wsClients:    make(map[*websocket.Conn]bool),
-        limiter:      rate.NewLimiter(rate.Every(time.Second), 100),
+        limiter:      rate.NewLimiter(rate.Every(time.Second), 100), // 100 req/s burst
+    }
+    // Background workers
+    go ws.mempoolProcessor()
+    go ws.blockMiner()
+    go ws.uptimeTicker()
+    return ws
+}
+
+func (ws *WalletStore) uptimeTicker() {
+    ticker := time.NewTicker(time.Second)
+    defer ticker.Stop()
+    for range ticker.C {
+        atomic.StoreUint64(&ws.metrics.UptimeSeconds, uint64(time.Since(ws.startTime).Seconds()))
     }
 }
 
-func (ws *WalletStore) generateTxHash(tx *RelayedTx) string {
-    h := sha256.New()
-    h.Write([]byte(fmt.Sprintf("%s%s%s%f%f%d%s", tx.From, tx.To, tx.Token, tx.Amount, tx.Fee, tx.Nonce, tx.Signature)))
-    return hex.EncodeToString(h.Sum(nil))
-}
-
-func (ws *WalletStore) validateAddress(address string) bool {
-    return addressRegex.MatchString(address)
-}
-
-func (ws *WalletStore) validateToken(token string) bool {
-    for _, t := range SupportedTokens {
-        if t == token {
-            return true
-        }
-    }
-    return false
-}
-
-// ------------------------------------------------------------
-// Wallet Operations
-// ------------------------------------------------------------
+// -------------------- Wallet Operations --------------------
 
 func (ws *WalletStore) CreateWallet(address string) (*Wallet, error) {
-    if !ws.validateAddress(address) {
+    if !addressRegex.MatchString(address) {
         return nil, fmt.Errorf("invalid address format")
     }
-
     ws.mu.Lock()
     defer ws.mu.Unlock()
-
     if _, exists := ws.wallets[address]; exists {
         return nil, fmt.Errorf("wallet already exists")
     }
-
-    wallet := &Wallet{
-        Address:   address,
-        Balance:   make(map[string]float64),
-        Nonce:     0,
-        CreatedAt: time.Now(),
-        UpdatedAt: time.Now(),
+    bal := make(map[string]float64)
+    for _, t := range SupportedTokens {
+        bal[t] = 0.0
     }
-
-    for _, token := range SupportedTokens {
-        wallet.Balance[token] = 0
-    }
-
-    ws.wallets[address] = wallet
+    w := &Wallet{Address: address, Balance: bal, Nonce: 0, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+    ws.wallets[address] = w
     atomic.AddUint64(&ws.metrics.ActiveWallets, 1)
-
-    return wallet, nil
+    return w, nil
 }
 
-func (ws *WalletStore) GetWallet(address string) (*Wallet, error) {
+func (ws *WalletStore) GetWallet(address string) (*Wallet, bool) {
     ws.mu.RLock()
     defer ws.mu.RUnlock()
-
-    wallet, exists := ws.wallets[address]
-    if !exists {
-        return nil, fmt.Errorf("wallet not found")
-    }
-
-    return wallet, nil
+    w, ok := ws.wallets[address]
+    return w, ok
 }
 
-func (ws *WalletStore) UpdateWalletBalance(address string, token string, amount float64) error {
-    if !ws.validateToken(token) {
-        return fmt.Errorf("unsupported token")
+// -------------------- Transaction Logic --------------------
+
+func (ws *WalletStore) Transfer(req TransferRequest) (*RelayedTx, error) {
+    if !addressRegex.MatchString(req.From) || !addressRegex.MatchString(req.To) {
+        return nil, fmt.Errorf("invalid address")
     }
-
-    ws.mu.Lock()
-    defer ws.mu.Unlock()
-
-    wallet, exists := ws.wallets[address]
-    if !exists {
-        return fmt.Errorf("wallet not found")
-    }
-
-    wallet.Balance[token] += amount
-    wallet.UpdatedAt = time.Now()
-
-    return nil
-}
-
-// ------------------------------------------------------------
-// Transaction Operations
-// ------------------------------------------------------------
-
-func (ws *WalletStore) CreateTransfer(from string, to string, token string, amount float64) (*RelayedTx, error) {
-    if !ws.validateAddress(from) || !ws.validateAddress(to) {
-        return nil, fmt.Errorf("invalid address format")
-    }
-
-    if !ws.validateToken(token) {
-        return nil, fmt.Errorf("unsupported token")
-    }
-
-    if amount <= 0 {
+    if req.Amount <= 0 {
         return nil, fmt.Errorf("amount must be positive")
     }
-
+    if !contains(SupportedTokens, req.Token) {
+        return nil, fmt.Errorf("unsupported token")
+    }
     ws.mu.Lock()
     defer ws.mu.Unlock()
-
-    sender, exists := ws.wallets[from]
-    if !exists {
-        return nil, fmt.Errorf("sender wallet not found")
+    fromW, ok1 := ws.wallets[req.From]
+    toW, ok2 := ws.wallets[req.To]
+    if !ok1 || !ok2 {
+        return nil, fmt.Errorf("wallet not found")
     }
-
-    if sender.Balance[token] < amount {
+    if fromW.Balance[req.Token] < req.Amount {
         return nil, fmt.Errorf("insufficient balance")
     }
-
-    receiver, exists := ws.wallets[to]
-    if !exists {
-        return nil, fmt.Errorf("receiver wallet not found")
-    }
-
+    // Update balances
+    fromW.Balance[req.Token] -= req.Amount
+    toW.Balance[req.Token] += req.Amount
+    fromW.Nonce++
+    now := time.Now()
     tx := &RelayedTx{
-        From:      from,
-        To:        to,
-        Token:     token,
-        Amount:    amount,
+        TxHash:    ws.generateTxHash(req.From, req.To, req.Token, req.Amount, now),
+        From:      req.From,
+        To:        req.To,
+        Token:     req.Token,
+        Amount:    req.Amount,
         Fee:       0,
-        Nonce:     sender.Nonce,
-        Status:    StatusPending,
-        Timestamp: time.Now(),
+        Nonce:     fromW.Nonce,
+        Status:    StatusConfirmed,
+        Timestamp: now,
     }
-
-    tx.TxHash = ws.generateTxHash(tx)
-
-    sender.Balance[token] -= amount
-    receiver.Balance[token] += amount
-    sender.Nonce++
-    sender.UpdatedAt = time.Now()
-    receiver.UpdatedAt = time.Now()
-
-    ws.txHistory[from] = append(ws.txHistory[from], tx)
-    ws.txHistory[to] = append(ws.txHistory[to], tx)
     ws.allTxs[tx.TxHash] = tx
-    ws.mempool = append(ws.mempool, tx)
-
+    ws.txHistory[req.From] = append(ws.txHistory[req.From], tx)
+    ws.txHistory[req.To] = append(ws.txHistory[req.To], tx)
     atomic.AddUint64(&ws.metrics.TotalTransfers, 1)
-    atomic.AddUint64(&ws.metrics.MempoolSize, 1)
-
+    ws.broadcastWS("transfer", tx)
     return tx, nil
 }
 
-func (ws *WalletStore) RelayTransaction(tx *RelayedTx) error {
-    if !ws.validateAddress(tx.From) || !ws.validateAddress(tx.To) {
-        return fmt.Errorf("invalid address format")
+func (ws *WalletStore) RelayTransaction(req RelayTxRequest) (*RelayedTx, error) {
+    if !addressRegex.MatchString(req.From) || !addressRegex.MatchString(req.To) {
+        return nil, fmt.Errorf("invalid address")
     }
-
-    if !ws.validateToken(tx.Token) {
-        return fmt.Errorf("unsupported token")
+    if req.Amount <= 0 {
+        return nil, fmt.Errorf("amount must be positive")
     }
-
-    if tx.Amount <= 0 || tx.Fee < 0 {
-        return fmt.Errorf("invalid amount or fee")
+    if !contains(SupportedTokens, req.Token) {
+        return nil, fmt.Errorf("unsupported token")
     }
-
     ws.mu.Lock()
     defer ws.mu.Unlock()
-
-    sender, exists := ws.wallets[tx.From]
-    if !exists {
-        return fmt.Errorf("sender wallet not found")
+    // Basic nonce check (optional)
+    fromW, ok := ws.wallets[req.From]
+    if !ok {
+        return nil, fmt.Errorf("sender wallet not found")
     }
-
-    if sender.Balance[tx.Token] < tx.Amount+tx.Fee {
-        return fmt.Errorf("insufficient balance")
+    if req.Nonce != fromW.Nonce+1 {
+        return nil, fmt.Errorf("invalid nonce, expected %d", fromW.Nonce+1)
     }
-
-    if sender.Nonce != tx.Nonce {
-        return fmt.Errorf("invalid nonce")
-    }
-
-    tx.Status = StatusRelayed
-    tx.Timestamp = time.Now()
-    tx.TxHash = ws.generateTxHash(tx)
-
-    sender.Balance[tx.Token] -= tx.Amount + tx.Fee
-    sender.Nonce++
-    sender.UpdatedAt = time.Now()
-
-    ws.allTxs[tx.TxHash] = tx
-    ws.mempool = append(ws.mempool, tx)
-
-    atomic.AddUint64(&ws.metrics.TotalRelayed, 1)
-    atomic.AddUint64(&ws.metrics.MempoolSize, 1)
-
-    return nil
-}
-
-func (ws *WalletStore) ConfirmTransaction(txHash string) error {
-    ws.mu.Lock()
-    defer ws.mu.Unlock()
-
-    tx, exists := ws.allTxs[txHash]
-    if !exists {
-        return fmt.Errorf("transaction not found")
-    }
-
-    if tx.Status != StatusRelayed {
-        return fmt.Errorf("transaction not in relayed state")
-    }
-
-    tx.Status = StatusConfirmed
-    tx.Timestamp = time.Now()
-
-    // Remove from mempool
-    for i, memTx := range ws.mempool {
-        if memTx.TxHash == txHash {
-            ws.mempool = append(ws.mempool[:i], ws.mempool[i+1:]...)
-            break
-        }
-    }
-
-    atomic.AddUint64(&ws.metrics.MempoolSize, ^uint64(0))
-
-    return nil
-}
-
-func (ws *WalletStore) FailTransaction(txHash string, errorMsg string) error {
-    ws.mu.Lock()
-    defer ws.mu.Unlock()
-
-    tx, exists := ws.allTxs[txHash]
-    if !exists {
-        return fmt.Errorf("transaction not found")
-    }
-
-    if tx.Status != StatusRelayed {
-        return fmt.Errorf("transaction not in relayed state")
-    }
-
-    tx.Status = StatusFailed
-    tx.ErrorMsg = errorMsg
-    tx.Timestamp = time.Now()
-
-    // Refund sender
-    sender, exists := ws.wallets[tx.From]
-    if exists {
-        sender.Balance[tx.Token] += tx.Amount + tx.Fee
-        sender.UpdatedAt = time.Now()
-    }
-
-    // Remove from mempool
-    for i, memTx := range ws.mempool {
-        if memTx.TxHash == txHash {
-            ws.mempool = append(ws.mempool[:i], ws.mempool[i+1:]...)
-            break
-        }
-    }
-
-    atomic.AddUint64(&ws.metrics.FailedTransfers, 1)
-    atomic.AddUint64(&ws.metrics.MempoolSize, ^uint64(0))
-
-    return nil
-}
-
-// ------------------------------------------------------------
-// Block Operations
-// ------------------------------------------------------------
-
-func (ws *WalletStore) MineBlock() (*BlockInfo, error) {
-    ws.mu.Lock()
-    defer ws.mu.Unlock()
-
-    if len(ws.mempool) == 0 {
-        return nil, fmt.Errorf("no transactions in mempool")
-    }
-
-    block := &BlockInfo{
-        BlockNumber: ws.currentBlock + 1,
-        Timestamp:   time.Now(),
-        Txs:         make([]*RelayedTx, len(ws.mempool)),
-    }
-
-    copy(block.Txs, ws.mempool)
-    block.TxCount = len(block.Txs)
-
-    // Generate block hash
-    h := sha256.New()
-    for _, tx := range block.Txs {
-        h.Write([]byte(tx.TxHash))
-    }
-    block.BlockHash = hex.EncodeToString(h.Sum(nil))
-
-    // Update transaction statuses
-    for _, tx := range block.Txs {
-        tx.Status = StatusConfirmed
-        tx.BlockNum = block.BlockNumber
-        tx.Timestamp = block.Timestamp
-    }
-
-    ws.blocks = append(ws.blocks, block)
-    ws.currentBlock = block.BlockNumber
-    ws.mempool = ws.mempool[:0]
-    atomic.StoreUint64(&ws.metrics.MempoolSize, 0)
-
-    return block, nil
-}
-
-// ------------------------------------------------------------
-// WebSocket Operations
-// ------------------------------------------------------------
-
-func (ws *WalletStore) AddWebSocketClient(conn *websocket.Conn) {
-    ws.wsMu.Lock()
-    defer ws.wsMu.Unlock()
-    ws.wsClients[conn] = true
-}
-
-func (ws *WalletStore) RemoveWebSocketClient(conn *websocket.Conn) {
-    ws.wsMu.Lock()
-    defer ws.wsMu.Unlock()
-    delete(ws.wsClients, conn)
-}
-
-func (ws *WalletStore) BroadcastWebSocketMessage(msg WebSocketMessage) {
-    ws.wsMu.Lock()
-    defer ws.wsMu.Unlock()
-
-    for conn := range ws.wsClients {
-        if err := conn.WriteJSON(msg); err != nil {
-            conn.Close()
-            delete(ws.wsClients, conn)
-        }
-    }
-}
-
-// ------------------------------------------------------------
-// API Handlers
-// ------------------------------------------------------------
-
-func (ws *WalletStore) handleCreateWallet(w http.ResponseWriter, r *http.Request) {
-    atomic.AddUint64(&ws.metrics.TotalRequests, 1)
-
-    var req CreateWalletRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-
-    wallet, err := ws.CreateWallet(req.Address)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(APIResponse{
-        Success: true,
-        Data:    wallet,
-    })
-}
-
-func (ws *WalletStore) handleGetWallet(w http.ResponseWriter, r *http.Request) {
-    atomic.AddUint64(&ws.metrics.TotalRequests, 1)
-
-    vars := mux.Vars(r)
-    address := vars["address"]
-
-    wallet, err := ws.GetWallet(address)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusNotFound)
-        return
-    }
-
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(APIResponse{
-        Success: true,
-        Data:    wallet,
-    })
-}
-
-func (ws *WalletStore) handleTransfer(w http.ResponseWriter, r *http.Request) {
-    atomic.AddUint64(&ws.metrics.TotalRequests, 1)
-
-    var req TransferRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-
-    tx, err := ws.CreateTransfer(req.From, req.To, req.Token, req.Amount)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-
-    // Broadcast transaction to WebSocket clients
-    ws.BroadcastWebSocketMessage(WebSocketMessage{
-        Type:      "transaction",
-        Payload:   tx,
-        Timestamp: time.Now(),
-    })
-
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(APIResponse{
-        Success: true,
-        Data:    tx,
-    })
-}
-
-func (ws *WalletStore) handleRelayTx(w http.ResponseWriter, r *http.Request) {
-    atomic.AddUint64(&ws.metrics.TotalRequests, 1)
-
-    var req RelayTxRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-
+    now := time.Now()
     tx := &RelayedTx{
+        TxHash:    ws.generateTxHash(req.From, req.To, req.Token, req.Amount, now),
         From:      req.From,
         To:        req.To,
         Token:     req.Token,
@@ -589,134 +283,256 @@ func (ws *WalletStore) handleRelayTx(w http.ResponseWriter, r *http.Request) {
         Nonce:     req.Nonce,
         Signature: req.Signature,
         Status:    StatusPending,
-        Timestamp: time.Now(),
+        Timestamp: now,
     }
+    ws.mempool = append(ws.mempool, tx)
+    ws.allTxs[tx.TxHash] = tx
+    atomic.AddUint64(&ws.metrics.TotalRelayed, 1)
+    atomic.StoreUint64(&ws.metrics.MempoolSize, uint64(len(ws.mempool)))
+    ws.broadcastWS("mempool_add", tx)
+    return tx, nil
+}
 
-    if err := ws.RelayTransaction(tx); err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
+func (ws *WalletStore) generateTxHash(from, to, token string, amount float64, t time.Time) string {
+    h := sha256.New()
+    data := fmt.Sprintf("%s|%s|%s|%f|%d", from, to, token, amount, t.UnixNano())
+    h.Write([]byte(data))
+    return hex.EncodeToString(h.Sum(nil))
+}
+
+// -------------------- Mempool & Block Processing --------------------
+
+func (ws *WalletStore) mempoolProcessor() {
+    ticker := time.NewTicker(2 * time.Second)
+    defer ticker.Stop()
+    for range ticker.C {
+        ws.mu.Lock()
+        if len(ws.mempool) == 0 {
+            ws.mu.Unlock()
+            continue
+        }
+        // Simple processing: mark all as RELAYED (simulating verification)
+        for _, tx := range ws.mempool {
+            tx.Status = StatusRelayed
+        }
+        ws.mu.Unlock()
+    }
+}
+
+func (ws *WalletStore) blockMiner() {
+    ticker := time.NewTicker(10 * time.Second)
+    defer ticker.Stop()
+    for range ticker.C {
+        ws.mu.Lock()
+        if len(ws.mempool) == 0 {
+            ws.mu.Unlock()
+            continue
+        }
+        // Create block from current mempool
+        blockTxs := ws.mempool
+        ws.mempool = make([]*RelayedTx, 0)
+        ws.currentBlock++
+        block := &BlockInfo{
+            BlockNumber: ws.currentBlock,
+            BlockHash:   ws.generateBlockHash(ws.currentBlock, blockTxs),
+            TxCount:     len(blockTxs),
+            Timestamp:   time.Now(),
+            Txs:         blockTxs,
+        }
+        // Update tx statuses to CONFIRMED and assign block number
+        for _, tx := range blockTxs {
+            tx.Status = StatusConfirmed
+            tx.BlockNum = block.BlockNumber
+        }
+        ws.blocks = append(ws.blocks, block)
+        atomic.StoreUint64(&ws.metrics.MempoolSize, 0)
+        ws.mu.Unlock()
+        ws.broadcastWS("new_block", block)
+    }
+}
+
+func (ws *WalletStore) generateBlockHash(number uint64, txs []*RelayedTx) string {
+    h := sha256.New()
+    h.Write([]byte(strconv.FormatUint(number, 10)))
+    for _, tx := range txs {
+        h.Write([]byte(tx.TxHash))
+    }
+    return hex.EncodeToString(h.Sum(nil))
+}
+
+// -------------------- WebSocket Management --------------------
+
+func (ws *WalletStore) registerWS(conn *websocket.Conn) {
+    ws.wsMu.Lock()
+    ws.wsClients[conn] = true
+    ws.wsMu.Unlock()
+}
+
+func (ws *WalletStore) unregisterWS(conn *websocket.Conn) {
+    ws.wsMu.Lock()
+    delete(ws.wsClients, conn)
+    ws.wsMu.Unlock()
+    conn.Close()
+}
+
+func (ws *WalletStore) broadcastWS(msgType string, payload interface{}) {
+    ws.wsMu.Lock()
+    defer ws.wsMu.Unlock()
+    if len(ws.wsClients) == 0 {
         return
     }
+    message := WebSocketMessage{Type: msgType, Payload: payload, Timestamp: time.Now()}
+    data, err := json.Marshal(message)
+    if err != nil {
+        log.Printf("failed to marshal ws message: %v", err)
+        return
+    }
+    for conn := range ws.wsClients {
+        if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+            log.Printf("ws write error, removing client: %v", err)
+            delete(ws.wsClients, conn)
+            conn.Close()
+        }
+    }
+}
 
-    // Broadcast transaction to WebSocket clients
-    ws.BroadcastWebSocketMessage(WebSocketMessage{
-        Type:      "transaction",
-        Payload:   tx,
-        Timestamp: time.Now(),
-    })
+// -------------------- HTTP Handlers --------------------
 
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(APIResponse{
-        Success: true,
-        Data:    tx,
+func (ws *WalletStore) rateLimited(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if !ws.limiter.Allow() {
+            http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+            return
+        }
+        atomic.AddUint64(&ws.metrics.TotalRequests, 1)
+        next.ServeHTTP(w, r)
     })
 }
 
-func (ws *WalletStore) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
-    atomic.AddUint64(&ws.metrics.TotalRequests, 1)
-
-    ws.metrics.UptimeSeconds = uint64(time.Since(ws.startTime).Seconds())
-
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(APIResponse{
-        Success: true,
-        Data:    ws.metrics,
-    })
+func (ws *WalletStore) createWalletHandler(w http.ResponseWriter, r *http.Request) {
+    var req CreateWalletRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        respondJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: "invalid json"})
+        return
+    }
+    wallet, err := ws.CreateWallet(strings.TrimSpace(req.Address))
+    if err != nil {
+        respondJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: err.Error()})
+        return
+    }
+    respondJSON(w, http.StatusCreated, APIResponse{Success: true, Data: wallet})
 }
 
-func (ws *WalletStore) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+func (ws *WalletStore) getWalletHandler(w http.ResponseWriter, r *http.Request) {
+    addr := mux.Vars(r)["address"]
+    wallet, ok := ws.GetWallet(addr)
+    if !ok {
+        respondJSON(w, http.StatusNotFound, APIResponse{Success: false, Error: "wallet not found"})
+        return
+    }
+    respondJSON(w, http.StatusOK, APIResponse{Success: true, Data: wallet})
+}
+
+func (ws *WalletStore) transferHandler(w http.ResponseWriter, r *http.Request) {
+    var req TransferRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        respondJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: "invalid json"})
+        return
+    }
+    tx, err := ws.Transfer(req)
+    if err != nil {
+        atomic.AddUint64(&ws.metrics.FailedTransfers, 1)
+        respondJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: err.Error()})
+        return
+    }
+    respondJSON(w, http.StatusOK, APIResponse{Success: true, Data: tx})
+}
+
+func (ws *WalletStore) relayHandler(w http.ResponseWriter, r *http.Request) {
+    var req RelayTxRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        respondJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: "invalid json"})
+        return
+    }
+    tx, err := ws.RelayTransaction(req)
+    if err != nil {
+        atomic.AddUint64(&ws.metrics.FailedTransfers, 1)
+        respondJSON(w, http.StatusBadRequest, APIResponse{Success: false, Error: err.Error()})
+        return
+    }
+    respondJSON(w, http.StatusAccepted, APIResponse{Success: true, Data: tx})
+}
+
+func (ws *WalletStore) metricsHandler(w http.ResponseWriter, r *http.Request) {
+    respondJSON(w, http.StatusOK, APIResponse{Success: true, Data: ws.metrics})
+}
+
+func (ws *WalletStore) wsHandler(w http.ResponseWriter, r *http.Request) {
     conn, err := upgrader.Upgrade(w, r, nil)
     if err != nil {
-        log.Println("WebSocket upgrade error:", err)
+        log.Printf("websocket upgrade error: %v", err)
         return
     }
-
-    ws.AddWebSocketClient(conn)
-    defer func() {
-        ws.RemoveWebSocketClient(conn)
-        conn.Close()
-    }()
-
+    ws.registerWS(conn)
+    // Simple read loop to keep connection alive; we ignore incoming messages.
     for {
-        _, _, err := conn.ReadMessage()
-        if err != nil {
-            if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-                log.Printf("WebSocket error: %v", err)
-            }
+        if _, _, err := conn.NextReader(); err != nil {
+            ws.unregisterWS(conn)
             break
         }
     }
 }
 
+// -------------------- Utility Functions --------------------
+
+func respondJSON(w http.ResponseWriter, status int, payload APIResponse) {
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(status)
+    json.NewEncoder(w).Encode(payload)
+}
+
+func contains(slice []string, item string) bool {
+    for _, s := range slice {
+        if s == item {
+            return true
+        }
+    }
+    return false
+}
+
 // ------------------------------------------------------------
-// Main Function
+// Main entry point
 // ------------------------------------------------------------
 
 func main() {
     store := NewWalletStore()
-
     r := mux.NewRouter()
+    api := r.PathPrefix("/api").Subrouter()
+    api.Use(store.rateLimited)
+    api.HandleFunc("/wallet", store.createWalletHandler).Methods("POST")
+    api.HandleFunc("/wallet/{address}", store.getWalletHandler).Methods("GET")
+    api.HandleFunc("/transfer", store.transferHandler).Methods("POST")
+    api.HandleFunc("/relay", store.relayHandler).Methods("POST")
+    api.HandleFunc("/metrics", store.metricsHandler).Methods("GET")
+    r.HandleFunc("/ws", store.wsHandler)
 
-    // API Routes
-    r.HandleFunc("/api/wallet", store.handleCreateWallet).Methods("POST")
-    r.HandleFunc("/api/wallet/{address}", store.handleGetWallet).Methods("GET")
-    r.HandleFunc("/api/transfer", store.handleTransfer).Methods("POST")
-    r.HandleFunc("/api/relay", store.handleRelayTx).Methods("POST")
-    r.HandleFunc("/api/metrics", store.handleGetMetrics).Methods("GET")
+    srv := &http.Server{Addr: ":8080", Handler: r}
 
-    // WebSocket Route
-    r.HandleFunc("/ws", store.handleWebSocket)
+    // Graceful shutdown handling
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    go func() {
+        <-quit
+        log.Println("Shutting down server...")
+        ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+        defer cancel()
+        if err := srv.Shutdown(ctx); err != nil {
+            log.Fatalf("Server forced to shutdown: %v", err)
+        }
+    }()
 
-    // Start HTTP server
-    srv := &http.Server{
-        Handler: r,
-        Addr:    "127.0.0.1:8080",
-        // Good practice: enforce timeouts for servers you create!
-        WriteTimeout: 15 * time.Second,
-        ReadTimeout:  15 * time.Second,
+    log.Println("Server listening on :8080")
+    if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+        log.Fatalf("listen: %s\n", err)
     }
-
-    // Run our server in a goroutine so that it doesn't block.
-    go func() {
-        log.Println("Starting server on :8080")
-        if err := srv.ListenAndServe(); err != nil {
-            log.Println(err)
-        }
-    }()
-
-    // Start a goroutine to periodically mine blocks
-    go func() {
-        ticker := time.NewTicker(10 * time.Second)
-        defer ticker.Stop()
-
-        for range ticker.C {
-            block, err := store.MineBlock()
-            if err != nil {
-                log.Printf("Error mining block: %v", err)
-                continue
-            }
-
-            // Broadcast block to WebSocket clients
-            store.BroadcastWebSocketMessage(WebSocketMessage{
-                Type:      "block",
-                Payload:   block,
-                Timestamp: time.Now(),
-            })
-        }
-    }()
-
-    // Graceful shutdown
-    c := make(chan os.Signal, 1)
-    signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-    <-c
-
-    // Create a deadline to wait for.
-    ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-    defer cancel()
-
-    // Doesn't block if no connections, but will otherwise wait
-    // until the timeout deadline.
-    srv.Shutdown(ctx)
-
-    log.Println("Shutting down")
-    os.Exit(0)
 }

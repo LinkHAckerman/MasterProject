@@ -222,23 +222,22 @@ defmodule GossipNode.PeerConnectionManager do
   end
 
   def handle_call({:connect_to_peer, peer_pid}, _from, state) do
-    case GenServer.start_link(GossipNode.PeerHandler, peer_pid) do
-      {:ok, pid} ->
-        new_state = Map.put(state, peer_pid, pid)
-        {:reply, :ok, new_state}
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+    if Map.has_key?(state, peer_pid) do
+      {:reply, {:error, :already_connected}, state}
+    else
+      new_state = Map.put(state, peer_pid, {:peer_handler, peer_pid})
+      GossipNode.PeerHandler.start_link(peer_pid)
+      {:reply, {:ok, :connected}, new_state}
     end
   end
 
   def handle_call({:disconnect_from_peer, peer_pid}, _from, state) do
-    case Map.get(state, peer_pid) do
-      nil ->
-        {:reply, :error, state}
-      pid ->
-        GenServer.cast(pid, :disconnect)
-        new_state = Map.delete(state, peer_pid)
-        {:reply, :ok, new_state}
+    if Map.has_key?(state, peer_pid) do
+      GenServer.cast(Map.get(state, peer_pid), :disconnect)
+      new_state = Map.delete(state, peer_pid)
+      {:reply, {:ok, :disconnected}, new_state}
+    else
+      {:reply, {:error, :not_connected}, state}
     end
   end
 end
