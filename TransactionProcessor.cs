@@ -1,3 +1,7 @@
+#!/using System;
+// Magnum Opus - Transaction Processor Core
+// High-performance transaction handling for Web3/DeFi operations
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -5,9 +9,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,7 +24,9 @@ namespace MagnumOpus.Backend.Core
         Pending = 0,
         Confirmed = 1,
         Failed = 2,
-        Rejected = 3
+        Rejected = 3,
+        Cancelled = 4,
+        Refunded = 5
     }
 
     // ============================================================================
@@ -81,6 +85,8 @@ namespace MagnumOpus.Backend.Core
             if (string.IsNullOrWhiteSpace(Recipient)) return false;
             if (Amount <= 0) return false;
             if (Fee < 0) return false;
+            if (Amount > 1_000_000m) return false; // Max reasonable amount
+            if (Fee > 10m) return false; // Fee cap
             return true;
         }
 
@@ -104,10 +110,15 @@ namespace MagnumOpus.Backend.Core
 
         /// <summary>
         /// Calculates the total cost of a transaction including fee and gas.
+        /// In a real implementation, this would query the current gas price.
         /// </summary>
         public decimal CalculateTotalCost()
         {
-            return Amount + Fee;
+            // Base cost is amount + fee
+            decimal baseCost = Amount + Fee;
+            // Add estimated gas cost (simulated)
+            decimal estimatedGasCost = 50.0m;
+            return baseCost + estimatedGasCost;
         }
 
         /// <summary>
@@ -117,7 +128,42 @@ namespace MagnumOpus.Backend.Core
         {
             if (Amount > 1_000_000m) return false; // Max reasonable amount
             if (Fee > 10m) return false; // Fee cap
+            if (Amount <= 0) return false;
+            if (Fee < 0) return false;
             return true;
+        }
+
+        /// <summary>
+        /// Updates transaction status based on network confirmation.
+        /// </summary>
+        public void UpdateStatus(TransactionStatus newStatus, string reason = "")
+        {
+            if (newStatus == null) throw new ArgumentNullException(nameof(newStatus));
+            Status = newStatus;
+            // In a real implementation, this would interact with the blockchain
+            // to confirm the transaction
+        }
+
+        /// <summary>
+        /// Simulates transaction signing using a private key.
+        /// </summary>
+        public bool SignTransaction()
+        {
+            if (string.IsNullOrEmpty(Sender)) return false;
+            // In production, this would use the sender's private key
+            // to sign the transaction payload
+            Console.WriteLine("[TransactionProcessor] Signing transaction {0}...", Id);
+            return true;
+        }
+
+        /// <summary>
+        /// Adds a transaction to the pending queue.
+        /// </summary>
+        public void AddToQueue()
+        {
+            if (!IsValid()) return;
+            // In a real implementation, this would add to a database or queue
+            Console.WriteLine("[TransactionProcessor] Added transaction {0} to queue", Id);
         }
     }
 
@@ -152,173 +198,157 @@ namespace MagnumOpus.Backend.Core
 
         [JsonPropertyName("receiptId")]
         public string ReceiptId { get; set; } = string.Empty;
-    }
 
-    // ============================================================================
-    // Simple In-Memory Ledger (Thread‑Safe)
-    // ============================================================================
-    public static class Ledger
-    {
-        // Balance per address (could be wallet address, public key, etc.)
-        private static readonly ConcurrentDictionary<string, decimal> _balances = new();
-
-        public static decimal GetBalance(string address)
+        public bool IsValid()
         {
-            if (string.IsNullOrWhiteSpace(address)) throw new ArgumentException("address cannot be null or empty", nameof(address));
-            return _balances.GetOrAdd(address, 0m);
+            if (string.IsNullOrWhiteSpace(TransactionId)) return false;
+            if (BlockIndex < 0) return false;
+            return true;
         }
 
-        public static void AdjustBalance(string address, decimal delta)
+        public override string ToString()
         {
-            if (string.IsNullOrWhiteSpace(address)) throw new ArgumentException("address cannot be null or empty", nameof(address));
-            _balances.AddOrUpdate(address, delta, (key, old) => old + delta);
+            return $"{TransactionId}: Block {BlockIndex}, Status {Status}";
         }
     }
 
     // ============================================================================
-    // Transaction Processor Service
+    // Transaction Queue Manager
     // ============================================================================
-    public sealed class TransactionProcessor : IAsyncDisposable
+    public sealed class TransactionQueueManager
     {
-        private readonly Channel<Transaction> _channel;
+        private readonly ConcurrentQueue<Transaction> _pendingTransactions = new();
+        private readonly ConcurrentDictionary<string, TransactionReceipt> _receipts = new();
+        private readonly ConcurrentDictionary<string, long> _blockIndexMap = new();
+        private readonly ILogger<TransactionQueueManager> _logger;
+
+        public TransactionQueueManager(ILogger<TransactionQueueManager> logger)
+        {
+            _logger = logger;
+        }
+
+        /// <summary>
+        /// Adds a transaction to the queue.
+        /// </summary>
+        public void Enqueue(Transaction transaction)
+        {
+            if (transaction == null) return;
+            _pendingTransactions.Enqueue(transaction);
+            _logger.LogInformation("Transaction {0} enqueued", transaction.Id);
+        }
+
+        /// <summary>
+        /// Retrieves the next transaction from the queue.
+        /// </summary>
+        public Transaction Dequeue()
+        {
+            if (_pendingTransactions.Count == 0) return null;
+            var transaction = _pendingTransactions.Dequeue();
+            _logger.LogDebug("Dequeued transaction {0}", transaction.Id);
+            return transaction;
+        }
+
+        /// <summary>
+        /// Gets all pending transactions.
+        /// </summary>
+        public IReadOnlyList<Transaction> GetPendingTransactions()
+        {
+            return _pendingTransactions.ToList().AsReadOnly();
+        }
+
+        /// <summary>
+        /// Gets a receipt by transaction ID.
+        /// </summary>
+        public TransactionReceipt GetReceipt(string transactionId)
+        {
+            if (_receipts.TryGetValue(transactionId, out var receipt))
+            {
+                return receipt;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Updates a transaction's status.
+        /// </summary>
+        public void UpdateTransactionStatus(string transactionId, TransactionStatus newStatus, string reason = "")
+        {
+            if (!_receipts.TryGetValue(transactionId, out var receipt))
+            {
+                _logger.LogWarning("Transaction {0} not found", transactionId);
+                return;
+            }
+            receipt.Status = newStatus;
+            receipt.ExecutionMessage = reason;
+            _logger.LogInformation("Transaction {0} status updated to {1}", transactionId, newStatus);
+        }
+
+        /// <summary>
+        /// Gets the current block index for a transaction.
+        /// </summary>
+        public long GetBlockIndex(string transactionId)
+        {
+            if (_blockIndexMap.TryGetValue(transactionId, out var blockIndex))
+            {
+                return blockIndex;
+            }
+            return 0;
+        }
+    }
+
+    // ============================================================================
+    // Example Usage
+    // ============================================================================
+    public class TransactionProcessor
+    {
+        private readonly TransactionQueueManager _queueManager;
         private readonly ILogger<TransactionProcessor> _logger;
-        private readonly CancellationTokenSource _cts = new();
-        private readonly Task _backgroundTask;
 
-        public TransactionProcessor(ILogger<TransactionProcessor> logger, int capacity = 1000)
+        public TransactionProcessor(TransactionQueueManager queueManager, ILogger<TransactionProcessor> logger)
         {
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            var options = new BoundedChannelOptions(capacity)
-            {
-                FullMode = BoundedChannelFullMode.Wait,
-                SingleReader = true,
-                SingleWriter = false
-            };
-            _channel = Channel.CreateBounded<Transaction>(options);
-            _backgroundTask = Task.Run(ProcessLoopAsync);
+            _queueManager = queueManager;
+            _logger = logger;
         }
 
         /// <summary>
-        /// Enqueue a transaction for asynchronous processing.
+        /// Processes a new transaction through the pipeline.
         /// </summary>
-        public async ValueTask EnqueueAsync(Transaction tx)
+        public async Task ProcessTransactionAsync(Transaction transaction)
         {
-            if (tx == null) throw new ArgumentNullException(nameof(tx));
-            await _channel.Writer.WriteAsync(tx, _cts.Token);
-            _logger.LogInformation("Transaction {TxId} enqueued", tx.Id);
-        }
-
-        private async Task ProcessLoopAsync()
-        {
-            _logger.LogInformation("TransactionProcessor background loop started");
             try
             {
-                await foreach (var tx in _channel.Reader.ReadAllAsync(_cts.Token))
+                // Validate the transaction
+                if (!transaction.IsValid())
                 {
-                    try
-                    {
-                        await ProcessTransactionAsync(tx);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Failed to process transaction {TxId}", tx.Id);
-                    }
+                    _logger.LogError("Invalid transaction: {0}", transaction.Id);
+                    return;
                 }
+
+                // Add to queue
+                _queueManager.Enqueue(transaction);
+
+                // Simulate processing
+                Console.WriteLine("[TransactionProcessor] Processing transaction {0}...", transaction.Id);
+                await Task.Delay(100); // Simulate processing time
+
+                // Update status to confirmed
+                transaction.UpdateStatus(TransactionStatus.Confirmed, "Processed successfully");
+                _queueManager.UpdateTransactionStatus(transaction.Id, TransactionStatus.Confirmed);
+
+                _logger.LogInformation("Transaction {0} processed successfully", transaction.Id);
             }
-            catch (OperationCanceledException)
+            catch (Exception ex)
             {
-                // Expected during shutdown
-            }
-            finally
-            {
-                _logger.LogInformation("TransactionProcessor background loop stopped");
+                _logger.LogError(ex, "Error processing transaction {0}", transaction.Id);
             }
         }
 
-        private async Task ProcessTransactionAsync(Transaction tx)
-        {
-            // Basic validation
-            if (!tx.IsValid())
-            {
-                tx.Status = TransactionStatus.Rejected;
-                _logger.LogWarning("Transaction {TxId} rejected: basic validation failed", tx.Id);
-                return;
-            }
-
-            if (!tx.ValidateNetworkConstraints())
-            {
-                tx.Status = TransactionStatus.Rejected;
-                _logger.LogWarning("Transaction {TxId} rejected: network constraints violated", tx.Id);
-                return;
-            }
-
-            if (!SignatureVerifier.VerifySignature(tx))
-            {
-                tx.Status = TransactionStatus.Rejected;
-                _logger.LogWarning("Transaction {TxId} rejected: signature verification failed", tx.Id);
-                return;
-            }
-
-            // Simulate gas consumption & fee deduction
-            tx.GasUsed = EstimateGas(tx);
-            tx.FeePaid = tx.Fee; // In a real system fee could be dynamic based on gas
-
-            // Apply balances atomically
-            ApplyTransaction(tx);
-
-            tx.Status = TransactionStatus.Confirmed;
-            _logger.LogInformation("Transaction {TxId} confirmed. Sender: {Sender}, Recipient: {Recipient}, Amount: {Amount}",
-                tx.Id, tx.Sender, tx.Recipient, tx.Amount);
-
-            // In a real system we would persist a receipt and broadcast events.
-            await Task.CompletedTask; // placeholder for async persistence
-        }
-
-        private static long EstimateGas(Transaction tx)
-        {
-            // Very naive gas model: 10 units per transaction + 1 per token transferred
-            return 10 + (long)Math.Ceiling(tx.Amount);
-        }
-
-        private static void ApplyTransaction(Transaction tx)
-        {
-            // Debit sender (including fee)
-            Ledger.AdjustBalance(tx.Sender, -(tx.Amount + tx.FeePaid));
-            // Credit recipient
-            Ledger.AdjustBalance(tx.Recipient, tx.Amount);
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            _cts.Cancel();
-            _channel.Writer.Complete();
-            try
-            {
-                await _backgroundTask;
-            }
-            catch (Exception ex) when (ex is OperationCanceledException)
-            {
-                // ignore
-            }
-            _cts.Dispose();
-        }
-    }
-
-    // ============================================================================
-    // Simple Signature Verification Helper (placeholder implementation)
-    // ============================================================================
-    public static class SignatureVerifier
-    {
         /// <summary>
-        /// Verifies that the transaction's signature matches the hash of its payload.
-        /// In a production system this would involve ECDSA/secp256k1 verification against the sender's public key.
-        /// Here we simply compare the stored signature with the SHA‑256 hash for demonstration purposes.
+        /// Gets the next transaction from the queue.
         /// </summary>
-        public static bool VerifySignature(Transaction tx)
+        public async Task<Transaction?> GetNextTransactionAsync()
         {
-            if (string.IsNullOrWhiteSpace(tx.Signature)) return false;
-            var expected = tx.ComputeHash();
-            return string.Equals(expected, tx.Signature, StringComparison.OrdinalIgnoreCase);
+            return await _queueManager.Dequeue();
         }
     }
 }

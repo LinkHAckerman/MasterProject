@@ -178,7 +178,6 @@ defmodule GossipNode.PeerDiscovery do
   end
 end
 
-# Add a new module for handling peer connections and transactions
 defmodule GossipNode.PeerHandler do
   use GenServer
 
@@ -201,7 +200,6 @@ defmodule GossipNode.PeerHandler do
   end
 end
 
-# Add a new module for managing peer connections
 defmodule GossipNode.PeerConnectionManager do
   use GenServer
 
