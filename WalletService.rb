@@ -108,438 +108,475 @@ module MagnumOpus
     # Returns native ETH balance and USD representation
     def get_eth_balance
       usd_rate = fetch_market_rate('ethereum')
-      balance  = @wallet_address ? query_chain_balance(@wallet_address, :ethereum) : BigDecimal('14.8520')
-      usd_val  = (balance * usd_rate).round(2)
+      balance_wei = fetch_native_balance('ethereum')
+      balance_eth = balance_wei.to_d / 10**18
+      balance_usd = balance_eth * usd_rate
 
       {
-        success: true,
-        chain: :ethereum,
-        address: @wallet_address,
-        symbol: 'ETH',
-        balance: balance.to_s('F'),
-        eth_price_usd: usd_rate.to_f,
-        usd_value: usd_val.to_f,
-        timestamp: Time.now.utc.iso8601
+        balance_wei: balance_wei,
+        balance_eth: balance_eth,
+        balance_usd: balance_usd,
+        usd_rate: usd_rate
       }
     end
 
-    # Returns USDT balance on Ethereum mainnet (ERC-20)
-    def get_usdt_balance
-      contract_addr = '0xdAC17F958D2ee523a2206206994597C13D831ec7'
-      balance = @wallet_address ? query_token_balance_internal(@wallet_address, contract_addr) : BigDecimal('42500.00')
-      price   = BigDecimal('1.00')
-      {
-        success: true,
-        chain: :ethereum,
-        address: @wallet_address,
-        symbol: 'USDT',
-        contract_address: contract_addr,
-        balance: balance.to_s('F'),
-        usdt_price_usd: price.to_f,
-        usd_value: balance.to_f,
-        timestamp: Time.now.utc.iso8601
-      }
-    end
-
-    # Returns native Solana (SOL) balance and USD representation
+    # Returns native SOL balance and USD representation
     def get_sol_balance
       usd_rate = fetch_market_rate('solana')
-      balance  = @wallet_address ? query_chain_balance(@wallet_address, :solana) : BigDecimal('158.420')
-      usd_val  = (balance * usd_rate).round(2)
+      balance_lamports = fetch_native_balance('solana')
+      balance_sol = balance_lamports.to_d / 10**9
+      balance_usd = balance_sol * usd_rate
 
       {
-        success: true,
-        chain: :solana,
-        address: @wallet_address,
-        symbol: 'SOL',
-        balance: balance.to_s('F'),
-        sol_price_usd: usd_rate.to_f,
-        usd_value: usd_val.to_f,
-        timestamp: Time.now.utc.iso8601
+        balance_lamports: balance_lamports,
+        balance_sol: balance_sol,
+        balance_usd: balance_usd,
+        usd_rate: usd_rate
       }
     end
 
-    # Generic ERC-20 / SPL token balance fetcher
-    def get_token_balance(symbol, contract_address: nil, chain: :ethereum)
+    # Returns native MATIC balance and USD representation
+    def get_matic_balance
+      usd_rate = fetch_market_rate('polygon')
+      balance_wei = fetch_native_balance('polygon')
+      balance_matic = balance_wei.to_d / 10**18
+      balance_usd = balance_matic * usd_rate
+
+      {
+        balance_wei: balance_wei,
+        balance_matic: balance_matic,
+        balance_usd: balance_usd,
+        usd_rate: usd_rate
+      }
+    end
+
+    # Returns token balance and USD representation for a specific token
+    # @param chain [Symbol] Blockchain network symbol (:ethereum, :solana, etc.)
+    # @param token_symbol [String] Token symbol (e.g., 'USDT', 'USDC', 'MAG')
+    def get_token_balance(chain, token_symbol)
       chain = chain.to_sym
-      target_token = KNKNOWN_TOKEN_FOR(chain, symbol.to_s.upcase) || {
-        address: contract_address || '0x0',
-        decimals: 18,
-        coingecko_id: symbol.to_s.downcase
-      }
+      token_symbol = token_symbol.upcase
 
-      token_address = contract_address || target_token[:address]
-      balance = @wallet_address ? query_token_balance_internal(@wallet_address, token_address) : BigDecimal('1000.00')
-      rate = fetch_market_rate(target_token[:coingecko_id] || symbol)
-      usd_val = (balance * rate).round(2)
+      unless SUPPORTED_CHAINS.include?(chain)
+        raise WalletServiceError, "Unsupported chain: #{chain}"
+      end
+
+      unless KNOWN_TOKENS[chain].key?(token_symbol)
+        raise WalletServiceError, "Unknown token #{token_symbol} for chain #{chain}"
+      end
+
+      token_info = KNOWN_TOKENS[chain][token_symbol]
+      usd_rate = fetch_market_rate(token_info[:coingecko_id])
+      balance_raw = fetch_token_balance(chain, token_info[:address])
+      balance = balance_raw.to_d / 10**token_info[:decimals]
+      balance_usd = balance * usd_rate
 
       {
-        success: true,
-        chain: chain,
-        address: @wallet_address,
-        symbol: symbol.to_s.upcase,
-        contract_address: token_address,
-        balance: balance.to_s('F'),
-        token_price_usd: rate.to_f,
-        usd_value: usd_val.to_f,
-        timestamp: Time.now.utc.iso8601
+        token_symbol: token_symbol,
+        balance_raw: balance_raw,
+        balance: balance,
+        balance_usd: balance_usd,
+        usd_rate: usd_rate,
+        decimals: token_info[:decimals]
       }
     end
 
-    # Comprehensive multi-chain aggregated portfolio
-    def get_multichain_portfolio
-      eth_price = fetch_market_rate('ethereum')
-      btc_price = fetch_market_rate('bitcoin')
-      sol_price = fetch_market_rate('solana')
-      mag_price = fetch_market_rate('magnum')
-      matic_price = fetch_market_rate('polygon')
-      avax_price = fetch_market_rate('avalanche')
+    # Returns the USD value of the entire portfolio
+    def get_portfolio_value
+      total_value = BigDecimal('0')
 
-      mock_balances = {
-        ethereum: [
-          { symbol: 'ETH',  name: 'Ethereum',        balance: BigDecimal('14.8520'), rate: eth_price },
-          { symbol: 'USDT', name: 'Tether USD',       balance: BigDecimal('42500.00'), rate: BigDecimal('1.00') },
-          { symbol: 'USDC', name: 'USD Coin',         balance: BigDecimal('18750.50'), rate: BigDecimal('1.00') },
-          { symbol: 'MAG',  name: 'Magnum Protocol',  balance: BigDecimal('125000.00'), rate: mag_price },
-          { symbol: 'WBTC', name: 'Wrapped Bitcoin', balance: BigDecimal('1.450'),    rate: btc_price }
-        ],
-        solana: [
-          { symbol: 'SOL',  name: 'Solana Native',    balance: BigDecimal('158.420'),  rate: sol_price },
-          { symbol: 'USDC', name: 'USD Coin (SPL)',   balance: BigDecimal('9200.00'),  rate: BigDecimal('1.00') },
-          { symbol: 'MAG',  name: 'Magnum SPL',       balance: BigDecimal('34200.00'), rate: mag_price }
-        ],
-        polygon: [
-          { symbol: 'MATIC', name: 'Polygon Native',  balance: BigDecimal('4850.00'),  rate: matic_price },
-          { symbol: 'WETH',  name: 'Wrapped Ether',   balance: BigDecimal('2.150'),    rate: eth_price }
-        ],
-        avalanche: [
-          { symbol: 'AVAX',  name: 'Avalanche C-Chain', balance: BigDecimal('210.50'), rate: avax_price }
-        ]
-      }
+      # Add native balances
+      total_value += get_eth_balance[:balance_usd]
+      total_value += get_sol_balance[:balance_usd]
+      total_value += get_matic_balance[:balance_usd]
 
-      total_usd = BigDecimal('0.0')
-      portfolio_breakdown = {}
-
-      mock_balances.each do |chain, tokens|
-        chain_usd = BigDecimal('0.0')
-        processed_tokens = tokens.map do |t|
-          value_usd = (t[:balance] * t[:rate]).round(2)
-          chain_usd += value_usd
-          {
-            symbol: t[:symbol],
-            name: t[:name],
-            balance: t[:balance].to_s('F'),
-            price_usd: t[:rate].to_f,
-            usd_value: value_usd.to_f
-          }
+      # Add token balances
+      KNOWN_TOKENS.each do |chain, tokens|
+        tokens.each do |token_symbol, _|
+          begin
+            token_balance = get_token_balance(chain, token_symbol)
+            total_value += token_balance[:balance_usd]
+          rescue WalletServiceError => e
+            @logger.warn "Failed to fetch balance for #{token_symbol} on #{chain}: #{e.message}"
+          end
         end
-        portfolio_breakdown[chain] = {
-          chain_name: CHAIN_METADATA[chain][:name],
-          native_asset: CHAIN_METADATA[chain][:native],
-          tokens: processed_tokens,
-          chain_total_usd: chain_usd.to_f
-        }
-        total_usd += chain_usd
       end
 
-      {
-        success: true,
-        wallet_address: @wallet_address || '0x71C...DEMO',
-        total_net_worth_usd: total_usd.to_f,
-        chains: portfolio_breakdown,
-        generated_at: Time.now.utc.iso8601
-      }
+      total_value
     end
 
     # ---------------------------------------------------------------------
-    # DeFi Analytics & Quantitative Math Engine
+    # Public API - Exchange Rate Queries
     # ---------------------------------------------------------------------
 
-    # Calculates Impermanent Loss for a 50/50 Automated Market Maker (AMM) pool
-    # Formula: IL(k) = 2 * sqrt(k) / (1 + k) - 1, where k = P_current / P_initial
-    # @param initial_price_ratio [Float, BigDecimal, Numeric] Price of token A in token B at LP deposit
-    # @param current_price_ratio [Float, BigDecimal, Numeric] Price of token A in token B now
-    # @return [Hash] IL percentage, loss multiplier, and summary
-    def calculate_impermanent_loss(initial_price_ratio, current_price_ratio)
-      p0 = BigDecimal(initial_price_ratio.to_s)
-      p1 = BigDecimal(current_price_ratio.to_s)
-      raise CalculationError, 'Initial price ratio must be > 0' if p0 <= 0
-      raise CalculationError, 'Current price ratio must be > 0' if p1 <= 0
-
-      ratio_k = p1 / p0
-      sqrt_k = BigDecimal(Math.sqrt(ratio_k.to_f).to_s)
-
-      # Impermanent Loss ratio: 2 * sqrt(k) / (1 + k) - 1
-      il_ratio = ((BigDecimal('2.0') * sqrt_k) / (BigDecimal('1.0') + ratio_k)) - BigDecimal('1.0')
-      il_percentage = (il_ratio * BigDecimal('100.0')).round(4)
-      divergence_loss_pct = (il_percentage.abs).round(4)
-
-      {
-        initial_price_ratio: p0.to_f,
-        current_price_ratio: p1.to_f,
-        price_ratio_delta: ratio_k.to_f,
-        impermanent_loss_ratio: il_ratio.to_f,
-        impermanent_loss_percent: il_percentage.to_f,
-        loss_against_hold_percent: divergence_loss_pct.to_f
-      }
-    end
-
-    # Calculates Annual Percentage Yield (APY) compounded n times per year
-    # Formula: APY = (1 + APR / n)^n - 1
-    # @param apr [Numeric] Annual percentage rate (e.g. 0.12 for 12%)
-    # @param compounding_periods [Integer] Times compounded per year (365 for daily, 8760 for hourly)
-    def calculate_apy(apr, compounding_periods: 365)
-      apr_bd = BigDecimal(apr.to_s)
-      n_bd   = BigDecimal(compounding_periods.to_s)
-      raise CalculationError, 'Compounding periods must be positive' if n_bd <= 0
-
-      factor = BigDecimal('1.0') + (apr_bd / n_bd)
-      apy_bd = (factor**n_bd.to_i) - BigDecimal('1.0')
-
-      {
-        apr: apr_bd.to_f,
-        compounding_periods: compounding_periods,
-        apy: apy_bd.to_f,
-        apy_percent: (apy_bd * BigDecimal('100.0')).round(4).to_f
-      }
-    end
-
-    # Constant-Product (x * y = k) AMM Slippage & Output Estimator
-    # @param reserve_in [Numeric] Pool reserve of input asset
-    # @param reserve_out [Numeric] Pool reserve of output asset
-    # @param amount_in [Numeric] User swap input amount
-    # @param fee_bps [Integer] Swap fee in basis points (e.g., 30 for 0.3%)
-    def estimate_swap_slippage(reserve_in, reserve_out, amount_in, fee_bps: 30)
-      r_in  = BigDecimal(reserve_in.to_s)
-      r_out = BigDecimal(reserve_out.to_s)
-      dx    = BigDecimal(amount_in.to_s)
-      raise CalculationError, 'Reserves and input must be > 0' if r_in <= 0 || r_out <= 0 || dx <= 0
-
-      fee_multiplier = BigDecimal('1.0') - (BigDecimal(fee_bps.to_s) / BigDecimal('10000.0'))
-      dx_effective = dx * fee_multiplier
-
-      # dy = (r_out * dx_effective) / (r_in + dx_effective)
-      dy = (r_out * dx_effective) / (r_in + dx_effective)
-
-      # Spot price before swap (dy/dx)
-      spot_price = r_out / r_in
-      # Effective executed price
-      exec_price = dy / dx
-      # Slippage = 1 - (exec_price / spot_price)
-      slippage = BigDecimal('1.0') - (exec_price / spot_price)
-
-      {
-        input_amount: dx.to_f,
-        output_amount: dy.round(8).to_f,
-        spot_price: spot_price.round(6).to_f,
-        effective_price: exec_price.round(6).to_f,
-        price_impact_percent: (slippage * BigDecimal('100.0')).round(4).to_f,
-        fee_basis_points: fee_bps
-      }
-    end
-
-    # Gas & Network Fee Estimation Oracle
-    # @param chain [Symbol] Target chain
-    def estimate_gas_fees(chain = :ethereum)
-      chain = chain.to_sym
-      eth_price = fetch_market_rate('ethereum')
-
-      case chain
-      when :ethereum
-        base_fee_gwei = 18.5
-        {
-          chain: :ethereum,
-          base_fee_gwei: base_fee_gwei,
-          speeds: {
-            slow:     { max_fee_gwei: base_fee_gwei + 1.2, priority_fee_gwei: 1.0,  estimated_sec: 45, usd_cost_standard_transfer: compute_gas_usd(21000, base_fee_gwei + 1.2, eth_price) },
-            standard: { max_fee_gwei: base_fee_gwei + 2.5, priority_fee_gwei: 1.8,  estimated_sec: 15, usd_cost_standard_transfer: compute_gas_usd(21000, base_fee_gwei + 2.5, eth_price) },
-            fast:     { max_fee_gwei: base_fee_gwei + 5.0, priority_fee_gwei: 3.5,  estimated_sec: 5,  usd_cost_standard_transfer: compute_gas_usd(21000, base_fee_gwei + 5.0, eth_price) }
-          },
-          eip_1559: true,
-          timestamp: Time.now.utc.iso8601
-        }
-      when :solana
-        sol_price = fetch_market_rate('solana')
-        lamports_per_sig = 5000
-        usd_cost = ((BigDecimal(lamports_per_sig.to_s) / BigDecimal('1000000000.0')) * sol_price).round(6)
-        {
-          chain: :solana,
-          base_fee_lamports: lamports_per_sig,
-          usd_cost_per_tx: usd_cost.to_f,
-          prioritization_fee_micro_lamports: 150,
-          timestamp: Time.now.utc.iso8601
-        }
-      else
-        {
-          chain: chain,
-          base_fee_gwei: 35.0,
-          usd_cost_estimate: 0.02,
-          timestamp: Time.now.utc.iso8601
-        }
-      end
-    end
-
-    # ---------------------------------------------------------------------
-    # Market Rate & Oracle Engine
-    # ---------------------------------------------------------------------
-
-    # Fetches market exchange rate in USD with thread-safe caching and fallback
-    # @param asset_id [String, Symbol] Asset identifier (e.g. 'ethereum', 'eth', 'solana', 'bitcoin')
-    # @return [BigDecimal] Spot price in USD
+    # Returns the current market rate for a given asset in USD
+    # @param asset_id [String] CoinGecko asset ID (e.g., 'ethereum', 'bitcoin', 'tether')
     def fetch_market_rate(asset_id)
-      normalized_id = asset_id.to_s.downcase.strip
+      cache_key = "market_rate_#{asset_id}"
+      cached_data = get_cached_data(cache_key)
 
-      synchronize do
-        cached = @cache[normalized_id]
-        if cached && (Time.now.to_i - cached[:timestamp]) < DEFAULT_CACHE_TTL_SEC
-          return cached[:rate]
-        end
-      end
+      return cached_data[:rate] if cached_data
 
-      # Attempt live API query or fallback gracefully
-      rate = query_price_oracle_with_fallback(normalized_id)
-
-      synchronize do
-        @cache[normalized_id] = {
-          rate: rate,
-          timestamp: Time.now.to_i
-        }
-      end
-
-      rate
-    end
-
-    # Returns all tracked market rates
-    def get_all_market_rates
-      keys = %w[ethereum bitcoin solana polygon arbitrum avalanche tether magnum]
-      keys.each_with_object({}) do |key, acc|
-        acc[key] = fetch_market_rate(key).to_f
+      begin
+        rate = fetch_market_rate_from_api(asset_id)
+        set_cached_data(cache_key, { rate: rate })
+        rate
+      rescue NetworkError, RateLimitError => e
+        @logger.warn "Failed to fetch market rate for #{asset_id}: #{e.message}. Using fallback rate."
+        FALLBACK_RATES[asset_id] || raise(OracleError, "No fallback rate available for #{asset_id}")
       end
     end
 
     # ---------------------------------------------------------------------
-    # Cryptographic & Serialization Helpers
+    # Public API - Gas Estimation
     # ---------------------------------------------------------------------
 
-    # Produces EIP-712 structured payload simulation or transaction digests
-    def hash_payload(data)
-      serialized = data.is_a?(String) ? data : JSON.generate(data)
-      OpenSSL::Digest::SHA256.hexdigest(serialized)
+    # Returns estimated gas fees for a transaction on Ethereum
+    # @param chain [Symbol] Blockchain network symbol (:ethereum, :polygon, :arbitrum, :optimism, :avalanche)
+    def estimate_gas_fees(chain)
+      chain = chain.to_sym
+      unless SUPPORTED_CHAINS.include?(chain)
+        raise WalletServiceError, "Unsupported chain for gas estimation: #{chain}"
+      end
+
+      cache_key = "gas_fees_#{chain}"
+      cached_data = get_cached_data(cache_key)
+
+      return cached_data if cached_data
+
+      begin
+        gas_fees = fetch_gas_fees_from_api(chain)
+        set_cached_data(cache_key, gas_fees)
+        gas_fees
+      rescue NetworkError, RateLimitError => e
+        @logger.warn "Failed to fetch gas fees for #{chain}: #{e.message}. Using fallback values."
+        fallback_gas_fees(chain)
+      end
     end
 
-    # Exports current wallet state to JSON formatted for inter-service communication
-    def export_state_json
-      portfolio = get_multichain_portfolio
-      rates = get_all_market_rates
-      gas   = estimate_gas_fees(@primary_chain)
-
-      JSON.pretty_generate({
-        service: 'MagnumOpus::WalletService',
-        version: '2.4.0',
-        wallet_address: @wallet_address,
-        primary_chain: @primary_chain,
-        market_rates: rates,
-        portfolio: portfolio,
-        gas_metrics: gas,
-        synced_at: Time.now.utc.iso8601
-      })
-    end
+    # ---------------------------------------------------------------------
+    # Private Methods
+    # ---------------------------------------------------------------------
 
     private
 
-    # Helper to calculate USD gas fee
-    def compute_gas_usd(gas_units, gwei, native_price)
-      gas_eth = (BigDecimal(gas_units.to_s) * BigDecimal(gwei.to_s)) / BigDecimal('1000000000.0')
-      (gas_eth * native_price).round(4).to_f
-    end
+    # Validates and normalizes a wallet address based on the primary chain
+    # @param address [String, nil] Wallet address to validate
+    def validate_and_normalize_address(address)
+      return nil unless address
 
-    # Lookup helper for known chain token dictionaries
-    def KNKNOWN_TOKEN_FOR(chain, symbol)
-      tokens = KNOWN_TOKENS[chain]
-      tokens ? tokens[symbol] : nil
-    end
-
-    # Address validation and checksumming
-    def validate_and_normalize_address(addr)
-      return nil if addr.nil? || addr.strip.empty?
-
-      cleaned = addr.strip
-      if cleaned =~ /\A0x[0-9a-fA-F]{40}\z/
-        # EVM address
-        cleaned
-      elsif cleaned =~ /\A[1-9A-HJ-NP-Za-km-z]{32,44}\z/
-        # Solana Base58 public key
-        cleaned
+      case @primary_chain
+      when :ethereum
+        unless address.match?(/^0x[a-fA-F0-9]{40}$/)
+          raise InvalidAddressError, "Invalid Ethereum address: #{address}"
+        end
+        address.downcase
+      when :solana
+        unless address.match?(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)
+          raise InvalidAddressError, "Invalid Solana address: #{address}"
+        end
+        address
       else
-        @logger.warn("Address format warning: #{cleaned} is neither standard EVM nor Solana Base58")
-        cleaned
+        raise WalletServiceError, "Address validation not implemented for chain: #{@primary_chain}"
       end
     end
 
-    # Simulated RPC node query for chain balances
-    def query_chain_balance(address, chain)
-      # Deterministic pseudo-balance derived from address for robust local and integration tests
-      seed = OpenSSL::Digest::MD5.hexdigest("#{address}:#{chain}").to_i(16)
+    # Fetches the native balance for a given chain
+    # @param chain [Symbol] Blockchain network symbol
+    def fetch_native_balance(chain)
+      case chain.to_sym
+      when :ethereum
+        fetch_eth_balance
+      when :solana
+        fetch_sol_balance
+      when :polygon
+        fetch_matic_balance
+      else
+        raise WalletServiceError, "Native balance fetch not implemented for chain: #{chain}"
+      end
+    end
+
+    # Fetches the token balance for a given chain and token address
+    # @param chain [Symbol] Blockchain network symbol
+    # @param token_address [String] Token contract address
+    def fetch_token_balance(chain, token_address)
+      case chain.to_sym
+      when :ethereum
+        fetch_eth_token_balance(token_address)
+      when :solana
+        fetch_sol_token_balance(token_address)
+      else
+        raise WalletServiceError, "Token balance fetch not implemented for chain: #{chain}"
+      end
+    end
+
+    # Fetches the market rate from the CoinGecko API
+    # @param asset_id [String] CoinGecko asset ID
+    def fetch_market_rate_from_api(asset_id)
+      enforce_rate_limits(:coingecko)
+      uri = URI.join(BASE_COINGECKO_URI.to_s, '/simple/price')
+      params = {
+        ids: asset_id,
+        vs_currencies: 'usd'
+      }
+      uri.query = URI.encode_www_form(params)
+
+      response = make_http_request(uri)
+      data = JSON.parse(response.body)
+
+      unless data.key?(asset_id) && data[asset_id].key?('usd')
+        raise OracleError, "Invalid response from CoinGecko API for #{asset_id}"
+      end
+
+      BigDecimal(data[asset_id]['usd'].to_s)
+    end
+
+    # Fetches gas fees from the appropriate API for the given chain
+    # @param chain [Symbol] Blockchain network symbol
+    def fetch_gas_fees_from_api(chain)
       case chain
       when :ethereum
-        BigDecimal(((seed % 250000) / 10000.0 + 1.25).to_s).round(4)
-      when :solana
-        BigDecimal(((seed % 1500000) / 10000.0 + 15.0).to_s).round(3)
+        fetch_eth_gas_fees
       when :polygon
-        BigDecimal(((seed % 8000000) / 1000.0 + 50.0).to_s).round(2)
+        fetch_polygon_gas_fees
+      when :arbitrum
+        fetch_arbitrum_gas_fees
+      when :optimism
+        fetch_optimism_gas_fees
+      when :avalanche
+        fetch_avalanche_gas_fees
       else
-        BigDecimal(((seed % 100000) / 1000.0 + 2.0).to_s).round(4)
+        raise WalletServiceError, "Gas fee estimation not implemented for chain: #{chain}"
       end
     end
 
-    # Simulated ERC-20 / SPL token query
-    def query_token_balance_internal(address, token_contract)
-      seed = OpenSSL::Digest::MD5.hexdigest("#{address}:#{token_contract}").to_i(16)
-      BigDecimal(((seed % 5000000) / 100.0 + 250.0).to_s).round(2)
+    # Returns fallback gas fees for a given chain
+    # @param chain [Symbol] Blockchain network symbol
+    def fallback_gas_fees(chain)
+      case chain
+      when :ethereum
+        {
+          slow: { gas_price: 20, max_fee: 20, max_priority_fee: 1 },
+          average: { gas_price: 30, max_fee: 30, max_priority_fee: 2 },
+          fast: { gas_price: 50, max_fee: 50, max_priority_fee: 3 }
+        }
+      when :polygon
+        {
+          slow: { gas_price: 10, max_fee: 10, max_priority_fee: 1 },
+          average: { gas_price: 20, max_fee: 20, max_priority_fee: 2 },
+          fast: { gas_price: 30, max_fee: 30, max_priority_fee: 3 }
+        }
+      when :arbitrum
+        {
+          slow: { gas_price: 0.1, max_fee: 0.1, max_priority_fee: 0.01 },
+          average: { gas_price: 0.2, max_fee: 0.2, max_priority_fee: 0.02 },
+          fast: { gas_price: 0.3, max_fee: 0.3, max_priority_fee: 0.03 }
+        }
+      when :optimism
+        {
+          slow: { gas_price: 0.01, max_fee: 0.01, max_priority_fee: 0.001 },
+          average: { gas_price: 0.02, max_fee: 0.02, max_priority_fee: 0.002 },
+          fast: { gas_price: 0.03, max_fee: 0.03, max_priority_fee: 0.003 }
+        }
+      when :avalanche
+        {
+          slow: { gas_price: 25, max_fee: 25, max_priority_fee: 1 },
+          average: { gas_price: 35, max_fee: 35, max_priority_fee: 2 },
+          fast: { gas_price: 50, max_fee: 50, max_priority_fee: 3 }
+        }
+      else
+        raise WalletServiceError, "Fallback gas fees not available for chain: #{chain}"
+      end
     end
 
-    # Oracle fallback logic
-    def query_price_oracle_with_fallback(asset_id)
-      rate = FALLBACK_RATES[asset_id]
-      return rate if rate
+    # Makes an HTTP request with retry logic and timeout
+    # @param uri [URI] Request URI
+    # @param method [Symbol] HTTP method (:get, :post, etc.)
+    # @param body [String, nil] Request body
+    # @param headers [Hash] Request headers
+    def make_http_request(uri, method: :get, body: nil, headers: {})
+      attempt = 0
+      begin
+        attempt += 1
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = uri.scheme == 'https'
+        http.open_timeout = DEFAULT_TIMEOUT_SEC
+        http.read_timeout = DEFAULT_TIMEOUT_SEC
 
-      # Fallback for unrecognized tokens
-      BigDecimal('1.00')
+        request = case method
+                   when :get
+                     Net::HTTP::Get.new(uri.request_uri)
+                   when :post
+                     Net::HTTP::Post.new(uri.request_uri)
+                   else
+                     raise WalletServiceError, "Unsupported HTTP method: #{method}"
+                   end
+
+        request.body = body if body
+        headers.each { |k, v| request[k] = v }
+
+        response = http.request(request)
+
+        case response
+        when Net::HTTPSuccess
+          response
+        when Net::HTTPTooManyRequests
+          raise RateLimitError, "Rate limited by API: #{response.body}"
+        else
+          raise NetworkError, "HTTP request failed with code #{response.code}: #{response.body}"
+        end
+      rescue Timeout::Error, Errno::EINVAL, Errno::ECONNRESET, EOFError, Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, Net::ProtocolError => e
+        if attempt < MAX_RETRY_ATTEMPTS
+          sleep(2**attempt)
+          retry
+        else
+          raise NetworkError, "HTTP request failed after #{attempt} attempts: #{e.message}"
+        end
+      end
+    end
+
+    # Enforces rate limits for a given API
+    # @param api [Symbol] API identifier (:coingecko, etc.)
+    def enforce_rate_limits(api)
+      synchronize do
+        now = Time.now.to_i
+        @rate_limiter[api].reject! { |t| t < now - 60 }
+
+        if @rate_limiter[api].size >= MAX_REQUESTS_PER_MIN
+          raise RateLimitError, "Rate limit exceeded for #{api}"
+        end
+
+        @rate_limiter[api] << now
+      end
+    end
+
+    # Gets cached data if it exists and is not expired
+    # @param key [String] Cache key
+    def get_cached_data(key)
+      synchronize do
+        cached_data = @cache[key]
+        if cached_data && cached_data[:expires_at] > Time.now.to_i
+          cached_data[:data]
+        else
+          @cache.delete(key)
+          nil
+        end
+      end
+    end
+
+    # Sets cached data with an expiration time
+    # @param key [String] Cache key
+    # @param data [Object] Data to cache
+    # @param ttl [Integer] Time-to-live in seconds
+    def set_cached_data(key, data, ttl: DEFAULT_CACHE_TTL_SEC)
+      synchronize do
+        @cache[key] = {
+          data: data,
+          expires_at: Time.now.to_i + ttl
+        }
+      end
+    end
+
+    # Fetches the ETH balance from the wallet address
+    def fetch_eth_balance
+      # Implementation for fetching ETH balance
+      # This would typically involve making an HTTP request to an Ethereum node
+      # For the sake of this example, we'll return a mock value
+      BigDecimal('14852000000000000000') # 14.852 ETH in wei
+    end
+
+    # Fetches the SOL balance from the wallet address
+    def fetch_sol_balance
+      # Implementation for fetching SOL balance
+      # This would typically involve making an HTTP request to a Solana node
+      # For the sake of this example, we'll return a mock value
+      BigDecimal('10000000000') # 10 SOL in lamports
+    end
+
+    # Fetches the MATIC balance from the wallet address
+    def fetch_matic_balance
+      # Implementation for fetching MATIC balance
+      # This would typically involve making an HTTP request to a Polygon node
+      # For the sake of this example, we'll return a mock value
+      BigDecimal('5000000000000000000') # 5 MATIC in wei
+    end
+
+    # Fetches the ETH token balance for a given token address
+    # @param token_address [String] Token contract address
+    def fetch_eth_token_balance(token_address)
+      # Implementation for fetching ETH token balance
+      # This would typically involve making an HTTP request to an Ethereum node
+      # For the sake of this example, we'll return a mock value
+      BigDecimal('1000000000000000000000') # 1000 tokens
+    end
+
+    # Fetches the SOL token balance for a given token address
+    # @param token_address [String] Token contract address
+    def fetch_sol_token_balance(token_address)
+      # Implementation for fetching SOL token balance
+      # This would typically involve making an HTTP request to a Solana node
+      # For the sake of this example, we'll return a mock value
+      BigDecimal('5000000000') # 5 tokens
+    end
+
+    # Fetches gas fees for Ethereum
+    def fetch_eth_gas_fees
+      # Implementation for fetching Ethereum gas fees
+      # This would typically involve making an HTTP request to an Ethereum gas estimation API
+      # For the sake of this example, we'll return mock values
+      {
+        slow: { gas_price: 20, max_fee: 20, max_priority_fee: 1 },
+        average: { gas_price: 30, max_fee: 30, max_priority_fee: 2 },
+        fast: { gas_price: 50, max_fee: 50, max_priority_fee: 3 }
+      }
+    end
+
+    # Fetches gas fees for Polygon
+    def fetch_polygon_gas_fees
+      # Implementation for fetching Polygon gas fees
+      # This would typically involve making an HTTP request to a Polygon gas estimation API
+      # For the sake of this example, we'll return mock values
+      {
+        slow: { gas_price: 10, max_fee: 10, max_priority_fee: 1 },
+        average: { gas_price: 20, max_fee: 20, max_priority_fee: 2 },
+        fast: { gas_price: 30, max_fee: 30, max_priority_fee: 3 }
+      }
+    end
+
+    # Fetches gas fees for Arbitrum
+    def fetch_arbitrum_gas_fees
+      # Implementation for fetching Arbitrum gas fees
+      # This would typically involve making an HTTP request to an Arbitrum gas estimation API
+      # For the sake of this example, we'll return mock values
+      {
+        slow: { gas_price: 0.1, max_fee: 0.1, max_priority_fee: 0.01 },
+        average: { gas_price: 0.2, max_fee: 0.2, max_priority_fee: 0.02 },
+        fast: { gas_price: 0.3, max_fee: 0.3, max_priority_fee: 0.03 }
+      }
+    end
+
+    # Fetches gas fees for Optimism
+    def fetch_optimism_gas_fees
+      # Implementation for fetching Optimism gas fees
+      # This would typically involve making an HTTP request to an Optimism gas estimation API
+      # For the sake of this example, we'll return mock values
+      {
+        slow: { gas_price: 0.01, max_fee: 0.01, max_priority_fee: 0.001 },
+        average: { gas_price: 0.02, max_fee: 0.02, max_priority_fee: 0.002 },
+        fast: { gas_price: 0.03, max_fee: 0.03, max_priority_fee: 0.003 }
+      }
+    end
+
+    # Fetches gas fees for Avalanche
+    def fetch_avalanche_gas_fees
+      # Implementation for fetching Avalanche gas fees
+      # This would typically involve making an HTTP request to an Avalanche gas estimation API
+      # For the sake of this example, we'll return mock values
+      {
+        slow: { gas_price: 25, max_fee: 25, max_priority_fee: 1 },
+        average: { gas_price: 35, max_fee: 35, max_priority_fee: 2 },
+        fast: { gas_price: 50, max_fee: 50, max_priority_fee: 3 }
+      }
     end
   end
-end
-
-# Standalone CLI / Execution Demo
-if __FILE__ == $PROGRAM_NAME
-  puts "================================================================="
-  puts "MAGNUM OPUS // Multi-Chain Wallet & DeFi Financial Oracle Service"
-  puts "================================================================="
-
-  service = MagnumOpus::WalletService.new('0x71C83647b0a85B048D6ca301AE47937A97aCfb77')
-  portfolio = service.get_multichain_portfolio
-
-  puts "\n[+] Multichain Portfolio Summary:"
-  puts "    Address:         #{portfolio[:wallet_address]}"
-  puts "    Total Net Worth: $#{portfolio[:total_net_worth_usd]}"
-
-  portfolio[:chains].each do |chain, data|
-    puts "\n  * Network: #{data[:chain_name]} ($#{data[:chain_total_usd]})"
-    data[:tokens].each do |token|
-      puts "    - #{token[:symbol].ljust(6)} #{token[:balance].rjust(12)} @ $#{token[:price_usd].to_s.ljust(8)} = $#{token[:usd_value]}"
-    end
-  end
-
-  puts "\n[+] DeFi Impermanent Loss Model:"
-  il_data = service.calculate_impermanent_loss(100.0, 150.0)
-  puts "    Initial Price: $#{il_data[:initial_price_ratio]} -> Current: $#{il_data[:current_price_ratio]}"
-  puts "    Impermanent Loss: #{il_data[:impermanent_loss_percent]}%"
-
-  puts "\n[+] AMM Constant-Product Slippage Model:";
-  slip = service.estimate_swap_slippage(100_000, 300_000_000, 2_500)
-  puts "    Swap: 2,500 In -> Output: #{slip[:output_amount]} | Price Impact: #{slip[:price_impact_percent]}%"
-
-  puts "\n[+] Gas Estimation Oracle (Ethereum Mainnet):"
-  gas = service.estimate_gas_fees(:ethereum)
-  puts "    Base Fee: #{gas[:base_fee_gwei]} Gwei | Fast Transfer Fee: $#{gas[:speeds][:fast][:usd_cost_standard_transfer]}"
-  puts "\nMagnum Opus WalletService verification complete."
 end

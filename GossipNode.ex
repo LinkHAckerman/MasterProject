@@ -6,7 +6,8 @@ defmodule GossipNode.Application do
       {Registry, keys: :unique, name: GossipNode.PeerRegistry},
       {GossipNode.Mempool, []},
       {GossipNode.GossipServer, []},
-      {GossipNode.PeerDiscovery, []}
+      {GossipNode.PeerDiscovery, []},
+      {GossipNode.PeerConnectionManager, []}
     ]
 
     opts = [strategy: :one_for_one, name: GossipNode.Supervisor]
@@ -211,23 +212,12 @@ defmodule GossipNode.PeerConnectionManager do
     {:ok, state}
   end
 
-  def add_peer(peer_pid) do
-    GenServer.cast(__MODULE__, {:add_peer, peer_pid})
-  end
-
-  def remove_peer(peer_pid) do
-    GenServer.cast(__MODULE__, {:remove_peer, peer_pid})
-  end
-
-  def handle_cast({:add_peer, peer_pid}, state) do
-    GossipNode.PeerRegistry.add_peer(peer_pid)
+  def handle_info({:new_peer, peer_pid}, state) do
     GossipNode.PeerHandler.start_link(peer_pid)
     {:noreply, state}
   end
 
-  def handle_cast({:remove_peer, peer_pid}, state) do
-    GossipNode.PeerRegistry.remove_peer(peer_pid)
-    GenServer.cast({:peer_handler, peer_pid}, :disconnect)
+  def handle_info({:peer_disconnected, peer_pid}, state) do
     {:noreply, state}
   end
 end
