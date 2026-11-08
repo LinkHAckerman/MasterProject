@@ -171,190 +171,124 @@ body {
 .text-emerald { color: var(--accent-emerald); }
 .text-rose { color: var(--accent-rose); }
 
-/* Utility Spacing */
-.m-0 { margin: 0; }
-.m-1 { margin: var(--spacing-xs); }
-.m-2 { margin: var(--spacing-sm); }
-.m-3 { margin: var(--spacing-md); }
-.mt-1 { margin-top: var(--spacing-xs); }
-.mb-1 { margin-bottom: var(--spacing-xs); }
-.ml-1 { margin-left: var(--spacing-xs); }
-.mr-1 { margin-right: var(--spacing-xs); }
-.p-0 { padding: 0; }
-.p-1 { padding: var(--spacing-xs); }
-.p-2 { padding: var(--spacing-sm); }
-.p-3 { padding: var(--spacing-md); }
-.pt-1 { padding-top: var(--spacing-xs); }
-.pb-1 { padding-bottom: var(--spacing-xs); }
-.pl-1 { padding-left: var(--spacing-xs); }
-.pr-1 { padding-right: var(--spacing-xs); }
+/* Layout Helpers */
+.container {
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 var(--spacing-md);
+}
 
-/* Button Component */
+.flex {
+    display: flex;
+}
+
+.flex-col {
+    flex-direction: column;
+}
+
+.items-center {
+    align-items: center;
+}
+
+.justify-center {
+    justify-content: center;
+}
+
+.gap-md {
+    gap: var(--spacing-md);
+}
+
+/* Button Styles */
 .btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.5rem;
     padding: var(--spacing-sm) var(--spacing-md);
-    border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    background: var(--bg-card);
-    color: var(--text-main);
-    font-size: var(--font-size-sm);
+    font-weight: 500;
+    transition: all var(--transition-normal);
     cursor: pointer;
-    transition: var(--transition-fast);
-    box-shadow: var(--shadow-sm);
-}
-
-.btn:hover {
-    background: var(--bg-card-hover);
-    border-color: var(--border-active);
-    box-shadow: var(--shadow-md);
+    text-decoration: none;
 }
 
 .btn-primary {
-    background: var(--accent-cyan);
-    border-color: var(--accent-cyan);
-    color: #030611;
+    background-color: var(--accent-cyan);
+    color: var(--bg-primary);
+    border: 1px solid var(--accent-cyan);
 }
 
 .btn-primary:hover {
-    background: var(--accent-purple);
-    border-color: var(--accent-purple);
+    background-color: transparent;
+    color: var(--accent-cyan);
+    box-shadow: var(--glow-cyan-sm);
 }
 
 .btn-secondary {
-    background: var(--bg-glass);
-    border-color: var(--border-subtle);
+    background-color: var(--bg-secondary);
     color: var(--text-main);
+    border: 1px solid var(--border-color);
 }
 
-/* Card Component */
+.btn-secondary:hover {
+    background-color: var(--bg-card);
+    box-shadow: var(--shadow-sm);
+}
+
+/* Card Styles */
 .card {
-    background: var(--bg-card);
+    background-color: var(--bg-card);
     border-radius: var(--radius-lg);
     padding: var(--spacing-lg);
-    box-shadow: var(--shadow-md);
-    transition: var(--transition-normal);
+    border: 1px solid var(--border-color);
+    transition: all var(--transition-normal);
 }
 
 .card:hover {
-    background: var(--bg-card-hover);
-    box-shadow: var(--shadow-lg);
-}
-
-/* Grid System */
-.grid {
-    display: grid;
-    gap: var(--spacing-lg);
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-}
-
-/* Responsive Typography */
-@media (max-width: 640px) {
-    .text-5xl { font-size: var(--font-size-3xl); }
-    .text-4xl { font-size: var(--font-size-2xl); }
-    .text-3xl { font-size: var(--font-size-xl); }
-}
-
-/* Dark Mode Toggle */
-body.dark-mode {
-    --bg-primary: #0a0c1f;
-    --bg-secondary: #11142a;
-    --bg-card: rgba(20, 25, 45, 0.85);
-    --bg-card-hover: rgba(30, 35, 55, 0.9);
-    --text-main: #e5e7eb;
-    --text-muted: #9ca3af;
-    --border-color: rgba(100, 149, 237, 0.2);
-    --border-active: rgba(100, 149, 237, 0.6);
-}
-
-/* Animations */
-@keyframes pulse {
-    0% { opacity: 1; }
-    50% { opacity: 0.5; }
-    100% { opacity: 1; }
-}
-
-.pulse {
-    animation: pulse var(--transition-slow) infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-.spin {
-    animation: spin 2s linear infinite;
-}
-
-/* Tooltip */
-.tooltip {
-    position: relative;
-    cursor: help;
-}
-
-.tooltip::after {
-    content: attr(data-tip);
-    position: absolute;
-    bottom: 125%;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--bg-secondary);
-    color: var(--text-main);
-    padding: var(--spacing-xs) var(--spacing-sm);
-    border-radius: var(--radius-sm);
-    white-space: nowrap;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity var(--transition-fast);
-    z-index: var(--z-tooltip);
-}
-
-.tooltip:hover::after {
-    opacity: 1;
-}
-
-/* Modal */
-.modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(4px);
-    z-index: var(--z-modal);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.modal {
-    background: var(--bg-card);
-    border-radius: var(--radius-xl);
-    padding: var(--spacing-xl);
-    max-width: 90%;
-    max-height: 80vh;
-    overflow-y: auto;
-    box-shadow: var(--shadow-2xl);
-}
-
-/* Toast */
-.toast {
-    position: fixed;
-    bottom: var(--spacing-lg);
-    right: var(--spacing-lg);
-    background: var(--bg-glass);
-    color: var(--text-main);
-    padding: var(--spacing-sm) var(--spacing-md);
-    border-radius: var(--radius-md);
+    background-color: var(--bg-card-hover);
     box-shadow: var(--shadow-md);
-    animation: slide-in 0.3s ease-out forwards;
-    z-index: var(--z-toast);
+    transform: translateY(-2px);
 }
 
-@keyframes slide-in {
-    from { transform: translateX(100%); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
+/* Input Styles */
+.input {
+    width: 100%;
+    padding: var(--spacing-sm) var(--spacing-md);
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-main);
+    font-family: var(--font-mono);
+    transition: all var(--transition-normal);
 }
 
-/* End of Magnum Opus Core Styles */
+.input:focus {
+    outline: none;
+    border-color: var(--accent-cyan);
+    box-shadow: var(--glow-cyan-sm);
+}
+
+/* Animation Helpers */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .container {
+        padding: 0 var(--spacing-sm);
+    }
+
+    .text-4xl {
+        font-size: var(--font-size-3xl);
+    }
+
+    .text-3xl {
+        font-size: var(--font-size-2xl);
+    }
+}

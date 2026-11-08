@@ -213,31 +213,23 @@ defmodule GossipNode.PeerConnectionManager do
     {:ok, state}
   end
 
-  def connect_to_peer(peer_pid) do
-    GenServer.call(__MODULE__, {:connect_to_peer, peer_pid})
+  def add_peer(peer_pid) do
+    GenServer.cast(__MODULE__, {:add_peer, peer_pid})
   end
 
-  def disconnect_from_peer(peer_pid) do
-    GenServer.call(__MODULE__, {:disconnect_from_peer, peer_pid})
+  def remove_peer(peer_pid) do
+    GenServer.cast(__MODULE__, {:remove_peer, peer_pid})
   end
 
-  def handle_call({:connect_to_peer, peer_pid}, _from, state) do
-    if Map.has_key?(state, peer_pid) do
-      {:reply, {:error, :already_connected}, state}
-    else
-      new_state = Map.put(state, peer_pid, {:peer_handler, peer_pid})
-      GossipNode.PeerHandler.start_link(peer_pid)
-      {:reply, {:ok, :connected}, new_state}
-    end
+  def handle_cast({:add_peer, peer_pid}, state) do
+    GossipNode.PeerRegistry.add_peer(peer_pid)
+    GossipNode.PeerHandler.start_link(peer_pid)
+    {:noreply, state}
   end
 
-  def handle_call({:disconnect_from_peer, peer_pid}, _from, state) do
-    if Map.has_key?(state, peer_pid) do
-      GenServer.cast(Map.get(state, peer_pid), :disconnect)
-      new_state = Map.delete(state, peer_pid)
-      {:reply, {:ok, :disconnected}, new_state}
-    else
-      {:reply, {:error, :not_connected}, state}
-    end
+  def handle_cast({:remove_peer, peer_pid}, state) do
+    GossipNode.PeerRegistry.remove_peer(peer_pid)
+    GenServer.cast({:peer_handler, peer_pid}, :disconnect)
+    {:noreply, state}
   end
 end

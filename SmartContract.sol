@@ -75,6 +75,7 @@ contract MagnumOpusNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC2981, A
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     uint256 public mintPrice = 0.05 ether;
     uint256 public maxSupply = 10000;
@@ -87,6 +88,7 @@ contract MagnumOpusNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC2981, A
     event MintPriceUpdated(uint256 newPrice);
     event BaseURIUpdated(string newBaseURI);
     event RoyaltyUpdated(address receiver, uint96 feeNumerator);
+    event FundsWithdrawn(address indexed recipient, uint256 amount);
 
     constructor(
         string memory baseURI,
@@ -96,6 +98,7 @@ contract MagnumOpusNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC2981, A
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ADMIN_ROLE, msg.sender);
         _grantRole(MINTER_ROLE, msg.sender);
+        _grantRole(PAUSER_ROLE, msg.sender);
         _baseTokenURI = baseURI;
 
         _setDefaultRoyalty(royaltyReceiver, royaltyFeeBps);
@@ -140,26 +143,27 @@ contract MagnumOpusNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC2981, A
         emit RoyaltyUpdated(receiver, feeNumerator);
     }
 
-    function withdrawETH(address payable to) external onlyRole(ADMIN_ROLE) {
-        require(to != address(0), "MNFT: Invalid target address");
-        uint256 balance = address(this).balance;
-        (bool success, ) = to.call{value: balance}("");
-        require(success, "MNFT: ETH Transfer failed");
-    }
-
-    function pause() external onlyRole(ADMIN_ROLE) {
+    function pause() external onlyRole(PAUSER_ROLE) {
         _pause();
     }
 
-    function unpause() external onlyRole(ADMIN_ROLE) {
+    function unpause() external onlyRole(PAUSER_ROLE) {
         _unpause();
+    }
+
+    function withdraw(address payable recipient) external onlyRole(ADMIN_ROLE) nonReentrant {
+        require(recipient != address(0), "MNFT: Zero address recipient");
+        uint256 balance = address(this).balance;
+        require(balance > 0, "MNFT: No ETH balance");
+        (bool success, ) = recipient.call{value: balance}("");
+        require(success, "MNFT: Transfer failed");
+        emit FundsWithdrawn(recipient, balance);
     }
 
     function _baseURI() internal view override returns (string memory) {
         return _baseTokenURI;
     }
 
-    // Required overrides for Solidity multiple inheritance
     function _update(address to, uint256 tokenId, address auth)
         internal
         override(ERC721, ERC721Enumerable)
@@ -195,185 +199,374 @@ contract MagnumOpusNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC2981, A
 }
 
 /**
- * @title MagnumOpusDeFi
- * @dev Institutional-grade DeFi Vault & Staking Engine supporting dynamic APY rewards,
- * multi-token yield farming pools, compound interest calculations, and emergency withdrawals.
+ * @title MagnumOpusStaking
+ * @dev Multi-tier DeFi staking vault supporting lockup tiers, yield multipliers, and emergency unstake.
  */
-contract MagnumOpusDeFi is AccessControl, ReentrancyGuard, Pausable {
+contract MagnumOpusStaking is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
+    bytes32 public constant DISTRIBUTOR_ROLE = keccak256("DISTRIBUTOR_ROLE");
 
-    struct PoolInfo {
-        IERC20 stakingToken;
-        IERC20 rewardToken;
-        uint256 rewardPerBlock;
-        uint256 lastRewardBlock;
-        uint256 accRewardPerShare;
-        uint256 totalStaked;
-        uint256 lockPeriod;
+    struct TierInfo {
+        uint256 lockDuration; // in seconds
+        uint256 multiplierBps; // 10000 = 1.0x, 15000 = 1.5x
+        bool enabled;
     }
 
-    struct UserInfo {
+    struct Stake {
         uint256 amount;
+        uint256 weightedAmount;
+        uint256 startTime;
+        uint256 unlockTime;
         uint256 rewardDebt;
-        uint256 depositTimestamp;
-        uint256 pendingRewards;
+        uint8 tierIndex;
+        bool withdrawn;
     }
 
-    PoolInfo[] public poolInfo;
-    mapping(uint256 => mapping(address => UserInfo)) public userInfo;
+    IERC20 public immutable stakingToken;
+    IERC20 public immutable rewardToken;
 
-    event PoolAdded(uint256 indexed pid, address indexed stakingToken, address indexed rewardToken, uint256 rewardPerBlock);
-    event Deposit(address indexed user, uint256 indexed pid, uint256 amount);
-    event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
-    event RewardClaimed(address indexed user, uint256 indexed pid, uint256 amount);
-    event EmergencyWithdraw(address indexed user, uint256 indexed pid, uint256 amount);
+    uint256 public constant PRECISION = 1e18;
+    uint256 public constant EMERGENCY_PENALTY_BPS = 1000; // 10% penalty on early exit
+    uint256 public accRewardPerShare;
+    uint256 public lastRewardTime;
+    uint256 public rewardRatePerSecond;
+    uint256 public totalWeightedStake;
+    address public treasury;
 
-    constructor() {
+    TierInfo[] public tiers;
+    mapping(address => Stake[]) public userStakes;
+
+    event Staked(address indexed user, uint256 indexed stakeId, uint256 amount, uint8 tierIndex, uint256 unlockTime);
+    event Unstaked(address indexed user, uint256 indexed stakeId, uint256 amount, uint256 reward);
+    event EmergencyUnstaked(address indexed user, uint256 indexed stakeId, uint256 returnedAmount, uint256 penalty);
+    event RewardClaimed(address indexed user, uint256 indexed stakeId, uint256 reward);
+    event RewardRateUpdated(uint256 newRate);
+    event TierConfigured(uint8 indexed tierIndex, uint256 lockDuration, uint256 multiplierBps, bool enabled);
+
+    constructor(address _stakingToken, address _rewardToken, address _treasury) {
+        require(_stakingToken != address(0) && _rewardToken != address(0), "Invalid token addresses");
+        require(_treasury != address(0), "Invalid treasury address");
+
+        stakingToken = IERC20(_stakingToken);
+        rewardToken = IERC20(_rewardToken);
+        treasury = _treasury;
+        lastRewardTime = block.timestamp;
+
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ADMIN_ROLE, msg.sender);
-        _grantRole(OPERATOR_ROLE, msg.sender);
+        _grantRole(DISTRIBUTOR_ROLE, msg.sender);
+
+        // Standard lock tiers: Flexible, 30 days, 90 days, 180 days, 365 days
+        tiers.push(TierInfo({lockDuration: 0, multiplierBps: 10000, enabled: true}));
+        tiers.push(TierInfo({lockDuration: 30 days, multiplierBps: 12500, enabled: true}));
+        tiers.push(TierInfo({lockDuration: 90 days, multiplierBps: 15000, enabled: true}));
+        tiers.push(TierInfo({lockDuration: 180 days, multiplierBps: 20000, enabled: true}));
+        tiers.push(TierInfo({lockDuration: 365 days, multiplierBps: 30000, enabled: true}));
     }
 
-    function poolLength() external view returns (uint256) {
-        return poolInfo.length;
-    }
-
-    function addPool(
-        IERC20 stakingToken,
-        IERC20 rewardToken,
-        uint256 rewardPerBlock,
-        uint256 lockPeriod
-    ) external onlyRole(ADMIN_ROLE) {
-        poolInfo.push(PoolInfo({
-            stakingToken: stakingToken,
-            rewardToken: rewardToken,
-            rewardPerBlock: rewardPerBlock,
-            lastRewardBlock: block.number,
-            accRewardPerShare: 0,
-            totalStaked: 0,
-            lockPeriod: lockPeriod
-        }));
-
-        emit PoolAdded(poolInfo.length - 1, address(stakingToken), address(rewardToken), rewardPerBlock);
-    }
-
-    function updatePool(uint256 pid) public {
-        PoolInfo storage pool = poolInfo[pid];
-        if (block.number <= pool.lastRewardBlock) return;
-
-        if (pool.totalStaked == 0) {
-            pool.lastRewardBlock = block.number;
+    function updatePool() public {
+        if (block.timestamp <= lastRewardTime) {
             return;
         }
 
-        uint256 blocks = block.number - pool.lastRewardBlock;
-        uint256 reward = blocks * pool.rewardPerBlock;
-        pool.accRewardPerShare += (reward * 1e12) / pool.totalStaked;
-        pool.lastRewardBlock = block.number;
-    }
-
-    function pendingReward(uint256 pid, address account) external view returns (uint256) {
-        PoolInfo storage pool = poolInfo[pid];
-        UserInfo storage user = userInfo[pid][account];
-        uint256 accRewardPerShare = pool.accRewardPerShare;
-
-        if (block.number > pool.lastRewardBlock && pool.totalStaked != 0) {
-            uint256 blocks = block.number - pool.lastRewardBlock;
-            uint256 reward = blocks * pool.rewardPerBlock;
-            accRewardPerShare += (reward * 1e12) / pool.totalStaked;
+        if (totalWeightedStake == 0) {
+            lastRewardTime = block.timestamp;
+            return;
         }
 
-        return (user.amount * accRewardPerShare) / 1e12 - user.rewardDebt + user.pendingRewards;
+        uint256 elapsed = block.timestamp - lastRewardTime;
+        uint256 reward = elapsed * rewardRatePerSecond;
+        accRewardPerShare += (reward * PRECISION) / totalWeightedStake;
+        lastRewardTime = block.timestamp;
     }
 
-    function deposit(uint256 pid, uint256 amount) external nonReentrant whenNotPaused {
-        PoolInfo storage pool = poolInfo[pid];
-        UserInfo storage user = userInfo[pid][msg.sender];
+    function stake(uint256 amount, uint8 tierIndex) external nonReentrant whenNotPaused {
+        require(amount > 0, "Cannot stake 0");
+        require(tierIndex < tiers.length, "Invalid tier index");
+        TierInfo memory tier = tiers[tierIndex];
+        require(tier.enabled, "Tier is disabled");
 
-        updatePool(pid);
+        updatePool();
 
-        if (user.amount > 0) {
-            uint256 pending = (user.amount * pool.accRewardPerShare) / 1e12 - user.rewardDebt;
-            user.pendingRewards += pending;
+        uint256 weighted = (amount * tier.multiplierBps) / 10000;
+        totalWeightedStake += weighted;
+
+        stakingToken.safeTransferFrom(msg.sender, address(this), amount);
+
+        uint256 stakeId = userStakes[msg.sender].length;
+        userStakes[msg.sender].push(Stake({
+            amount: amount,
+            weightedAmount: weighted,
+            startTime: block.timestamp,
+            unlockTime: block.timestamp + tier.lockDuration,
+            rewardDebt: (weighted * accRewardPerShare) / PRECISION,
+            tierIndex: tierIndex,
+            withdrawn: false
+        }));
+
+        emit Staked(msg.sender, stakeId, amount, tierIndex, block.timestamp + tier.lockDuration);
+    }
+
+    function pendingReward(address account, uint256 stakeId) public view returns (uint256) {
+        if (stakeId >= userStakes[account].length) return 0;
+        Stake memory st = userStakes[account][stakeId];
+        if (st.withdrawn) return 0;
+
+        uint256 currentAcc = accRewardPerShare;
+        if (block.timestamp > lastRewardTime && totalWeightedStake > 0) {
+            uint256 elapsed = block.timestamp - lastRewardTime;
+            uint256 reward = elapsed * rewardRatePerSecond;
+            currentAcc += (reward * PRECISION) / totalWeightedStake;
         }
 
-        if (amount > 0) {
-            pool.stakingToken.safeTransferFrom(msg.sender, address(this), amount);
-            user.amount += amount;
-            pool.totalStaked += amount;
+        uint256 accumulated = (st.weightedAmount * currentAcc) / PRECISION;
+        if (accumulated > st.rewardDebt) {
+            return accumulated - st.rewardDebt;
+        }
+        return 0;
+    }
+
+    function claimReward(uint256 stakeId) public nonReentrant whenNotPaused {
+        require(stakeId < userStakes[msg.sender].length, "Invalid stake ID");
+        Stake storage st = userStakes[msg.sender][stakeId];
+        require(!st.withdrawn, "Stake already withdrawn");
+
+        updatePool();
+
+        uint256 reward = ((st.weightedAmount * accRewardPerShare) / PRECISION) - st.rewardDebt;
+        if (reward > 0) {
+            st.rewardDebt = (st.weightedAmount * accRewardPerShare) / PRECISION;
+            rewardToken.safeTransfer(msg.sender, reward);
+            emit RewardClaimed(msg.sender, stakeId, reward);
+        }
+    }
+
+    function unstake(uint256 stakeId) external nonReentrant {
+        require(stakeId < userStakes[msg.sender].length, "Invalid stake ID");
+        Stake storage st = userStakes[msg.sender][stakeId];
+        require(!st.withdrawn, "Stake already withdrawn");
+        require(block.timestamp >= st.unlockTime, "Tokens are still locked");
+
+        updatePool();
+
+        uint256 reward = ((st.weightedAmount * accRewardPerShare) / PRECISION) - st.rewardDebt;
+        uint256 amountToReturn = st.amount;
+        totalWeightedStake -= st.weightedAmount;
+        st.withdrawn = true;
+
+        if (reward > 0) {
+            rewardToken.safeTransfer(msg.sender, reward);
+        }
+        stakingToken.safeTransfer(msg.sender, amountToReturn);
+
+        emit Unstaked(msg.sender, stakeId, amountToReturn, reward);
+    }
+
+    function emergencyUnstake(uint256 stakeId) external nonReentrant {
+        require(stakeId < userStakes[msg.sender].length, "Invalid stake ID");
+        Stake storage st = userStakes[msg.sender][stakeId];
+        require(!st.withdrawn, "Stake already withdrawn");
+
+        updatePool();
+        totalWeightedStake -= st.weightedAmount;
+        st.withdrawn = true;
+
+        uint256 penalty = (st.amount * EMERGENCY_PENALTY_BPS) / 10000;
+        uint256 netAmount = st.amount - penalty;
+
+        if (penalty > 0) {
+            stakingToken.safeTransfer(treasury, penalty);
+        }
+        stakingToken.safeTransfer(msg.sender, netAmount);
+
+        emit EmergencyUnstaked(msg.sender, stakeId, netAmount, penalty);
+    }
+
+    function setRewardRate(uint256 newRate) external onlyRole(DISTRIBUTOR_ROLE) {
+        updatePool();
+        rewardRatePerSecond = newRate;
+        emit RewardRateUpdated(newRate);
+    }
+
+    function configureTier(uint8 tierIndex, uint256 lockDuration, uint256 multiplierBps, bool enabled) external onlyRole(ADMIN_ROLE) {
+        if (tierIndex < tiers.length) {
+            tiers[tierIndex] = TierInfo(lockDuration, multiplierBps, enabled);
+        } else {
+            require(tierIndex == tiers.length, "Invalid index for push");
+            tiers.push(TierInfo(lockDuration, multiplierBps, enabled));
+        }
+        emit TierConfigured(tierIndex, lockDuration, multiplierBps, enabled);
+    }
+
+    function getUserStakeCount(address account) external view returns (uint256) {
+        return userStakes[account].length;
+    }
+}
+
+/**
+ * @title MagnumOpusAMM
+ * @dev Constant-product AMM liquidity pair (x * y = k) with TWAP oracle price accumulation.
+ */
+contract MagnumOpusAMM is ERC20, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
+    IERC20 public immutable token0;
+    IERC20 public immutable token1;
+
+    uint112 private reserve0;
+    uint112 private reserve1;
+    uint32 private blockTimestampLast;
+
+    uint256 public price0CumulativeLast;
+    uint256 public price1CumulativeLast;
+    uint256 public constant MINIMUM_LIQUIDITY = 1000;
+
+    event Mint(address indexed sender, uint256 amount0, uint256 amount1);
+    event Burn(address indexed sender, uint256 amount0, uint256 amount1, address indexed to);
+    event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to);
+    event Sync(uint112 reserve0, uint112 reserve1);
+
+    constructor(address _token0, address _token1) ERC20("Magnum Opus LP", "MOP-LP") {
+        require(_token0 != address(0) && _token1 != address(0), "AMM: Zero token");
+        require(_token0 != _token1, "AMM: Identical tokens");
+
+        if (_token0 < _token1) {
+            token0 = IERC20(_token0);
+            token1 = IERC20(_token1);
+        } else {
+            token0 = IERC20(_token1);
+            token1 = IERC20(_token0);
+        }
+    }
+
+    function getReserves() public view returns (uint112 _reserve0, uint112 _reserve1, uint32 _blockTimestampLast) {
+        _reserve0 = reserve0;
+        _reserve1 = reserve1;
+        _blockTimestampLast = blockTimestampLast;
+    }
+
+    function _updateReserves(uint256 balance0, uint256 balance1, uint112 _reserve0, uint112 _reserve1) private {
+        require(balance0 <= type(uint112).max && balance1 <= type(uint112).max, "AMM: Overflow");
+        uint32 blockTimestamp = uint32(block.timestamp % 2**32);
+        uint32 timeElapsed = blockTimestamp - blockTimestampLast;
+
+        if (timeElapsed > 0 && _reserve0 != 0 && _reserve1 != 0) {
+            price0CumulativeLast += uint256((uint256(_reserve1) << 112) / _reserve0) * timeElapsed;
+            price1CumulativeLast += uint256((uint256(_reserve0) << 112) / _reserve1) * timeElapsed;
         }
 
-        user.depositTimestamp = block.timestamp;
-        user.rewardDebt = (user.amount * pool.accRewardPerShare) / 1e12;
-
-        emit Deposit(msg.sender, pid, amount);
+        reserve0 = uint112(balance0);
+        reserve1 = uint112(balance1);
+        blockTimestampLast = blockTimestamp;
+        emit Sync(reserve0, reserve1);
     }
 
-    function withdraw(uint256 pid, uint256 amount) external nonReentrant {
-        PoolInfo storage pool = poolInfo[pid];
-        UserInfo storage user = userInfo[pid][msg.sender];
+    function addLiquidity(
+        uint256 amount0Desired,
+        uint256 amount1Desired,
+        address to
+    ) external nonReentrant returns (uint256 liquidity) {
+        (uint112 _reserve0, uint112 _reserve1,) = getReserves();
+        uint256 amount0;
+        uint256 amount1;
 
-        require(user.amount >= amount, "DeFi: Withdraw amount exceeds balance");
-        require(block.timestamp >= user.depositTimestamp + pool.lockPeriod, "DeFi: Tokens locked in lockup period");
-
-        updatePool(pid);
-
-        uint256 pending = (user.amount * pool.accRewardPerShare) / 1e12 - user.rewardDebt;
-        user.pendingRewards += pending;
-
-        if (amount > 0) {
-            user.amount -= amount;
-            pool.totalStaked -= amount;
-            pool.stakingToken.safeTransfer(msg.sender, amount);
+        if (_reserve0 == 0 && _reserve1 == 0) {
+            amount0 = amount0Desired;
+            amount1 = amount1Desired;
+        } else {
+            uint256 amount1Optimal = (amount0Desired * _reserve1) / _reserve0;
+            if (amount1Optimal <= amount1Desired) {
+                amount0 = amount0Desired;
+                amount1 = amount1Optimal;
+            } else {
+                uint256 amount0Optimal = (amount1Desired * _reserve0) / _reserve1;
+                require(amount0Optimal <= amount0Desired, "AMM: Calculation error");
+                amount0 = amount0Optimal;
+                amount1 = amount1Desired;
+            }
         }
 
-        user.rewardDebt = (user.amount * pool.accRewardPerShare) / 1e12;
+        token0.safeTransferFrom(msg.sender, address(this), amount0);
+        token1.safeTransferFrom(msg.sender, address(this), amount1);
 
-        emit Withdraw(msg.sender, pid, amount);
+        uint256 total = totalSupply();
+        if (total == 0) {
+            liquidity = _sqrt(amount0 * amount1) - MINIMUM_LIQUIDITY;
+            _mint(address(0xdead), MINIMUM_LIQUIDITY); // Permanently lock first LP tokens
+        } else {
+            liquidity = _min((amount0 * total) / _reserve0, (amount1 * total) / _reserve1);
+        }
+
+        require(liquidity > 0, "AMM: Insufficient liquidity minted");
+        _mint(to, liquidity);
+        _updateReserves(token0.balanceOf(address(this)), token1.balanceOf(address(this)), _reserve0, _reserve1);
+        emit Mint(msg.sender, amount0, amount1);
     }
 
-    function claimReward(uint256 pid) external nonReentrant whenNotPaused {
-        PoolInfo storage pool = poolInfo[pid];
-        UserInfo storage user = userInfo[pid][msg.sender];
+    function removeLiquidity(
+        uint256 liquidity,
+        address to
+    ) external nonReentrant returns (uint256 amount0, uint256 amount1) {
+        require(liquidity > 0, "AMM: Invalid liquidity");
+        (uint112 _reserve0, uint112 _reserve1,) = getReserves();
+        uint256 total = totalSupply();
 
-        updatePool(pid);
+        amount0 = (liquidity * token0.balanceOf(address(this))) / total;
+        amount1 = (liquidity * token1.balanceOf(address(this))) / total;
+        require(amount0 > 0 && amount1 > 0, "AMM: Insufficient output");
 
-        uint256 pending = (user.amount * pool.accRewardPerShare) / 1e12 - user.rewardDebt + user.pendingRewards;
-        require(pending > 0, "DeFi: No pending rewards");
+        _burn(msg.sender, liquidity);
+        token0.safeTransfer(to, amount0);
+        token1.safeTransfer(to, amount1);
 
-        user.pendingRewards = 0;
-        user.rewardDebt = (user.amount * pool.accRewardPerShare) / 1e12;
-
-        pool.rewardToken.safeTransfer(msg.sender, pending);
-
-        emit RewardClaimed(msg.sender, pid, pending);
+        _updateReserves(token0.balanceOf(address(this)), token1.balanceOf(address(this)), _reserve0, _reserve1);
+        emit Burn(msg.sender, amount0, amount1, to);
     }
 
-    function emergencyWithdraw(uint256 pid) external nonReentrant {
-        PoolInfo storage pool = poolInfo[pid];
-        UserInfo storage user = userInfo[pid][msg.sender];
+    function swap(
+        uint256 amount0Out,
+        uint256 amount1Out,
+        address to
+    ) external nonReentrant {
+        require(amount0Out > 0 || amount1Out > 0, "AMM: Insufficient output amount");
+        (uint112 _reserve0, uint112 _reserve1,) = getReserves();
+        require(amount0Out < _reserve0 && amount1Out < _reserve1, "AMM: Insufficient liquidity");
 
-        uint256 amount = user.amount;
-        require(amount > 0, "DeFi: Nothing to withdraw");
+        if (amount0Out > 0) token0.safeTransfer(to, amount0Out);
+        if (amount1Out > 0) token1.safeTransfer(to, amount1Out);
 
-        user.amount = 0;
-        user.rewardDebt = 0;
-        user.pendingRewards = 0;
-        pool.totalStaked -= amount;
+        uint256 balance0 = token0.balanceOf(address(this));
+        uint256 balance1 = token1.balanceOf(address(this));
 
-        pool.stakingToken.safeTransfer(msg.sender, amount);
+        uint256 amount0In = balance0 > _reserve0 - amount0Out ? balance0 - (_reserve0 - amount0Out) : 0;
+        uint256 amount1In = balance1 > _reserve1 - amount1Out ? balance1 - (_reserve1 - amount1Out) : 0;
+        require(amount0In > 0 || amount1In > 0, "AMM: Insufficient input amount");
 
-        emit EmergencyWithdraw(msg.sender, pid, amount);
+        // 0.3% protocol fee (997/1000 multiplier)
+        uint256 balance0Adjusted = (balance0 * 1000) - (amount0In * 3);
+        uint256 balance1Adjusted = (balance1 * 1000) - (amount1In * 3);
+        require(balance0Adjusted * balance1Adjusted >= uint256(_reserve0) * _reserve1 * 1000000, "AMM: K-Invariant violated");
+
+        _updateReserves(balance0, balance1, _reserve0, _reserve1);
+        emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
     }
 
-    function pause() external onlyRole(ADMIN_ROLE) {
-        _pause();
+    function _sqrt(uint256 y) private pure returns (uint256 z) {
+        if (y > 3) {
+            z = y;
+            uint256 x = y / 2 + 1;
+            while (x < z) {
+                z = x;
+                x = (y / x + x) / 2;
+            }
+        } else if (y != 0) {
+            z = 1;
+        }
     }
 
-    function unpause() external onlyRole(ADMIN_ROLE) {
-        _unpause();
+    function _min(uint256 x, uint256 y) private pure returns (uint256) {
+        return x < y ? x : y;
     }
 }

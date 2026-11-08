@@ -1,21 +1,15 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang='en'>
 <head>
-    <meta charset="UTF-8"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <meta name="description" content="MAGNUM OPUS - The Definitive All-Encompassing Web3, DeFi, NFT, and Multi-Chain Nexus Engine"/>
-    <meta name="theme-color" content="#030611"/>
+    <meta charset='UTF-8'/>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'/>
+    <meta name='description' content='MAGNUM OPUS - The Definitive All-Encompassing Web3, DeFi, NFT, and Multi-Chain Nexus Engine'/>
+    <meta name='theme-color' content='#030611'/>
     <title>MAGNUM OPUS // Web3 & DeFi Nexus Engine</title>
-
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com"/>
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
-
-    <!-- Core Stylesheet -->
-    <link rel="stylesheet" href="styles.css"/>
-
-    <!-- Fallback & Critical Path Styles -->
+    <link rel='preconnect' href='https://fonts.googleapis.com'/>
+    <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin/>
+    <link href='https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap' rel='stylesheet'/>
+    <link rel='stylesheet' href='styles.css'/>
     <style>
         :root {
             --bg-primary: #030611;
@@ -34,390 +28,94 @@
             --glow-purple: 0 0 20px rgba(168, 85, 247, 0.4);
             --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
         }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-        }
-
-        body {
-            background-color: var(--bg-primary);
-            color: var(--text-main);
-            min-height: 100vh;
-            overflow-x: hidden;
-            background-image:
-                radial-gradient(circle at 10% 15%, rgba(168, 85, 247, 0.12) 0%, transparent 45%),
-                radial-gradient(circle at 90% 85%, rgba(56, 189, 248, 0.12) 0%, transparent 45%);
-            background-attachment: fixed;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+        body { background-color: var(--bg-primary); color: var(--text-main); min-height: 100vh; overflow-x: hidden; background-image: radial-gradient(circle at 10% 15%, rgba(168, 85, 247, 0.12) 0%, transparent 45%), radial-gradient(circle at 90% 85%, rgba(56, 189, 248, 0.12) 0%, transparent 45%); background-attachment: fixed; }
     </style>
-    <script defer src="app.js"></script>
+    <script defer src='app.js'></script>
 </head>
 <body>
-    <!-- Top Global Header -->
-    <header id="main-header">
-        <div class="logo-container">
-            <div class="logo-icon" aria-hidden="true">[38;5;226m[1m[0m</div>
+    <header id='main-header'>
+        <div class='logo-container'>
+            <div class='logo-icon' aria-hidden='true'></div>
             <div>
-                <span class="logo-text">MAGNUM OPUS</span>
-                <span class="version-tag">v4.8.0-PRO</span>
+                <span class='logo-text'>MAGNUM OPUS</span>
+                <span class='version-tag'>v4.8.0-PRO</span>
             </div>
         </div>
-
-        <div class="nav-metrics-bar">
-            <div class="network-selector-wrapper">
-                <span class="pulse-indicator active" id="network-status-dot"></span>
-                <select id="network-select" class="styled-select" aria-label="Network Selector">
-                    <option value="ethereum">Ethereum Mainnet</option>
-                    <option value="arbitrum">Arbitrum One (L2)</option>
-                    <option value="solana">Solana Cluster</option>
-                    <option value="polygon">Polygon PoS</option>
-                    <option value="avalanche">Avalanche C-Chain</option>
+        <div class='nav-metrics-bar'>
+            <div class='network-selector-wrapper'>
+                <span class='pulse-indicator active' id='network-status-dot'></span>
+                <select id='network-select' class='styled-select' aria-label='Network Selector'>
+                    <option value='ethereum'>Ethereum Mainnet</option>
+                    <option value='arbitrum'>Arbitrum One (L2)</option>
+                    <option value='solana'>Solana Cluster</option>
+                    <option value='polygon'>Polygon PoS</option>
+                    <option value='avalanche'>Avalanche C-Chain</option>
                 </select>
             </div>
-
-            <div class="gas-badge" id="gas-tracker" title="Real-time Base Gas Fee">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18M15 10h4a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-4"/><path d="M7 11h4M7 7h4"/></svg>
-                <span id="gas-price">14.2 Gwei</span>
+            <div class='gas-badge' id='gas-tracker' title='Real-time Base Gas Fee'>
+                <svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.2'><path d='M3 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18M15 10h4a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-4'/><path d='M7 11h4M7 7h4'/></svg>
+                <span id='gas-price'>14.2 Gwei</span>
             </div>
-
-            <div class="metric-pill block-height-pill" title="Latest Block Number">
-                <span class="label">BLOCK:</span>
-                <span id="block-height" class="mono-val">#19,842,912</span>
+            <div class='metric-pill block-height-pill' title='Latest Block Number'>
+                <span class='label'>BLOCK:</span>
+                <span id='block-height' class='mono-val'>#19,842,912</span>
             </div>
-
-            <div class="metric-pill tps-pill" title="Multi-Chain Engine Compute Throughput">
-                <span class="label">TPS:</span>
-                <span id="engine-tps" class="mono-val">4,280 /s</span>
+            <div class='metric-pill tps-pill' title='Multi-Chain Engine Compute Throughput'>
+                <span class='label'>TPS:</span>
+                <span id='engine-tps' class='mono-val'>4,280 /s</span>
             </div>
         </div>
-
-        <div class="nav-actions">
-            <button id="sound-toggle-btn" class="icon-btn" aria-label="Toggle Web Audio FX" title="Toggle Synthesizer Feedback">
-                <svg id="sound-icon-on" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+        <div class='nav-actions'>
+            <button id='sound-toggle-btn' class='icon-btn' aria-label='Toggle Web Audio FX' title='Toggle Synthesizer Feedback'>
+                <svg id='sound-icon-on' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><polygon points='11 5 6 9 2 9 2 15 6 15 11 19 11 5'/><path d='M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07'/></svg>
             </button>
-
-            <button id="open-settings-btn" class="icon-btn" aria-label="Platform Settings" title="Settings">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-2.09A1.65 1.65 0 0 0 9.09 16a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82A1.65 1.65 0 0 0 4.55 14a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-1.42 2.83 2 2 0 0 1 0 2.83l.06.06a1.65 1.65 0 0 0 1.82.33A1.65 1.65 0 0 0 5.1 19.4a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0 1.82.33 1.65 1.65 0 0 0 1.51-1.82l.01-.06a2 2 0 0 1 1.42-2.83 2 2 0 0 1 0-2.83l-.06-.06a1.65 1.65 0 0 0-.33-1.82 1.65 1.65 0 0 0-1.82-.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82z"/></svg>
-            </button>
-
-            <button id="open-notifications-btn" class="icon-btn" aria-label="Notifications" title="Notifications">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-            </button>
-
-            <button id="open-user-menu-btn" class="icon-btn" aria-label="User Menu" title="User Menu">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M16 19c0 1 1 1 1 1s4-2 4-4-1-3-1-3-4 1-4 1"/><path d="M8 19c0 1-1 1-1 1S4 20 4 18s1-3 1-3 4 1 4 1"/></svg>
+            <button id='open-settings-btn' class='icon-btn' aria-label='Platform Settings' title='Settings'>
+                <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><circle cx='12' cy='12' r='3'/><path d='M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2z'/></svg>
             </button>
         </div>
     </header>
-
-    <!-- Main Content Area -->
-    <main id="main-content">
-        <!-- Dashboard Overview Section -->
-        <section id="dashboard-overview" class="dashboard-section">
-            <div class="section-header">
-                <h2 class="section-title">Dashboard Overview</h2>
-                <div class="section-actions">
-                    <button class="icon-btn" aria-label="Refresh Data" title="Refresh">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6"/><path d="M2.5 22v-6h6"/><path d="M22 11.5a10 10 0 0 0-15-8.5"/><path d="M2 12.5a10 10 0 0 0 15 8.5"/></svg>
-                    </button>
-                </div>
-            </div>
-
-            <div class="overview-grid">
-                <!-- Portfolio Value Card -->
-                <div class="overview-card portfolio-card">
-                    <div class="card-header">
-                        <h3 class="card-title">Portfolio Value</h3>
-                        <span class="card-subtitle">Total Balance</span>
-                    </div>
-                    <div class="card-content">
-                        <div class="value-display">
-                            <span class="currency-symbol">[38;5;226m[1m[0m</span>
-                            <span id="portfolio-value" class="value">12,482.75</span>
-                        </div>
-                        <div class="change-indicator positive">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
-                            <span id="portfolio-change">+8.2%</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Active Positions Card -->
-                <div class="overview-card positions-card">
-                    <div class="card-header">
-                        <h3 class="card-title">Active Positions</h3>
-                        <span class="card-subtitle">Open Orders</span>
-                    </div>
-                    <div class="card-content">
-                        <div class="positions-list">
-                            <div class="position-item">
-                                <div class="position-symbol">ETH</div>
-                                <div class="position-amount">1.25</div>
-                                <div class="position-value">[38;5;226m[1m[0m4,250.50</div>
-                            </div>
-                            <div class="position-item">
-                                <div class="position-symbol">BTC</div>
-                                <div class="position-amount">0.5</div>
-                                <div class="position-value">[38;5;226m[1m[0m18,750.25</div>
-                            </div>
-                            <div class="position-item">
-                                <div class="position-symbol">SOL</div>
-                                <div class="position-amount">25.0</div>
-                                <div class="position-value">[38;5;226m[1m[0m1,250.00</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Recent Activity Card -->
-                <div class="overview-card activity-card">
-                    <div class="card-header">
-                        <h3 class="card-title">Recent Activity</h3>
-                        <span class="card-subtitle">Last 7 Days</span>
-                    </div>
-                    <div class="card-content">
-                        <div class="activity-list">
-                            <div class="activity-item">
-                                <div class="activity-icon">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                                </div>
-                                <div class="activity-details">
-                                    <div class="activity-description">Deposited 2.5 ETH</div>
-                                    <div class="activity-time">2 hours ago</div>
-                                </div>
-                            </div>
-                            <div class="activity-item">
-                                <div class="activity-icon">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-                                </div>
-                                <div class="activity-details">
-                                    <div class="activity-description">Swapped 1.5 BTC for ETH</div>
-                                    <div class="activity-time">1 day ago</div>
-                                </div>
-                            </div>
-                            <div class="activity-item">
-                                <div class="activity-icon">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                                </div>
-                                <div class="activity-details">
-                                    <div class="activity-description">Deposited 500 USDC</div>
-                                    <div class="activity-time">3 days ago</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Market Data Section -->
-        <section id="market-data" class="dashboard-section">
-            <div class="section-header">
-                <h2 class="section-title">Market Data</h2>
-                <div class="section-actions">
-                    <button class="icon-btn" aria-label="Refresh Market Data" title="Refresh">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6"/><path d="M2.5 22v-6h6"/><path d="M22 11.5a10 10 0 0 0-15-8.5"/><path d="M2 12.5a10 10 0 0 0 15 8.5"/></svg>
-                    </button>
-                </div>
-            </div>
-
-            <div class="market-grid">
-                <!-- Top Movers Card -->
-                <div class="market-card movers-card">
-                    <div class="card-header">
-                        <h3 class="card-title">Top Movers</h3>
-                        <span class="card-subtitle">24h Change</span>
-                    </div>
-                    <div class="card-content">
-                        <div class="movers-list">
-                            <div class="mover-item">
-                                <div class="mover-symbol">BTC</div>
-                                <div class="mover-price">[38;5;226m[1m[0m42,500.25</div>
-                                <div class="mover-change positive">+12.5%</div>
-                            </div>
-                            <div class="mover-item">
-                                <div class="mover-symbol">ETH</div>
-                                <div class="mover-price">[38;5;226m[1m[0m3,250.50</div>
-                                <div class="mover-change positive">+8.2%</div>
-                            </div>
-                            <div class="mover-item">
-                                <div class="mover-symbol">SOL</div>
-                                <div class="mover-price">[38;5;226m[1m[0m125.75</div>
-                                <div class="mover-change positive">+15.3%</div>
-                            </div>
-                            <div class="mover-item">
-                                <div class="mover-symbol">AVAX</div>
-                                <div class="mover-price">[38;5;226m[1m[0m52.25</div>
-                                <div class="mover-change positive">+22.1%</div>
-                            </div>
-                            <div class="mover-item">
-                                <div class="mover-symbol">MATIC</div>
-                                <div class="mover-price">[38;5;226m[1m[0m1.25</div>
-                                <div class="mover-change positive">+18.7%</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Trending NFTs Card -->
-                <div class="market-card nfts-card">
-                    <div class="card-header">
-                        <h3 class="card-title">Trending NFTs</h3>
-                        <span class="card-subtitle">Top Collections</span>
-                    </div>
-                    <div class="card-content">
-                        <div class="nfts-list">
-                            <div class="nft-item">
-                                <div class="nft-image">
-                                    <img src="https://via.placeholder.com/64" alt="NFT Image">
-                                </div>
-                                <div class="nft-details">
-                                    <div class="nft-name">CryptoPunk #1234</div>
-                                    <div class="nft-price">[38;5;226m[1m[0m12.5 ETH</div>
-                                    <div class="nft-change positive">+25.0%</div>
-                                </div>
-                            </div>
-                            <div class="nft-item">
-                                <div class="nft-image">
-                                    <img src="https://via.placeholder.com/64" alt="NFT Image">
-                                </div>
-                                <div class="nft-details">
-                                    <div class="nft-name">Bored Ape #5678</div>
-                                    <div class="nft-price">[38;5;226m[1m[0m8.75 ETH</div>
-                                    <div class="nft-change positive">+18.3%</div>
-                                </div>
-                            </div>
-                            <div class="nft-item">
-                                <div class="nft-image">
-                                    <img src="https://via.placeholder.com/64" alt="NFT Image">
-                                </div>
-                                <div class="nft-details">
-                                    <div class="nft-name">Cool Cat #9012</div>
-                                    <div class="nft-price">[38;5;226m[1m[0m5.25 ETH</div>
-                                    <div class="nft-change positive">+32.1%</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- DeFi Opportunities Card -->
-                <div class="market-card defi-card">
-                    <div class="card-header">
-                        <h3 class="card-title">DeFi Opportunities</h3>
-                        <span class="card-subtitle">High Yield Pools</span>
-                    </div>
-                    <div class="card-content">
-                        <div class="defi-list">
-                            <div class="defi-item">
-                                <div class="defi-symbol">UNI</div>
-                                <div class="defi-apr">12.5% APR</div>
-                                <div class="defi-tvl">[38;5;226m[1m[0m15.2M TVL</div>
-                            </div>
-                            <div class="defi-item">
-                                <div class="defi-symbol">AAVE</div>
-                                <div class="defi-apr">8.7% APR</div>
-                                <div class="defi-tvl">[38;5;226m[1m[0m22.5M TVL</div>
-                            </div>
-                            <div class="defi-item">
-                                <div class="defi-symbol">COMP</div>
-                                <div class="defi-apr">15.3% APR</div>
-                                <div class="defi-tvl">[38;5;226m[1m[0m8.2M TVL</div>
-                            </div>
-                            <div class="defi-item">
-                                <div class="defi-symbol">MKR</div>
-                                <div class="defi-apr">6.5% APR</div>
-                                <div class="defi-tvl">[38;5;226m[1m[0m18.7M TVL</div>
-                            </div>
-                        </div>
-                    </div>
+    <main id='dashboard-container'>
+        <aside id='sidebar'>
+            <nav>
+                <a href='#' class='nav-item active' data-section='overview'>Overview</a>
+                <a href='#' class='nav-item' data-section='wallet'>Wallet</a>
+                <a href='#' class='nav-item' data-section='swap'>Swap</a>
+                <a href='#' class='nav-item' data-section='portfolio'>Portfolio</a>
+                <a href='#' class='nav-item' data-section='nft'>NFTs</a>
+                <a href='#' class='nav-item' data-section='stake'>Stake</a>
+                <a href='#' class='nav-item' data-section='activity'>Activity</a>
+            </nav>
+        </aside>
+        <section id='content-area'>
+            <div id='overview-view'>
+                <h1>Global Overview</h1>
+                <div id='stats-grid'>
+                    <div class='stat-card'><span class='stat-label'>Total Value Locked</span><span class='stat-value' id='tvl'>$84.2B</span></div>
+                    <div class='stat-card'><span class='stat-label'>Active Wallets</span><span class='stat-value' id='active-wallets'>1.28M</span></div>
+                    <div class='stat-card'><span class='stat-label'>NFT Volume</span><span class='stat-value' id='nft-volume'>12.4M ETH</span></div>
+                    <div class='stat-card'><span class='stat-label'>Gas Saved</span><span class='stat-value' id='gas-saved'>98.6 Gwei</span></div>
                 </div>
             </div>
         </section>
     </main>
-
-    <!-- Global Modals -->
-    <div id="settings-modal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 class="modal-title">Settings</h2>
-                <button class="close-btn" aria-label="Close Modal">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18L18 6M6 6l12 12"/></svg>
-                </button>
-            </div>
-            <div class="modal-body">
-                <!-- Settings content will be added here -->
-            </div>
+    <div id='notification-center'></div>
+    <div id='command-palette' class='modal-overlay hidden'>
+        <div class='command-box'>
+            <input id='command-input' type='text' placeholder='Search commands...' />
         </div>
     </div>
-
-    <div id="notifications-modal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 class="modal-title">Notifications</h2>
-                <button class="close-btn" aria-label="Close Modal">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18L18 6M6 6l12 12"/></svg>
-                </button>
-            </div>
-            <div class="modal-body">
-                <!-- Notifications content will be added here -->
-            </div>
+    <div id='settings-modal' class='modal-overlay hidden'>
+        <div class='settings-panel'>
+            <h2>Platform Settings</h2>
+            <label>Theme</label>
+            <select id='theme-select'>
+                <option value='dark'>Dark</option>
+                <option value='light'>Light</option>
+            </select>
         </div>
     </div>
-
-    <div id="user-menu-modal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 class="modal-title">User Menu</h2>
-                <button class="close-btn" aria-label="Close Modal">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18L18 6M6 6l12 12"/></svg>
-                </button>
-            </div>
-            <div class="modal-body">
-                <!-- User menu content will be added here -->
-            </div>
-        </div>
-    </div>
-
-    <!-- Global Overlay -->
-    <div id="global-overlay"></div>
-
-    <!-- Web Audio Context -->
-    <script>
-        // Initialize Web Audio Context for sound effects
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        let soundEnabled = true;
-
-        // Function to play sound effects
-        function playSound(frequency, duration) {
-            if (!soundEnabled) return;
-
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-
-            oscillator.type = 'sine';
-            oscillator.frequency.value = frequency;
-
-            gainNode.gain.setValueAtTime(0, audioContext.currentTime);
-            gainNode.gain.linearRampToValueAtTime(0.1, audioContext.currentTime + 0.01);
-            gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + duration);
-
-            oscillator.start(audioContext.currentTime);
-            oscillator.stop(audioContext.currentTime + duration);
-        }
-
-        // Toggle sound effects
-        document.getElementById('sound-toggle-btn').addEventListener('click', function() {
-            soundEnabled = !soundEnabled;
-            this.classList.toggle('active', soundEnabled);
-            playSound(440, 0.1); // Play a test tone
-        });
-    </script>
+    <script src='https://cdn.jsdelivr.net/npm/chart.js'></script>
+    <script src='app.js'></script>
 </body>
 </html>
