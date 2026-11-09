@@ -213,12 +213,12 @@ defmodule GossipNode.PeerConnectionManager do
   end
 
   def handle_info({:new_peer, peer_pid}, state) do
-    GossipNode.PeerConnection.start_link(peer_pid)
+    GossipNode.PeerHandler.start_link(peer_pid)
     {:noreply, state}
   end
 
   def handle_info({:peer_disconnected, peer_pid}, state) do
-    GossipNode.PeerRegistry.remove_peer(peer_pid)
+    GossipNode.GossipServer.handle_info({:peer_disconnected, peer_pid}, nil)
     {:noreply, state}
   end
 end

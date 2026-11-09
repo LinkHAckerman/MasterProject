@@ -1,18 +1,13 @@
-#!/using System;
-// Magnum Opus - Transaction Processor Core
-// High-performance transaction handling for Web3/DeFi operations
-
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MagnumOpus.Backend.Core
 {
@@ -138,217 +133,153 @@ namespace MagnumOpus.Backend.Core
         /// </summary>
         public void UpdateStatus(TransactionStatus newStatus, string reason = "")
         {
-            if (newStatus == null) throw new ArgumentNullException(nameof(newStatus));
+            // reason currently unused but kept for future audit trails
             Status = newStatus;
-            // In a real implementation, this would interact with the blockchain
-            // to confirm the transaction
         }
 
         /// <summary>
         /// Simulates transaction signing using a private key.
+        /// In a production system this would involve ECDSA/secp256k1 signing.
+        /// Here we simply hash the payload with the private key as a salt.
         /// </summary>
-        public bool SignTransaction()
+        public bool Sign(string privateKeyHex)
         {
-            if (string.IsNullOrEmpty(Sender)) return false;
-            // In production, this would use the sender's private key
-            // to sign the transaction payload
-            Console.WriteLine("[TransactionProcessor] Signing transaction {0}...", Id);
-            return true;
-        }
+            if (string.IsNullOrWhiteSpace(privateKeyHex))
+                throw new ArgumentException("Private key must be provided", nameof(privateKeyHex));
 
-        /// <summary>
-        /// Adds a transaction to the pending queue.
-        /// </summary>
-        public void AddToQueue()
-        {
-            if (!IsValid()) return;
-            // In a real implementation, this would add to a database or queue
-            Console.WriteLine("[TransactionProcessor] Added transaction {0} to queue", Id);
+            // Derive a deterministic signature for demo purposes
+            using var sha256 = SHA256.Create();
+            var payload = GetRawPayloadBytes();
+            var keyBytes = Convert.FromHexString(privateKeyHex);
+            var combined = new byte[payload.Length + keyBytes.Length];
+            Buffer.BlockCopy(payload, 0, combined, 0, payload.Length);
+            Buffer.BlockCopy(keyBytes, 0, combined, payload.Length, keyBytes.Length);
+            var sigBytes = sha256.ComputeHash(combined);
+            Signature = Convert.ToHexString(sigBytes).ToLowerInvariant();
+            return true;
         }
     }
 
     // ============================================================================
-    // Transaction Receipt Entity
+    // Transaction Processor Service
     // ============================================================================
-    public sealed class TransactionReceipt
+    /// <summary>
+    /// Handles high‑throughput ingestion, validation and asynchronous processing of
+    /// transactions. It is deliberately lightweight – the heavy cryptographic work
+    /// is delegated to the Transaction entity itself.
+    /// </summary>
+    public sealed class TransactionProcessor : IDisposable
     {
-        [JsonPropertyName("transactionId")]
-        public string TransactionId { get; set; } = string.Empty;
+        private readonly ILogger<TransactionProcessor> _logger;
+        private readonly ConcurrentQueue<Transaction> _queue = new();
+        private readonly SemaphoreSlim _signal = new(0);
+        private readonly CancellationTokenSource _cts = new();
+        private readonly Task _backgroundTask;
+        private readonly int _maxDegreeOfParallelism;
 
-        [JsonPropertyName("blockIndex")]
-        public long BlockIndex { get; set; }
-
-        [JsonPropertyName("blockHash")]
-        public string BlockHash { get; set; } = string.Empty;
-
-        [JsonPropertyName("gasUsed")]
-        public long GasUsed { get; set; }
-
-        [JsonPropertyName("feePaid")]
-        public decimal FeePaid { get; set; }
-
-        [JsonPropertyName("status")]
-        public TransactionStatus Status { get; set; } = TransactionStatus.Confirmed;
-
-        [JsonPropertyName("timestamp")]
-        public DateTime Timestamp { get; set; } = DateTime.UtcNow;
-
-        [JsonPropertyName("executionMessage")]
-        public string ExecutionMessage { get; set; } = string.Empty;
-
-        [JsonPropertyName("receiptId")]
-        public string ReceiptId { get; set; } = string.Empty;
-
-        public bool IsValid()
+        public TransactionProcessor(ILogger<TransactionProcessor> logger, int maxDegreeOfParallelism = 4)
         {
-            if (string.IsNullOrWhiteSpace(TransactionId)) return false;
-            if (BlockIndex < 0) return false;
-            return true;
-        }
-
-        public override string ToString()
-        {
-            return $"{TransactionId}: Block {BlockIndex}, Status {Status}";
-        }
-    }
-
-    // ============================================================================
-    // Transaction Queue Manager
-    // ============================================================================
-    public sealed class TransactionQueueManager
-    {
-        private readonly ConcurrentQueue<Transaction> _pendingTransactions = new();
-        private readonly ConcurrentDictionary<string, TransactionReceipt> _receipts = new();
-        private readonly ConcurrentDictionary<string, long> _blockIndexMap = new();
-        private readonly ILogger<TransactionQueueManager> _logger;
-
-        public TransactionQueueManager(ILogger<TransactionQueueManager> logger)
-        {
-            _logger = logger;
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _maxDegreeOfParallelism = maxDegreeOfParallelism > 0 ? maxDegreeOfParallelism : 1;
+            _backgroundTask = Task.Run(ProcessLoopAsync);
         }
 
         /// <summary>
-        /// Adds a transaction to the queue.
+        /// Enqueue a transaction for processing. Returns false if the transaction is
+        /// malformed or fails basic validation.
         /// </summary>
-        public void Enqueue(Transaction transaction)
+        public bool Enqueue(Transaction tx)
         {
-            if (transaction == null) return;
-            _pendingTransactions.Enqueue(transaction);
-            _logger.LogInformation("Transaction {0} enqueued", transaction.Id);
-        }
-
-        /// <summary>
-        /// Retrieves the next transaction from the queue.
-        /// </summary>
-        public Transaction Dequeue()
-        {
-            if (_pendingTransactions.Count == 0) return null;
-            var transaction = _pendingTransactions.Dequeue();
-            _logger.LogDebug("Dequeued transaction {0}", transaction.Id);
-            return transaction;
-        }
-
-        /// <summary>
-        /// Gets all pending transactions.
-        /// </summary>
-        public IReadOnlyList<Transaction> GetPendingTransactions()
-        {
-            return _pendingTransactions.ToList().AsReadOnly();
-        }
-
-        /// <summary>
-        /// Gets a receipt by transaction ID.
-        /// </summary>
-        public TransactionReceipt GetReceipt(string transactionId)
-        {
-            if (_receipts.TryGetValue(transactionId, out var receipt))
+            if (tx == null) throw new ArgumentNullException(nameof(tx));
+            if (!tx.IsValid())
             {
-                return receipt;
+                _logger.LogWarning("Rejected invalid transaction {TxId}", tx.Id);
+                return false;
             }
-            return null;
+            _queue.Enqueue(tx);
+            _signal.Release();
+            _logger.LogInformation("Enqueued transaction {TxId}", tx.Id);
+            return true;
         }
 
-        /// <summary>
-        /// Updates a transaction's status.
-        /// </summary>
-        public void UpdateTransactionStatus(string transactionId, TransactionStatus newStatus, string reason = "")
+        private async Task ProcessLoopAsync()
         {
-            if (!_receipts.TryGetValue(transactionId, out var receipt))
+            var token = _cts.Token;
+            var workers = new List<Task>();
+            for (int i = 0; i < _maxDegreeOfParallelism; i++)
             {
-                _logger.LogWarning("Transaction {0} not found", transactionId);
+                workers.Add(Task.Run(() => WorkerAsync(token), token));
+            }
+            await Task.WhenAll(workers);
+        }
+
+        private async Task WorkerAsync(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                await _signal.WaitAsync(token);
+                if (token.IsCancellationRequested) break;
+
+                if (_queue.TryDequeue(out var tx))
+                {
+                    try
+                    {
+                        await ProcessTransactionAsync(tx, token);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error processing transaction {TxId}", tx.Id);
+                        tx.UpdateStatus(TransactionStatus.Failed, ex.Message);
+                    }
+                }
+            }
+        }
+
+        private async Task ProcessTransactionAsync(Transaction tx, CancellationToken token)
+        {
+            // Simulate network latency / gas consumption
+            await Task.Delay(TimeSpan.FromMilliseconds(100), token);
+
+            // Example: sign with a mock private key derived from sender address
+            var mockPrivateKey = DeriveMockPrivateKey(tx.Sender);
+            tx.Sign(mockPrivateKey);
+
+            // Re‑validate after signing (signature presence)
+            if (string.IsNullOrWhiteSpace(tx.Signature))
+            {
+                tx.UpdateStatus(TransactionStatus.Rejected, "Missing signature");
+                _logger.LogWarning("Transaction {TxId} rejected – signature missing after signing step", tx.Id);
                 return;
             }
-            receipt.Status = newStatus;
-            receipt.ExecutionMessage = reason;
-            _logger.LogInformation("Transaction {0} status updated to {1}", transactionId, newStatus);
+
+            // Simulate gas usage calculation
+            tx.GasUsed = new Random().Next(21000, 800000);
+            tx.FeePaid = tx.Fee; // In a real system this would be fee * gas price
+
+            // Mark as confirmed for demo purposes
+            tx.UpdateStatus(TransactionStatus.Confirmed);
+            _logger.LogInformation("Transaction {TxId} processed and confirmed. GasUsed={GasUsed}, FeePaid={FeePaid}",
+                tx.Id, tx.GasUsed, tx.FeePaid);
         }
 
-        /// <summary>
-        /// Gets the current block index for a transaction.
-        /// </summary>
-        public long GetBlockIndex(string transactionId)
+        private string DeriveMockPrivateKey(string address)
         {
-            if (_blockIndexMap.TryGetValue(transactionId, out var blockIndex))
-            {
-                return blockIndex;
-            }
-            return 0;
-        }
-    }
-
-    // ============================================================================
-    // Example Usage
-    // ============================================================================
-    public class TransactionProcessor
-    {
-        private readonly TransactionQueueManager _queueManager;
-        private readonly ILogger<TransactionProcessor> _logger;
-
-        public TransactionProcessor(TransactionQueueManager queueManager, ILogger<TransactionProcessor> logger)
-        {
-            _queueManager = queueManager;
-            _logger = logger;
+            // Very naive deterministic mock – DO NOT use in production!
+            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(address));
+            return Convert.ToHexString(hash).ToLowerInvariant();
         }
 
-        /// <summary>
-        /// Processes a new transaction through the pipeline.
-        /// </summary>
-        public async Task ProcessTransactionAsync(Transaction transaction)
+        public void Dispose()
         {
+            _cts.Cancel();
+            _signal.Release(); // unblock any waiting workers
             try
             {
-                // Validate the transaction
-                if (!transaction.IsValid())
-                {
-                    _logger.LogError("Invalid transaction: {0}", transaction.Id);
-                    return;
-                }
-
-                // Add to queue
-                _queueManager.Enqueue(transaction);
-
-                // Simulate processing
-                Console.WriteLine("[TransactionProcessor] Processing transaction {0}...", transaction.Id);
-                await Task.Delay(100); // Simulate processing time
-
-                // Update status to confirmed
-                transaction.UpdateStatus(TransactionStatus.Confirmed, "Processed successfully");
-                _queueManager.UpdateTransactionStatus(transaction.Id, TransactionStatus.Confirmed);
-
-                _logger.LogInformation("Transaction {0} processed successfully", transaction.Id);
+                _backgroundTask.Wait(TimeSpan.FromSeconds(5));
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error processing transaction {0}", transaction.Id);
-            }
-        }
-
-        /// <summary>
-        /// Gets the next transaction from the queue.
-        /// </summary>
-        public async Task<Transaction?> GetNextTransactionAsync()
-        {
-            return await _queueManager.Dequeue();
+            catch { /* ignore */ }
+            _cts.Dispose();
+            _signal.Dispose();
         }
     }
 }
