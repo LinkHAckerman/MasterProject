@@ -152,7 +152,7 @@ defmodule GossipNode.PeerConnection do
   end
 
   def handle_info(:disconnect, peer_pid) do
-    GossipNode.GossipServer.handle_info({:peer_disconnected, pid}, nil)
+    GenServer.cast(GossipNode.GossipServer, {:peer_disconnected, peer_pid})
     {:stop, :normal, peer_pid}
   end
 end
@@ -196,7 +196,7 @@ defmodule GossipNode.PeerHandler do
   end
 
   def handle_info(:disconnect, peer_pid) do
-    GossipNode.GossipServer.handle_info({:peer_disconnected, peer_pid}, nil)
+    GenServer.cast(GossipNode.GossipServer, {:peer_disconnected, peer_pid})
     {:stop, :normal, peer_pid}
   end
 end
@@ -213,12 +213,12 @@ defmodule GossipNode.PeerConnectionManager do
   end
 
   def handle_info({:new_peer, peer_pid}, state) do
-    GossipNode.PeerHandler.start_link(peer_pid)
+    GossipNode.PeerConnection.start_link(peer_pid)
     {:noreply, state}
   end
 
   def handle_info({:peer_disconnected, peer_pid}, state) do
-    GossipNode.GossipServer.handle_info({:peer_disconnected, peer_pid}, nil)
+    GenServer.cast(GossipNode.GossipServer, {:peer_disconnected, peer_pid})
     {:noreply, state}
   end
 end
