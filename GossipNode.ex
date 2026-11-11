@@ -218,6 +218,7 @@ defmodule GossipNode.PeerConnectionManager do
   end
 
   def handle_info({:peer_disconnected, peer_pid}, state) do
+    GenServer.cast(GossipNode.GossipServer, {:peer_disconnected, peer_pid})
     {:noreply, state}
   end
 end
