@@ -115,57 +115,53 @@ contract MagnumOpusToken is
     }
 
     // ---------------------------------------------------------------------
-    // Batch operations
+    // Airdrop
     // ---------------------------------------------------------------------
-    function batchTransfer(address[] calldata recipients, uint256[] calldata amounts) external whenNotPaused {
-        require(recipients.length == amounts.length, "MOP: length mismatch");
-        uint256 total;
-        for (uint256 i = 0; i < amounts.length; ++i) {
+    function airdrop(address[] memory recipients, uint256[] memory amounts) external onlyRole(AIRDROP_ROLE) {
+        require(recipients.length == amounts.length, "MOP: arrays length mismatch");
+        uint256 total = 0;
+        for (uint256 i = 0; i < recipients.length; i++) {
             total += amounts[i];
         }
-        require(balanceOf(msg.sender) >= total, "MOP: insufficient balance");
-        for (uint256 i = 0; i < recipients.length; ++i) {
+        require(totalSupply() + total <= maxSupply, "MOP: airdrop exceeds max supply");
+
+        for (uint256 i = 0; i < recipients.length; i++) {
+            require(recipients[i] != address(0), "MOP: zero address");
+            require(amounts[i] > 0, "MOP: zero amount");
+            _mint(recipients[i], amounts[i]);
+            emit Airdrop(recipients[i], amounts[i]);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Batch transfer
+    // ---------------------------------------------------------------------
+    function batchTransfer(address[] memory recipients, uint256[] memory amounts) external {
+        require(recipients.length == amounts.length, "MOP: arrays length mismatch");
+        for (uint256 i = 0; i < recipients.length; i++) {
+            require(recipients[i] != address(0), "MOP: zero address");
+            require(amounts[i] > 0, "MOP: zero amount");
             _transfer(msg.sender, recipients[i], amounts[i]);
         }
         emit BatchTransfer(msg.sender, recipients, amounts);
     }
 
     // ---------------------------------------------------------------------
-    // Airdrop – can be called by AIRDROP_ROLE, uses a signed voucher for gas‑less claim
+    // Override _transfer to enforce pause on transfer
     // ---------------------------------------------------------------------
-    struct AirdropVoucher {
-        address recipient;
-        uint256 amount;
-        uint256 nonce;
-        bytes signature;
-    }
-
-    mapping(address => uint256) public airdropNonce;
-
-    function claimAirdrop(AirdropVoucher calldata voucher) external whenNotPaused {
-        require(voucher.recipient == msg.sender, "MOP: voucher not for caller");
-        require(voucher.nonce == airdropNonce[msg.sender] + 1, "MOP: invalid nonce");
-        // Recreate the signed message
-        bytes32 structHash = keccak256(abi.encodePacked(voucher.recipient, voucher.amount, voucher.nonce));
-        bytes32 hash = ECDSAUpgradeable.toEthSignedMessageHash(structHash);
-        address signer = ECDSAUpgradeable.recover(hash, voucher.signature);
-        require(hasRole(AIRDROP_ROLE, signer), "MOP: invalid signer");
-        airdropNonce[msg.sender] = voucher.nonce;
-        _mint(msg.sender, voucher.amount);
-        emit Airdrop(msg.sender, voucher.amount);
+    function _transfer(address from, address to, uint256 value) internal override(ERC20Upgradeable, ERC20SnapshotUpgradeable) whenNotPaused {
+        super._transfer(from, to, value);
     }
 
     // ---------------------------------------------------------------------
-    // Upgradeability – only ADMIN_ROLE can upgrade
+    // UUPS upgradeability
     // ---------------------------------------------------------------------
     function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {}
-
-    uint256[50] private __gap; // Reserved storage gap for future upgrades
 }
 
 /**
  * @title MagnumOpusNFT
- * @dev ERC721 contract with upgradeability, lazy minting, batch mint, royalty support, pausable and reentrancy guard.
+ * @dev ERC721 with enumerable, URI storage, ERC2981 royalties, lazy minting, batch mint, pausable and upgradeable.
  */
 contract MagnumOpusNFT is
     Initializable,
@@ -173,118 +169,140 @@ contract MagnumOpusNFT is
     ERC721EnumerableUpgradeable,
     ERC721URIStorageUpgradeable,
     ERC2981Upgradeable,
-    AccessControlUpgradeable,
     PausableUpgradeable,
     ReentrancyGuardUpgradeable,
+    AccessControlUpgradeable,
     UUPSUpgradeable
 {
-    using Strings for uint256;
-
     // Roles
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-    bytes32 public constant URI_SETTER_ROLE = keccak256("URI_SETTER_ROLE");
+    bytes32 public constant ROYALTY_MANAGER_ROLE = keccak256("ROYALTY_MANAGER_ROLE");
 
-    // Token settings
+    // Lazy minting: signer can sign token mint requests
+    bytes32 public constant LAZY_MINT_ROLE = keccak256("LAZY_MINT_ROLE");
+
+    // Maximum supply cap (optional)
     uint256 public maxSupply;
-    uint256 public maxBatchMint;
-    uint256 private _nextTokenId;
-    string private _baseTokenURI;
+
+    // Base URI for token metadata
+    string public baseURI;
+
+    // Royalty defaults (in basis points, 1000 = 10%)
+    uint256 public defaultRoyaltyBps;
 
     // Events
-    event NFTMinted(address indexed minter, uint256 indexed tokenId, string tokenURI);
-    event BatchMinted(address indexed minter, uint256 startTokenId, uint256 count);
+    event BatchMint(address indexed minter, uint256[] tokenIds, string[] uris);
+    event LazyMint(address indexed signer, uint256 indexed tokenId, string uri, uint256 expires);
+    event MaxSupplyUpdated(uint256 newMaxSupply);
     event BaseURIUpdated(string newBaseURI);
-    event RoyaltyInfoUpdated(address receiver, uint96 feeNumerator);
-    event FundsWithdrawn(address indexed recipient, uint256 amount);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() initializer {}
 
     function initialize(
-        string memory name_,
-        string memory symbol_,
-        string memory baseURI_,
-        address royaltyReceiver,
-        uint96 royaltyFeeBps,
+        string memory _name,
+        string memory _symbol,
+        string memory _baseURI,
         uint256 _maxSupply,
-        uint256 _maxBatchMint
+        uint256 _defaultRoyaltyBps
     ) public initializer {
-        __ERC721_init(name_, symbol_);
+        __ERC721_init(_name, _symbol);
         __ERC721Enumerable_init();
         __ERC721URIStorage_init();
         __ERC2981_init();
-        __AccessControl_init();
         __Pausable_init();
         __ReentrancyGuard_init();
+        __AccessControl_init();
         __UUPSUpgradeable_init();
+
+        require(_maxSupply > 0, "NFT: max supply must be > 0");
+        require(_defaultRoyaltyBps <= 10000, "NFT: royalty bps > 100%");
+
+        maxSupply = _maxSupply;
+        defaultRoyaltyBps = _defaultRoyaltyBps;
+        baseURI = _baseURI;
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ADMIN_ROLE, msg.sender);
         _grantRole(MINTER_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
-        _grantRole(URI_SETTER_ROLE, msg.sender);
-
-        maxSupply = _maxSupply;
-        maxBatchMint = _maxBatchMint;
-        _nextTokenId = 1;
-        _baseTokenURI = baseURI_;
-
-        _setDefaultRoyalty(royaltyReceiver, royaltyFeeBps);
+        _grantRole(ROYALTY_MANAGER_ROLE, msg.sender);
+        _grantRole(LAZY_MINT_ROLE, msg.sender);
     }
 
     // ---------------------------------------------------------------------
-    // Core overrides
+    // Core ERC721 overrides
     // ---------------------------------------------------------------------
-    function _baseURI() internal view override returns (string memory) {
-        return _baseTokenURI;
+    function _beforeTokenTransfer(address from, address to, uint256 tokenId) internal override(ERC721Upgradeable, ERC721EnumerableUpgradeable) whenNotPaused {
+        super._beforeTokenTransfer(from, to, tokenId);
     }
 
-    function tokenURI(uint256 tokenId) public view override(ERC721Upgradeable, ERC721URIStorageUpgradeable) returns (string memory) {
-        return super.tokenURI(tokenId);
-    }
-
-    function supportsInterface(bytes4 interfaceId) public view override(ERC721Upgradeable, ERC721EnumerableUpgradeable, ERC2981Upgradeable, AccessControlUpgradeable) returns (bool) {
-        return super.supportsInterface(interfaceId);
+    function _afterTokenTransfer(address from, address to, uint256 tokenId) internal override(ERC721Upgradeable, ERC721EnumerableUpgradeable) {
+        super._afterTokenTransfer(from, to, tokenId);
     }
 
     // ---------------------------------------------------------------------
-    // Minting functions
+    // Minting
     // ---------------------------------------------------------------------
-    function lazyMint(address to, string calldata tokenURI_) external onlyRole(MINTER_ROLE) whenNotPaused nonReentrant {
-        require(_nextTokenId <= maxSupply, "MNFT: max supply reached");
-        uint256 tokenId = _nextTokenId++;
-        _safeMint(to, tokenId);
-        _setTokenURI(tokenId, tokenURI_);
-        emit NFTMinted(to, tokenId, tokenURI_);
-    }
+    function mint(address to, uint256 amount) external onlyRole(MINTER_ROLE) nonReentrant {
+        uint256 supply = totalSupply();
+        require(supply + amount <= maxSupply, "NFT: exceeds max supply");
+        require(amount > 0, "NFT: amount must be > 0");
 
-    function batchMint(address to, uint256 count) external onlyRole(MINTER_ROLE) whenNotPaused nonReentrant {
-        require(count > 0 && count <= maxBatchMint, "MNFT: invalid batch size");
-        require(_nextTokenId + count - 1 <= maxSupply, "MNFT: exceeds max supply");
-        uint256 startId = _nextTokenId;
-        for (uint256 i = 0; i < count; ++i) {
-            uint256 tokenId = _nextTokenId++;
-            _safeMint(to, tokenId);
-            emit NFTMinted(to, tokenId, "");
+        for (uint256 i = 0; i < amount; i++) {
+            uint256 tokenId = supply + i + 1;
+            _mint(to, tokenId);
         }
-        emit BatchMinted(to, startId, count);
+    }
+
+    function batchMint(address to, uint256[] memory tokenIds, string[] memory uris) external onlyRole(MINTER_ROLE) nonReentrant {
+        require(tokenIds.length == uris.length, "NFT: arrays length mismatch");
+        require(tokenIds.length > 0, "NFT: empty batch");
+
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            require(tokenIds[i] > 0 && tokenIds[i] <= maxSupply, "NFT: invalid tokenId");
+            _mint(to, tokenIds[i]);
+            _setTokenURI(tokenIds[i], uris[i]);
+        }
+
+        emit BatchMint(to, tokenIds, uris);
     }
 
     // ---------------------------------------------------------------------
-    // Administrative setters
+    // Lazy minting with EIP-712 signature
     // ---------------------------------------------------------------------
-    function setBaseURI(string calldata newBase) external onlyRole(URI_SETTER_ROLE) {
-        _baseTokenURI = newBase;
-        emit BaseURIUpdated(newBase);
+    struct LazyMintData {
+        address signer;
+        uint256 tokenId;
+        string uri;
+        uint256 expires;
     }
 
-    function setRoyaltyInfo(address receiver, uint96 feeNumerator) external onlyRole(ADMIN_ROLE) {
-        _setDefaultRoyalty(receiver, feeNumerator);
-        emit RoyaltyInfoUpdated(receiver, feeNumerator);
+    function lazyMint(LazyMintData calldata data, bytes memory signature) external nonReentrant {
+        require(data.signer != address(0), "NFT: invalid signer");
+        require(block.timestamp <= data.expires, "NFT: signature expired");
+        require(_isValidSignature(data, signature), "NFT: invalid signature");
+
+        // Check that signer has LAZY_MINT_ROLE
+        require(hasRole(LAZY_MINT_ROLE, data.signer), "NFT: signer lacks role");
+
+        // Mint to signer or specified address? For simplicity, mint to signer
+        _mint(data.signer, data.tokenId);
+        _setTokenURI(data.tokenId, data.uri);
+
+        emit LazyMint(data.signer, data.tokenId, data.uri, data.expires);
     }
 
+    function _isValidSignature(LazyMintData calldata data, bytes memory signature) internal view returns (bool) {
+        bytes32 digest = _hashTypedDataV4(keccak256(abi.encode(data)));
+        return digest.recover(signature) == data.signer;
+    }
+
+    // ---------------------------------------------------------------------
+    // Pausing
+    // ---------------------------------------------------------------------
     function pause() external onlyRole(PAUSER_ROLE) {
         _pause();
     }
@@ -294,31 +312,63 @@ contract MagnumOpusNFT is
     }
 
     // ---------------------------------------------------------------------
-    // Withdrawal of contract balance (e.g., from sales)
+    // Royalty management
     // ---------------------------------------------------------------------
-    function withdraw(address payable recipient) external onlyRole(ADMIN_ROLE) nonReentrant {
-        uint256 balance = address(this).balance;
-        require(balance > 0, "MNFT: no balance");
-        (bool success, ) = recipient.call{value: balance}("\");
-        require(success, "MNFT: withdraw failed");
-        emit FundsWithdrawn(recipient, balance);
+    function setDefaultRoyalty(uint256 royaltyBps) external onlyRole(ROYALTY_MANAGER_ROLE) {
+        require(royaltyBps <= 10000, "NFT: royalty bps > 100%");
+        defaultRoyaltyBps = royaltyBps;
+    }
+
+    function setTokenRoyalty(uint256 tokenId, address recipient, uint256 royaltyBps) external onlyRole(ROYALTY_MANAGER_ROLE) {
+        require(royaltyBps <= 10000, "NFT: royalty bps > 100%");
+        _setTokenRoyalty(tokenId, recipient, royaltyBps);
+    }
+
+    function resetTokenRoyalty(uint256 tokenId) external onlyRole(ROYALTY_MANAGER_ROLE) {
+        _resetTokenRoyalty(tokenId);
+    }
+
+    // Override ERC2981 to use default royalty
+    function royaltyInfo(uint256 tokenId, uint256 salePrice) external view override returns (address, uint256) {
+        (address recipient, uint256 royaltyAmount) = super.royaltyInfo(tokenId, salePrice);
+        if (recipient == address(0) && defaultRoyaltyBps > 0 && salePrice > 0) {
+            // Use default royalty if no specific royalty set
+            uint256 defaultRoyalty = (salePrice * defaultRoyaltyBps) / 10000;
+            // We need to know who the default recipient is - use contract owner or a stored default
+            // For simplicity, use the admin role holder
+            address defaultRecipient = getRoleMember(DEFAULT_ADMIN_ROLE, 0);
+            return (defaultRecipient, defaultRoyalty);
+        }
+        return (recipient, royaltyAmount);
     }
 
     // ---------------------------------------------------------------------
-    // Upgradeability – only ADMIN_ROLE can upgrade
+    // Admin functions
+    // ---------------------------------------------------------------------
+    function setMaxSupply(uint256 newMaxSupply) external onlyRole(ADMIN_ROLE) {
+        require(newMaxSupply >= totalSupply(), "NFT: new max < totalSupply");
+        maxSupply = newMaxSupply;
+        emit MaxSupplyUpdated(newMaxSupply);
+    }
+
+    function setBaseURI(string memory _newBaseURI) external onlyRole(ADMIN_ROLE) {
+        baseURI = _newBaseURI;
+        emit BaseURIUpdated(_newBaseURI);
+    }
+
+    // ---------------------------------------------------------------------
+    // UUPS upgradeability
     // ---------------------------------------------------------------------
     function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {}
 
     // ---------------------------------------------------------------------
-    // Internal hooks for ERC721Enumerable & ERC721URIStorage compatibility
+    // ERC721 overrides for enumerable support
     // ---------------------------------------------------------------------
-    function _beforeTokenTransfer(address from, address to, uint256 tokenId, uint256 batchSize) internal override(ERC721Upgradeable, ERC721EnumerableUpgradeable) whenNotPaused {
-        super._beforeTokenTransfer(from, to, tokenId, batchSize);
+    function _ownerOf(uint256 tokenId) internal view override(ERC721Upgradeable, ERC721EnumerableUpgradeable) returns (address) {
+        return super._ownerOf(tokenId);
     }
 
-    function _burn(uint256 tokenId) internal override(ERC721Upgradeable, ERC721URIStorageUpgradeable) {
-        super._burn(tokenId);
+    function _exists(uint256 tokenId) internal view override(ERC721Upgradeable, ERC721EnumerableUpgradeable) returns (bool) {
+        return super._exists(tokenId);
     }
-
-    uint256[45] private __gapNFT; // Storage gap for future upgrades
 }

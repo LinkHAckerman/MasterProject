@@ -93,6 +93,10 @@
     --z-modal: 1000;
     --z-toast: 2000;
     --z-tooltip: 3000;
+
+    /* Animation */
+    --animation-duration: 0.3s;
+    --animation-ease: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Base Styles & Reset */
@@ -155,7 +159,7 @@ body {
 .text-lg { font-size: var(--font-size-lg); }
 .text-xl { font-size: var(--font-size-xl); }
 .text-2xl { font-size: var(--font-size-2xl); }
-.text-3xl { font-size: var(--font-size-3xl); }
+.text-3xl { font-size: var(--font-size-2xl); }
 .text-4xl { font-size: var(--font-size-4xl); }
 .text-5xl { font-size: var(--font-size-5xl); }
 
@@ -206,6 +210,7 @@ body {
     justify-content: center;
     padding: var(--spacing-sm) var(--spacing-md);
     border-radius: var(--radius-md);
+    font-size: var(--font-size-sm);
     font-weight: 500;
     cursor: pointer;
     transition: all var(--transition-normal);
@@ -219,9 +224,8 @@ body {
 }
 
 .btn-primary:hover {
-    background-color: rgba(56, 189, 248, 0.9);
+    background-color: #22d3ee;
     box-shadow: var(--glow-cyan);
-    transform: translateY(-1px);
 }
 
 .btn-secondary {
@@ -231,8 +235,18 @@ body {
 }
 
 .btn-secondary:hover {
-    background-color: rgba(8, 12, 30, 0.8);
-    border-color: rgba(56, 189, 248, 0.3);
+    background-color: var(--bg-card);
+    border-color: var(--border-active);
+}
+
+.btn-outline {
+    background-color: transparent;
+    color: var(--text-main);
+    border-color: var(--border-color);
+}
+
+.btn-outline:hover {
+    border-color: var(--border-active);
 }
 
 /* Card Styles */
@@ -241,60 +255,74 @@ body {
     border-radius: var(--radius-lg);
     padding: var(--spacing-lg);
     box-shadow: var(--shadow-md);
-    backdrop-filter: blur(10px);
-    border: 1px solid var(--border-subtle);
+    backdrop-filter: blur(8px);
     transition: all var(--transition-normal);
+    border: 1px solid var(--border-subtle);
 }
 
 .card:hover {
     background-color: var(--bg-card-hover);
     box-shadow: var(--shadow-lg);
     transform: translateY(-2px);
-    border-color: var(--border-glow);
 }
 
 /* Input Styles */
 .input {
     width: 100%;
     padding: var(--spacing-sm) var(--spacing-md);
-    background-color: var(--bg-input);
-    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
+    background-color: var(--bg-input);
     color: var(--text-main);
-    font-size: var(--font-size-sm);
+    border: 1px solid var(--border-subtle);
     transition: all var(--transition-normal);
+    font-size: var(--font-size-sm);
 }
 
 .input:focus {
     outline: none;
-    border-color: var(--accent-cyan);
-    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
+    border-color: var(--border-active);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
 }
 
-/* Animation Keyframes */
-@keyframes pulse {
-    0% { opacity: 1; }
-    50% { opacity: 0.5; }
-    100% { opacity: 1; }
+/* Animation Classes */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
-.pulse {
-    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+.fade-in {
+    animation: fadeIn var(--animation-duration) var(--animation-ease) forwards;
 }
 
-/* Responsive Breakpoints */
+@keyframes slideUp {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.slide-up {
+    animation: slideUp var(--animation-duration) var(--animation-ease) forwards;
+}
+
+/* Responsive Design */
 @media (max-width: 768px) {
     .container {
         padding: 0 var(--spacing-sm);
     }
 
-    .text-4xl { font-size: var(--font-size-3xl); }
     .text-3xl { font-size: var(--font-size-2xl); }
     .text-2xl { font-size: var(--font-size-xl); }
+    .text-xl { font-size: var(--font-size-lg); }
+
+    .card { padding: var(--spacing-md); }
+
+    .btn { padding: var(--spacing-xs) var(--spacing-sm); }
 }
 
 @media (max-width: 480px) {
-    .text-3xl { font-size: var(--font-size-xl); }
     .text-2xl { font-size: var(--font-size-lg); }
     .text-xl { font-size: var(--font-size-base); }
+
+    .card { padding: var(--spacing-sm); }
+
+    .btn { padding: var(--spacing-xs) var(--spacing-xs); }
 }
