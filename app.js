@@ -1,9 +1,6 @@
 (function () {
     'use strict';
 
-    // ---------------------------------------------------------------------
-    // State Store
-    // ---------------------------------------------------------------------
     const state = {
         wallet: {
             connected: false,
@@ -16,11 +13,11 @@
             chainId: '0x1',
             networkName: 'Ethereum Mainnet',
             tokens: [
-                { symbol: 'ETH', name: 'Ethereum', balance: 14.852, decimals: 18, price: 3450.75, icon: '\u039e' },
-                { symbol: 'USDT', name: 'Tether USD', balance: 42500.00, decimals: 6, price: 1.00, icon: '\u20ae' },
-                { symbol: 'BTC', name: 'Bitcoin', balance: 0.65, decimals: 8, price: 64200.00, icon: '\u20bf' },
-                { symbol: 'SOL', name: 'Solana', balance: 12.5, decimals: 9, price: 145.20, icon: '\u25ce' },
-                { symbol: 'OPUS', name: 'Magnum Opus Governance', balance: 10000.0, decimals: 18, price: 0.45, icon: '\u2756' }
+                { symbol: 'ETH', name: 'Ethereum', balance: 14.852, decimals: 18, price: 3450.75, icon: 'ETH' },
+                { symbol: 'USDT', name: 'Tether USD', balance: 42500.00, decimals: 6, price: 1.00, icon: 'USDT' },
+                { symbol: 'BTC', name: 'Bitcoin', balance: 0.65, decimals: 8, price: 64200.00, icon: 'BTC' },
+                { symbol: 'SOL', name: 'Solana', balance: 12.5, decimals: 9, price: 145.20, icon: 'SOL' },
+                { symbol: 'OPUS', name: 'Magnum Opus Governance', balance: 10000.0, decimals: 18, price: 0.45, icon: 'OPUS' }
             ]
         },
         gas: {
@@ -65,7 +62,7 @@
         nfts: [
             {
                 id: 1,
-                name: 'Cyber Opus #001',
+                name: 'Cyber Opus 001',
                 collection: 'Opus Genesis',
                 price: '2.5 ETH',
                 priceVal: 2.5,
@@ -77,7 +74,7 @@
             },
             {
                 id: 2,
-                name: 'Cyber Opus #042',
+                name: 'Cyber Opus 042',
                 collection: 'Opus Genesis',
                 price: '1.2 ETH',
                 priceVal: 1.2,
@@ -89,7 +86,7 @@
             },
             {
                 id: 3,
-                name: 'Aether Shield #108',
+                name: 'Aether Shield 108',
                 collection: 'Relics of DeFi',
                 price: '0.85 ETH',
                 priceVal: 0.85,
@@ -131,228 +128,143 @@
         }
     };
 
-    // ---------------------------------------------------------------------
-    // Pair Exchange Rates Dictionary & Engine Configuration
-    // ---------------------------------------------------------------------
-    const PAIR_RATES = {
-        'ETH/USDT': { base: 'ETH', quote: 'USDT', price: 3450.75, decimals: 2 },
-        'BTC/USDT': { base: 'BTC', quote: 'USDT', price: 64200.00, decimals: 2 },
-        'SOL/USDT': { base: 'SOL', quote: 'USDT', price: 145.20, decimals: 2 },
-        'OPUS/USDT': { base: 'OPUS', quote: 'USDT', price: 0.45, decimals: 4 },
-        'ETH/BTC': { base: 'ETH', quote: 'BTC', price: 0.0537, decimals: 6 }
-    };
-
-    // ---------------------------------------------------------------------
-    // Utility Functions
-    // ---------------------------------------------------------------------
-    /**
-     * Formats a number with a fixed number of decimal places and thousands separators.
-     */
-    function formatNumber(num, decimals) {
+    const formatCurrency = (value, symbol) => {
+        const safeValue = Number(value) || 0;
         const options = {
-            minimumFractionDigits: decimals,
-            maximumFractionDigits: decimals,
-            useGrouping: true
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
         };
-        return Number(num).toLocaleString(undefined, options);
-    }
-
-    /**
-     * Retrieves a token object from the wallet token list by its symbol.
-     */
-    function getToken(symbol) {
-        return state.wallet.tokens.find(t => t.symbol === symbol) || null;
-    }
-
-    // ---------------------------------------------------------------------
-    // State Persistence (localStorage)
-    // ---------------------------------------------------------------------
-    const STORAGE_KEY = 'magnum_opus_state';
-
-    function loadState() {
-        try {
-            const raw = localStorage.getItem(STORAGE_KEY);
-            if (raw) {
-                const persisted = JSON.parse(raw);
-                // Deep merge persisted values onto the default state
-                Object.assign(state, persisted);
-                // Merge nested objects where appropriate
-                if (persisted.wallet && persisted.wallet.tokens) {
-                    state.wallet.tokens = persisted.wallet.tokens;
-                }
-                if (persisted.settings) {
-                    Object.assign(state.settings, persisted.settings);
-                }
-                console.log('🔄 State loaded from localStorage');
-            }
-        } catch (e) {
-            console.warn('Failed to load persisted state:', e);
-        }
-    }
-
-    function saveState() {
-        try {
-            const snapshot = {
-                wallet: {
-                    connected: state.wallet.connected,
-                    address: state.wallet.address,
-                    tokens: state.wallet.tokens
-                },
-                settings: state.settings,
-                swap: state.swap,
-                staking: state.staking
-            };
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-            console.log('💾 State saved to localStorage');
-        } catch (e) {
-            console.warn('Failed to persist state:', e);
-        }
-    }
-
-    // ---------------------------------------------------------------------
-    // Market Data Refresh (mocked fetch)
-    // ---------------------------------------------------------------------
-    async function refreshMarketData() {
-        try {
-            // In a real implementation this would call a backend API.
-            // Here we simulate latency and random price drift.
-            await new Promise(r => setTimeout(r, 500));
-            const pair = state.market.selectedPair;
-            const rate = PAIR_RATES[pair];
-            if (!rate) return;
-            // Simulate a small random price change +/-0.5%
-            const drift = (Math.random() - 0.5) * 0.01;
-            const newPrice = +(rate.price * (1 + drift)).toFixed(rate.decimals);
-            rate.price = newPrice;
-            state.market.price = newPrice;
-            state.market.change24h = +(drift * 100).toFixed(2);
-            // Update chart data (simple rolling window)
-            const now = new Date();
-            state.market.chartData.labels.push(now.toLocaleTimeString());
-            state.market.chartData.prices.push(newPrice);
-            if (state.market.chartData.labels.length > 30) {
-                state.market.chartData.labels.shift();
-                state.market.chartData.prices.shift();
-            }
-            // Notify UI (if a render hook exists)
-            if (typeof window.dispatchEvent === 'function') {
-                window.dispatchEvent(new CustomEvent('magnum:market-updated', { detail: { pair, price: newPrice } }));
-            }
-        } catch (e) {
-            console.error('Market refresh failed:', e);
-        }
-    }
-
-    // ---------------------------------------------------------------------
-    // Swap Engine
-    // ---------------------------------------------------------------------
-    function calculateSwap() {
-        const { fromToken, toToken, fromAmount, slippage } = state.swap;
-        if (!fromAmount || isNaN(fromAmount) || fromAmount <= 0) {
-            state.swap.toAmount = '';
-            return;
-        }
-        const pairKey = `${fromToken}/${toToken}`;
-        const reverseKey = `${toToken}/${fromToken}`;
-        let rateInfo = PAIR_RATES[pairKey];
-        let direction = 1; // forward
-        if (!rateInfo) {
-            rateInfo = PAIR_RATES[reverseKey];
-            direction = -1; // reverse
-        }
-        if (!rateInfo) {
-            console.warn('No rate available for pair', fromToken, toToken);
-            state.swap.toAmount = '';
-            return;
-        }
-        const rawPrice = rateInfo.price;
-        const price = direction === 1 ? rawPrice : 1 / rawPrice;
-        // Apply slippage tolerance (worst‑case execution price)
-        const effectivePrice = price * (1 + (slippage || state.settings.slippageTolerance) / 100);
-        const toAmount = direction === 1
-            ? fromAmount * effectivePrice
-            : fromAmount / effectivePrice;
-        const decimals = rateInfo.decimals;
-        state.swap.toAmount = formatNumber(toAmount, decimals);
-    }
-
-    // ---------------------------------------------------------------------
-    // UI Bindings (lightweight, no framework)
-    // ---------------------------------------------------------------------
-    function bindUI() {
-        // Wallet connect button
-        const connectBtn = document.getElementById('btn-connect-wallet');
-        if (connectBtn) {
-            connectBtn.addEventListener('click', async () => {
-                if (window.ethereum) {
-                    try {
-                        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-                        state.wallet.connected = true;
-                        state.wallet.address = accounts[0];
-                        saveState();
-                        // Simple UI feedback
-                        connectBtn.textContent = 'Connected';
-                        console.log('Wallet connected:', accounts[0]);
-                    } catch (err) {
-                        console.error('User rejected wallet connection');
-                    }
-                } else {
-                    alert('MetaMask not detected. Please install it to use the wallet features.');
-                }
-            });
-        }
-
-        // Swap input fields
-        const fromInput = document.getElementById('swap-from-amount');
-        const toInput = document.getElementById('swap-to-amount');
-        if (fromInput) {
-            fromInput.addEventListener('input', e => {
-                state.swap.fromAmount = parseFloat(e.target.value);
-                calculateSwap();
-                if (toInput) toInput.value = state.swap.toAmount;
-            });
-        }
-        // Token selector change
-        const fromSelect = document.getElementById('swap-from-token');
-        const toSelect = document.getElementById('swap-to-token');
-        if (fromSelect && toSelect) {
-            const updatePair = () => {
-                state.swap.fromToken = fromSelect.value;
-                state.swap.toToken = toSelect.value;
-                calculateSwap();
-                if (toInput) toInput.value = state.swap.toAmount;
-            };
-            fromSelect.addEventListener('change', updatePair);
-            toSelect.addEventListener('change', updatePair);
-        }
-
-        // Theme toggle
-        const themeToggle = document.getElementById('theme-toggle');
-        if (themeToggle) {
-            themeToggle.addEventListener('click', () => {
-                const newTheme = state.settings.theme === 'dark' ? 'light' : 'dark';
-                state.settings.theme = newTheme;
-                document.documentElement.setAttribute('data-theme', newTheme);
-                saveState();
-            });
-        }
-    }
-
-    // ---------------------------------------------------------------------
-    // Initialization
-    // ---------------------------------------------------------------------
-    loadState();
-    bindUI();
-    // Initial market fetch and then periodic refresh based on settings
-    refreshMarketData();
-    setInterval(refreshMarketData, state.settings.autoRefreshInterval);
-
-    // Expose a minimal API for debugging / external scripts
-    window.MagnumOpus = {
-        state,
-        calculateSwap,
-        refreshMarketData,
-        formatNumber,
-        getToken
+        const formatted = safeValue.toLocaleString('en-US', options);
+        return symbol ? formatted + ' ' + symbol : formatted;
     };
+
+    const formatTokenAmount = (value, decimals) => {
+        const safeValue = Number(value) || 0;
+        const divisor = Math.pow(10, Number(decimals) || 18);
+        const normalized = safeValue / divisor;
+        return normalized.toFixed(4);
+    };
+
+    const getPortfolioValue = () => {
+        let total = 0;
+        const tokens = state.wallet.tokens || [];
+        for (let i = 0; i < tokens.length; i++) {
+            const token = tokens[i];
+            total += (Number(token.balance) || 0) * (Number(token.price) || 0);
+        }
+        const ethPrice = Number(state.market.price) || 0;
+        total += (Number(state.wallet.balanceEth) || 0) * ethPrice;
+        const usdtValue = (Number(state.wallet.balanceUsdt) || 0) / (Number(state.market.price) || 1);
+        total += usdtValue;
+        const btcToken = state.wallet.tokens.find(t => t.symbol === 'BTC');
+        const solToken = state.wallet.tokens.find(t => t.symbol === 'SOL');
+        const opusToken = state.wallet.tokens.find(t => t.symbol === 'OPUS');
+        const btcValue = (Number(state.wallet.balanceBtc) || 0) * (Number(btcToken?.price) || 0);
+        total += btcValue;
+        const solValue = (Number(state.wallet.balanceSol) || 0) * (Number(solToken?.price) || 0);
+        total += solValue;
+        const opusValue = (Number(state.wallet.balanceOpus) || 0) * (Number(opusToken?.price) || 0);
+        total += opusValue;
+        return total;
+    };
+
+    const renderPortfolio = () => {
+        const valueElement = document.getElementById('portfolioValue');
+        if (valueElement) {
+            valueElement.textContent = formatCurrency(getPortfolioValue(), 'USD');
+        }
+    };
+
+    const renderMarket = () => {
+        const priceElement = document.getElementById('marketPrice');
+        if (priceElement) {
+            const pairParts = state.market.selectedPair.split('/');
+            const base = pairParts[0] || 'ETH';
+            const quote = pairParts[1] || 'USDT';
+            priceElement.textContent = formatCurrency(state.market.price, base + '/' + quote);
+        }
+    };
+
+    const renderSwap = () => {
+        const fromElement = document.getElementById('swapFromAmount');
+        const toElement = document.getElementById('swapToAmount');
+        if (fromElement && toElement) {
+            const fromAmount = Number(fromElement.value) || 0;
+            const rate = Number(state.market.price) || 1;
+            const expected = fromAmount * rate;
+            toElement.value = expected.toFixed(2);
+        }
+    };
+
+    const renderStaking = () => {
+        const claimButton = document.getElementById('claimRewards');
+        if (claimButton) {
+            claimButton.disabled = !(state.staking.pendingRewards > 0);
+        }
+    };
+
+    const renderNfts = () => {
+        const grid = document.getElementById('nftGrid');
+        if (!grid) {
+            return;
+        }
+        grid.innerHTML = '';
+        const nfts = state.nfts || [];
+        for (let i = 0; i < nfts.length; i++) {
+            const nft = nfts[i];
+            const card = document.createElement('div');
+            card.className = 'nftCard';
+            card.innerHTML = '<div class="nftName">' + nft.name + '</div><div class="nftPrice">' + nft.price + '</div>';
+            grid.appendChild(card);
+        }
+    };
+
+    const renderTransactions = () => {
+        const list = document.getElementById('transactionList');
+        if (!list) {
+            return;
+        }
+        list.innerHTML = '';
+        const transactions = state.transactions || [];
+        for (let i = 0; i < transactions.length; i++) {
+            const tx = transactions[i];
+            const row = document.createElement('div');
+            row.className = 'transactionRow';
+            row.innerHTML = '<span>' + tx.type + '</span><span>' + tx.status + '</span>';
+            list.appendChild(row);
+        }
+    };
+
+    const updateUI = () => {
+        renderPortfolio();
+        renderMarket();
+        renderSwap();
+        renderStaking();
+        renderNfts();
+        renderTransactions();
+    };
+
+    const init = () => {
+        updateUI();
+        const claimButton = document.getElementById('claimRewards');
+        if (claimButton) {
+            claimButton.addEventListener('click', () => {
+                state.staking.pendingRewards = 0;
+                state.staking.lastClaimed = Date.now();
+                updateUI();
+            });
+        }
+        const swapFrom = document.getElementById('swapFromAmount');
+        if (swapFrom) {
+            swapFrom.addEventListener('input', () => {
+                renderSwap();
+            });
+        }
+    };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
 })();
