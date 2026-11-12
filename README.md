@@ -80,52 +80,88 @@ flowchart TD
         RB["Wallet & Oracle Layer (Ruby)<br/>WalletService.rb"]
     end
 
-    subgraph Compute["High-Performance Engine"]
-        CPP["Crypto Computational Engine (C++)<br/>CryptoEngine.cpp"]
+    subgraph Engine["High-Performance Engine"]
+        CPP["Cryptographic Engine (C++)<br/>CryptoEngine.cpp"]
     end
 
-    subgraph OnChain["Smart Contracts & On-Chain Programs"]
-        SOL["Smart Contracts (Solidity)<br/>SmartContract.sol"]
+    subgraph Contracts["Smart Contracts"]
+        SOL["Solidity Contracts<br/>SmartContract.sol"]
         RS["On-Chain Program (Rust)<br/>OnChainProgram.rs"]
     end
 
-    subgraph Data["Data Layer"]
-        SQL["Relational Database (SQL)<br/>schema.sql"]
+    subgraph Data["Data Persistence"]
+        SQL["PostgreSQL Schema<br/>schema.sql"]
     end
 
     subgraph Network["Network Layer"]
-        EX["Peer-to-Peer Gossip Node (Elixir)<br/>GossipNode.ex"]
+        EX["Gossip Node (Elixir)<br/>GossipNode.ex"]
     end
 
-    UI -->|HTTP/HTTPS| GO
-    GO -->|WebSocket| UI
-    GO -->|RPC| CS
-    CS -->|Database| SQL
-    CS -->|Cryptographic Operations| CPP
-    CPP -->|Computation Results| CS
-    SOL -->|Smart Contract Calls| CS
-    RS -->|On-Chain Transactions| CS
-    RB -->|Balance Queries| CS
-    RB -->|Rate Data| UI
-    EX -->|Gossip Protocol| GO
-    EX -->|Gossip Protocol| EX
+    UI -->|User Interaction| GO
+    GO -->|Transaction Relay| CS
+    CS -->|Transaction Processing| CPP
+    CPP -->|Cryptographic Operations| SOL
+    SOL -->|Smart Contract Execution| RS
+    RS -->|On-Chain State| SQL
+    SQL -->|Data Persistence| CS
+    CS -->|Transaction Validation| EX
+    EX -->|Peer-to-Peer Communication| GO
 ```
 
 ---
 
 ## [38;5;226m[1mComponent Map[0m
 
-| Component | Language | File | Description |
-|---|---|---|---|
-| Interactive Dashboard | HTML5 / CSS3 / JavaScript | `index.html`, `styles.css`, `app.js` | Dark-theme Web3 trading, staking, portfolio, and swap interface |
-| Transaction Core | C# (.NET Core) | `TransactionProcessor.cs` | Transaction lifecycle validation, Merkle block generation, cryptographic receipts |
-| Crypto Computational Engine | C++ (C++20) | `CryptoEngine.cpp` | SHA-256 computation, Merkle tree verification, AMM math, order-book matching |
-| Smart Contracts | Solidity (0.8.24) | `SmartContract.sol` | Multi-token vault, AMM swap liquidity pools, yield staking, NFT badge logic |
-| Microservice Relayer | Go (Golang) | `server.go` | Lightweight concurrent transaction relayer, wallet proxy, and WebSocket broadcaster |
-| Relational Database | PostgreSQL / SQL | `schema.sql` | Relational ledger schema for accounts, transactions, order books, and NFT metadata |
-| On-Chain Program | Rust (Solana / Anchor) | `OnChainProgram.rs` | Memory-safe on-chain vault program with account state validation and instruction routing |
-| Wallet & Oracle Layer | Ruby | `WalletService.rb` | Balance aggregation, rate caching, mock oracles, and cross-tier transaction utilities |
-| Peer-to-Peer Gossip Node | Elixir | `GossipNode.ex` | Supervised peer-to-peer gossip node with mempool, peer registry, and transaction gossip/broadcast |
+```mermaid
+classDiagram
+    class UI {
+        +index.html
+        +styles.css
+        +app.js
+    }
+
+    class GO {
+        +server.go
+    }
+
+    class CS {
+        +TransactionProcessor.cs
+    }
+
+    class RB {
+        +WalletService.rb
+    }
+
+    class CPP {
+        +CryptoEngine.cpp
+    }
+
+    class SOL {
+        +SmartContract.sol
+    }
+
+    class RS {
+        +OnChainProgram.rs
+    }
+
+    class SQL {
+        +schema.sql
+    }
+
+    class EX {
+        +GossipNode.ex
+    }
+
+    UI --> GO : User Interaction
+    GO --> CS : Transaction Relay
+    CS --> CPP : Transaction Processing
+    CPP --> SOL : Cryptographic Operations
+    SOL --> RS : Smart Contract Execution
+    RS --> SQL : On-Chain State
+    SQL --> CS : Data Persistence
+    CS --> EX : Transaction Validation
+    EX --> GO : Peer-to-Peer Communication
+```
 
 ---
 
@@ -133,14 +169,8 @@ flowchart TD
 
 ### Prerequisites
 
-- [Git](https://git-scm.com/)
-- [Docker](https://www.docker.com/)
-- [Node.js](https://nodejs.org/)
-- [.NET SDK](https://dotnet.microsoft.com/download)
-- [Go](https://golang.org/)
-- [Rust](https://www.rust-lang.org/)
-- [Solana CLI](https://docs.solana.com/cli/install-solana-cli-tool-suite)
-- [PostgreSQL](https://www.postgresql.org/)
+- **Docker**: Ensure Docker is installed and running on your system.
+- **Git**: Ensure Git is installed on your system.
 
 ### Clone the Repository
 
@@ -149,137 +179,68 @@ git clone https://github.com/LinkHAckerman/MasterProject.git
 cd MasterProject
 ```
 
-### Build and Run
-
-1. **Frontend Dashboard**
+### Build and Run the Application
 
 ```sh
-cd frontend
-npm install
-npm start
+docker-compose up --build
 ```
 
-2. **Backend Services**
+### Access the Dashboard
 
-```sh
-cd ../backend
-dotnet restore
-dotnet run
-```
-
-3. **Crypto Engine**
-
-```sh
-cd ../engine
-g++ -std=c++20 -o CryptoEngine CryptoEngine.cpp
-./CryptoEngine
-```
-
-4. **Smart Contracts**
-
-```sh
-cd ../contracts
-npm install
-npx hardhat compile
-```
-
-5. **Microservice Relayer**
-
-```sh
-cd ../relayer
-go build -o server
-./server
-```
-
-6. **Database**
-
-```sh
-cd ../database
-psql -U postgres -f schema.sql
-```
-
-7. **On-Chain Program**
-
-```sh
-cd ../onchain
-cargo build-bpf
-```
-
-8. **Wallet & Oracle Layer**
-
-```sh
-cd ../wallet
-bundle install
-ruby WalletService.rb
-```
-
-9. **Peer-to-Peer Gossip Node**
-
-```sh
-cd ../network
-mix deps.get
-iex -S mix
-```
+Open your web browser and navigate to `http://localhost:8080` to access the Magnum Opus dashboard.
 
 ---
 
 ## [38;5;226m[1mAutomation and AI Agent Pipeline[0m
 
-Magnum Opus uses a multi-model AI agent pipeline for collaborative development and continuous validation. The pipeline includes:
+Magnum Opus uses an AI agent pipeline to automate development tasks. The pipeline consists of multiple AI agents, each specialized in different tasks:
 
-- **ai_agent.py**: Main agent orchestrator
-- **ai_agent_cloudflare.py**: Cloudflare Workers AI integration
-- **ai_agent_github_models.py**: GitHub Models integration
-- **ai_agent_groq.py**: Groq API integration
-- **ai_agent_mistral.py**: Mistral AI integration
-- **ai_agent_openrouter.py**: OpenRouter integration
+- **ai_agent.py**: Main AI agent for general tasks.
+- **ai_agent_cloudflare.py**: AI agent for Cloudflare-related tasks.
+- **ai_agent_github_models.py**: AI agent for GitHub models.
+- **ai_agent_groq.py**: AI agent for Groq-related tasks.
+- **ai_agent_mistral.py**: AI agent for Mistral-related tasks.
+- **ai_agent_openrouter.py**: AI agent for OpenRouter-related tasks.
 
-The pipeline is triggered by the GitHub Actions workflow `.github/workflows/daily_agent.yml`.
+The pipeline is triggered by the `daily_agent.yml` workflow in the `.github/workflows` directory.
 
 ---
 
 ## [38;5;226m[1mRepository Layout[0m
 
-```
+```plaintext
 MasterProject/
 ├── .github/
 │   └── workflows/
 │       └── daily_agent.yml
-├── frontend/
-│   ├── index.html
-│   ├── styles.css
-│   └── app.js
-├── backend/
-│   └── TransactionProcessor.cs
-├── engine/
-│   └── CryptoEngine.cpp
-├── contracts/
-│   └── SmartContract.sol
-├── relayer/
-│   └── server.go
-├── database/
-│   └── schema.sql
-├── onchain/
-│   └── OnChainProgram.rs
-├── wallet/
-│   └── WalletService.rb
-├── network/
-│   └── GossipNode.ex
-├── agents/
-│   ├── ai_agent.py
-│   ├── ai_agent_cloudflare.py
-│   ├── ai_agent_github_models.py
-│   ├── ai_agent_groq.py
-│   ├── ai_agent_mistral.py
-│   └── ai_agent_openrouter.py
-├── validate_files.py
 ├── CLA.md
 ├── CODE_OF_CONDUCT.md
 ├── CONTRIBUTING.md
+├── CryptoEngine.cpp
+├── GossipNode.ex
 ├── LICENSE
+├── OnChainProgram.rs
+├── README.md
 ├── SECURITY.md
+├── SmartContract.sol
 ├── TERMS.md
-└── README.md
+├── TransactionProcessor.cs
+├── WalletService.rb
+├── agent_common.py
+├── ai_agent.py
+├── ai_agent_cloudflare.py
+├── ai_agent_github_models.py
+├── ai_agent_groq.py
+├── ai_agent_mistral.py
+├── ai_agent_openrouter.py
+├── app.js
+├── index.html
+├── scaffold/
+│   └── test.txt
+├── schema.sql
+├── server.go
+├── styles.css
+└── validate_files.py
 ```
 
 ---
@@ -287,34 +248,32 @@ MasterProject/
 ## [38;5;226m[1mProject Documents[0m
 
 - [License](LICENSE)
-- [Contributing](CONTRIBUTING.md)
+- [Contributing Guidelines](CONTRIBUTING.md)
 - [Contributor License Agreement](CLA.md)
 - [Security Policy](SECURITY.md)
-- [Terms of Service](TERMS.md)
+- [Terms of Use](TERMS.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ---
 
 ## [38;5;226m[1mKnown Limitations[0m
 
-- **Not Audited**: The Solidity smart contracts, Rust on-chain program, C++ cryptographic primitives, and wallet relayers have not undergone formal third-party audits.
+- **Not Audited**: The Solidity smart contracts, Rust on-chain program, C++ cryptographic primitives, and wallet relayers have **not undergone formal third-party audits**. **Do not deploy with real digital assets or private keys.**
 - **Simulated Market Environment**: Market rates, liquidity metrics, and transaction receipts rendered in the web dashboard are simulated demonstrations.
-- **Standalone Components**: Most components operate as standalone units or mock integration harnesses.
 
 ---
 
 ## [38;5;226m[1mRoadmap[0m
 
-- **Integration Testing**: Develop comprehensive integration tests for the various components.
-- **Performance Optimization**: Optimize the performance of the C++ cryptographic engine and the Elixir gossip node.
-- **Security Audits**: Conduct formal security audits for the Solidity smart contracts, Rust on-chain program, and C++ cryptographic primitives.
-- **Real-World Deployment**: Prepare the platform for real-world deployment with proper security measures and audits.
+- **Phase 1**: Complete the integration of all components.
+- **Phase 2**: Implement additional features such as staking, governance, and more.
+- **Phase 3**: Conduct security audits and prepare for production deployment.
 
 ---
 
 ## [38;5;226m[1mContributing[0m
 
-Contributions are welcome! Please read the [Contributing](CONTRIBUTING.md) guide for details on our code of conduct and the process for submitting pull requests.
+Contributions are welcome! Please read the [Contributing Guidelines](CONTRIBUTING.md) for more information.
 
 ---
 

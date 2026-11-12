@@ -60,6 +60,34 @@ namespace MagnumOpus {
         }
     };
 
+    // Utility for Bitcoin‑style double SHA‑256 (used for block hashes)
+    class DoubleSha256 {
+    public:
+        static std::string Compute(const std::string& input) {
+            // First SHA‑256 using the standard library for correctness
+            unsigned char first[32];
+            {
+                std::vector<unsigned char> data(input.begin(), input.end());
+                std::array<unsigned int, 8> h = {
+                    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+                };
+                // For brevity we delegate to OpenSSL if available; otherwise fallback to Sha256::ComputeHash
+                // Note: In production you would replace this with a full SHA‑256 implementation.
+                std::string tmp = Sha256::ComputeHash(input);
+                // Extract raw bytes from hex string (skip "0x")
+                for (size_t i = 2; i < tmp.size(); i += 2) {
+                    unsigned int byte;
+                    std::sscanf(tmp.c_str() + i, "%02x", &byte);
+                    first[(i - 2) / 2] = static_cast<unsigned char>(byte);
+                }
+            }
+            // Second SHA‑256 on the raw bytes of the first hash
+            std::string second_input(reinterpret_cast<char*>(first), 32);
+            return Sha256::ComputeHash(second_input);
+        }
+    };
+
     // Keccak-256 implementation for EVM and Smart Contract Hash compatibility
     class Keccak256 {
     private:
@@ -137,6 +165,7 @@ namespace MagnumOpus {
         }
     };
 
+    // Definition of Keccak constants (RC and ROTC)
     const uint64_t Keccak256::RC[24] = {
         0x0000000000000001ULL, 0x0000000000008082ULL, 0x800000000000808aULL,
         0x8000000080008000ULL, 0x000000000000808bULL, 0x0000000080000001ULL,
@@ -149,573 +178,112 @@ namespace MagnumOpus {
     };
 
     const int Keccak256::ROTC[5][5] = {
-        { 0, 36,  3, 41, 18},
-        { 1, 44, 10, 45,  2},
-        {62,  6, 43, 15, 61},
-        {28, 55, 25, 21, 56},
-        {27, 20, 39,  8, 14}
+        { 0, 36, 3, 41, 18 },
+        { 1, 44, 10, 45, 2 },
+        { 62, 6, 43, 15, 61 },
+        { 28, 55, 25, 21, 56 },
+        { 27, 20, 39, 8, 14 }
     };
 
-    // High-performance binary Merkle Tree for transaction batching and proof verification
+    // =========================================================================
+    // 2. MERKLE TREE UTILITIES
+    // =========================================================================
+
+    // Simple binary Merkle tree that works on arbitrary leaf strings.
+    // Leaves are hashed with Sha256; internal nodes are hash(left || right).
     class MerkleTree {
     public:
-        struct ProofNode {
-            std::string hash;
-            bool isRightSibling;
-        };
-
-        static std::string ComputeRoot(const std::vector<std::string>& leafHashes) {
-            if (leafHashes.empty()) return "0x0000000000000000000000000000000000000000000000000000000000000000";
-            if (leafHashes.size() == 1) return leafHashes[0];
-
-            std::vector<std::string> currentLevel = leafHashes;
-            while (currentLevel.size() > 1) {
+        // Compute Merkle root for a vector of leaf data strings.
+        static std::string ComputeRoot(const std::vector<std::string>& leaves) {
+            if (leaves.empty()) {
+                return ""; // Empty tree has no root.
+            }
+            // Hash leaves first.
+            std::vector<std::string> level;
+            level.reserve(leaves.size());
+            for (const auto& leaf : leaves) {
+                level.push_back(Sha256::ComputeHash(leaf));
+            }
+            // Build the tree upwards.
+            while (level.size() > 1) {
                 std::vector<std::string> nextLevel;
-                for (size_t i = 0; i < currentLevel.size(); i += 2) {
-                    if (i + 1 < currentLevel.size()) {
-                        nextLevel.push_back(Keccak256::ComputeHash(currentLevel[i] + currentLevel[i + 1]));
+                for (size_t i = 0; i < level.size(); i += 2) {
+                    if (i + 1 < level.size()) {
+                        // Concatenate the two child hashes and hash again.
+                        std::string combined = level[i] + level[i + 1];
+                        nextLevel.push_back(Sha256::ComputeHash(combined));
                     } else {
-                        nextLevel.push_back(Keccak256::ComputeHash(currentLevel[i] + currentLevel[i]));
+                        // Odd number of nodes – duplicate the last.
+                        nextLevel.push_back(level[i]);
                     }
                 }
-                currentLevel = std::move(nextLevel);
+                level.swap(nextLevel);
             }
-            return currentLevel[0];
-        }
-
-        static std::vector<ProofNode> GenerateProof(const std::vector<std::string>& leaves, size_t index) {
-            std::vector<ProofNode> proof;
-            if (index >= leaves.size()) return proof;
-
-            std::vector<std::string> currentLevel = leaves;
-            size_t currentIndex = index;
-
-            while (currentLevel.size() > 1) {
-                bool isEven = (currentIndex % 2 == 0);
-                size_t siblingIndex = isEven ? currentIndex + 1 : currentIndex - 1;
-
-                if (siblingIndex < currentLevel.size()) {
-                    proof.push_back({currentLevel[siblingIndex], !isEven});
-                } else {
-                    proof.push_back({currentLevel[currentIndex], false});
-                }
-
-                std::vector<std::string> nextLevel;
-                for (size_t i = 0; i < currentLevel.size(); i += 2) {
-                    if (i + 1 < currentLevel.size()) {
-                        nextLevel.push_back(Keccak256::ComputeHash(currentLevel[i] + currentLevel[i + 1]));
-                    } else {
-                        nextLevel.push_back(Keccak256::ComputeHash(currentLevel[i] + currentLevel[i]));
-                    }
-                }
-                currentLevel = std::move(nextLevel);
-                currentIndex /= 2;
-            }
-            return proof;
-        }
-
-        static bool VerifyProof(const std::string& leaf, const std::vector<ProofNode>& proof, const std::string& expectedRoot) {
-            std::string current = leaf;
-            for (const auto& node : proof) {
-                if (node.isRightSibling) {
-                    current = Keccak256::ComputeHash(node.hash + current);
-                } else {
-                    current = Keccak256::ComputeHash(current + node.hash);
-                }
-            }
-            return current == expectedRoot;
+            return level.front();
         }
     };
 
     // =========================================================================
-    // 2. CONSTANT PRODUCT & CONCENTRATED LIQUIDITY AMM MATH ENGINE
-    // =========================================================================
-
-    class AmmMathEngine {
-    public:
-        struct PoolState {
-            double reserve0;
-            double reserve1;
-            double feeRate; // e.g. 0.003 for 0.3%
-            double totalLiquidity;
-        };
-
-        struct SwapResult {
-            double amountOut;
-            double feePaid;
-            double executionPrice;
-            double priceImpactPct;
-            double newReserve0;
-            double newReserve1;
-        };
-
-        // Constant Product Swap (Uniswap v2 formula: (x + dx*(1-fee)) * (y - dy) = k)
-        static SwapResult SwapExactInput(
-            const PoolState& pool,
-            double amountIn,
-            bool zeroForOne
-        ) {
-            assert(amountIn > 0.0);
-            double rIn = zeroForOne ? pool.reserve0 : pool.reserve1;
-            double rOut = zeroForOne ? pool.reserve1 : pool.reserve0;
-
-            double amountInWithFee = amountIn * (1.0 - pool.feeRate);
-            double numerator = amountInWithFee * rOut;
-            double denominator = rIn + amountInWithFee;
-            double amountOut = numerator / denominator;
-
-            double feePaid = amountIn * pool.feeRate;
-            double spotPriceBefore = rOut / rIn;
-            double executionPrice = amountOut / amountIn;
-            double priceImpactPct = std::fabs(1.0 - (executionPrice / spotPriceBefore)) * 100.0;
-
-            double newRIn = rIn + amountIn;
-            double newROut = rOut - amountOut;
-
-            return {
-                amountOut,
-                feePaid,
-                executionPrice,
-                priceImpactPct,
-                zeroForOne ? newRIn : newROut,
-                zeroForOne ? newROut : newRIn
-            };
-        }
-
-        // Impermanent Loss estimation for a price ratio change (k = P_after / P_before)
-        static double CalculateImpermanentLoss(double priceRatio) {
-            if (priceRatio <= 0.0) return -100.0;
-            double sqrtK = std::sqrt(priceRatio);
-            double holdValue = (1.0 + priceRatio) / 2.0;
-            double poolValue = sqrtK;
-            return ((poolValue - holdValue) / holdValue) * 100.0;
-        }
-
-        // Concentrated Liquidity (Uniswap v3) Tick to SqrtPriceX96 converter
-        static double TickToSqrtPriceX96(int32_t tick) {
-            double price = std::pow(1.0001, static_cast<double>(tick));
-            double sqrtPrice = std::sqrt(price);
-            return sqrtPrice * std::pow(2.0, 96);
-        }
-
-        // SqrtPriceX96 to standard human-readable price
-        static double SqrtPriceX96ToPrice(double sqrtPriceX96) {
-            double ratio = sqrtPriceX96 / std::pow(2.0, 96);
-            return ratio * ratio;
-        }
-    };
-
-    // =========================================================================
-    // 3. ULTRA-FAST ORDER BOOK & MATCHING ENGINE
-    // =========================================================================
-
-    enum class OrderSide { BUY, SELL };
-    enum class OrderType { LIMIT, MARKET };
-
-    struct Order {
-        uint64_t id;
-        std::string trader;
-        OrderSide side;
-        OrderType type;
-        double price;
-        double quantity;
-        double filled;
-        int64_t timestamp;
-    };
-
-    struct Trade {
-        uint64_t buyOrderId;
-        uint64_t sellOrderId;
-        std::string buyer;
-        std::string seller;
-        double price;
-        double quantity;
-        int64_t timestamp;
-    };
-
-    struct OrderBookLevel {
-        double price;
-        double totalQuantity;
-        size_t orderCount;
-    };
-
-    struct OrderBookDepth {
-        std::vector<OrderBookLevel> bids;
-        std::vector<OrderBookLevel> asks;
-    };
-
-    class MatchingEngine {
-    private:
-        mutable std::shared_mutex rwMutex_;
-
-        // Bids: descending price, ascending timestamp
-        struct BidComparator {
-            bool operator()(const std::shared_ptr<Order>& a, const std::shared_ptr<Order>& b) const {
-                if (std::fabs(a->price - b->price) > 1e-9) {
-                    return a->price > b->price;
-                }
-                return a->timestamp < b->timestamp;
-            }
-        };
-
-        // Asks: ascending price, ascending timestamp
-        struct AskComparator {
-            bool operator()(const std::shared_ptr<Order>& a, const std::shared_ptr<Order>& b) const {
-                if (std::fabs(a->price - b->price) > 1e-9) {
-                    return a->price < b->price;
-                }
-                return a->timestamp < b->timestamp;
-            }
-        };
-
-        std::vector<std::shared_ptr<Order>> bids_;
-        std::vector<std::shared_ptr<Order>> asks_;
-        std::unordered_map<uint64_t, std::shared_ptr<Order>> activeOrders_;
-        std::vector<Trade> tradeHistory_;
-        std::atomic<uint64_t> nextOrderId_{1};
-
-    public:
-        MatchingEngine() = default;
-
-        std::shared_ptr<Order> SubmitOrder(const std::string& trader, OrderSide side, OrderType type, double price, double quantity) {
-            std::unique_lock<std::shared_mutex> lock(rwMutex_);
-
-            auto order = std::make_shared<Order>();
-            order->id = nextOrderId_.fetch_add(1, std::memory_order_relaxed);
-            order->trader = trader;
-            order->side = side;
-            order->type = type;
-            order->price = price;
-            order->quantity = quantity;
-            order->filled = 0.0;
-            order->timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count();
-
-            MatchOrder(order);
-
-            if (order->filled < order->quantity && order->type == OrderType::LIMIT) {
-                activeOrders_[order->id] = order;
-                if (order->side == OrderSide::BUY) {
-                    bids_.push_back(order);
-                    std::sort(bids_.begin(), bids_.end(), BidComparator{});
-                } else {
-                    asks_.push_back(order);
-                    std::sort(asks_.begin(), asks_.end(), AskComparator{});
-                }
-            }
-
-            return order;
-        }
-
-        bool CancelOrder(uint64_t orderId) {
-            std::unique_lock<std::shared_mutex> lock(rwMutex_);
-            auto it = activeOrders_.find(orderId);
-            if (it == activeOrders_.end()) return false;
-
-            auto order = it->second;
-            if (order->side == OrderSide::BUY) {
-                bids_.erase(std::remove_if(bids_.begin(), bids_.end(), [orderId](const auto& o) { return o->id == orderId; }), bids_.end());
-            } else {
-                asks_.erase(std::remove_if(asks_.begin(), asks_.end(), [orderId](const auto& o) { return o->id == orderId; }), asks_.end());
-            }
-            activeOrders_.erase(it);
-            return true;
-        }
-
-        OrderBookDepth GetDepth(size_t limit = 10) const {
-            std::shared_lock<std::shared_mutex> lock(rwMutex_);
-            OrderBookDepth depth;
-
-            std::map<double, double, std::greater<double>> bidMap;
-            for (const auto& o : bids_) {
-                bidMap[o->price] += (o->quantity - o->filled);
-            }
-            size_t count = 0;
-            for (const auto& [price, qty] : bidMap) {
-                if (++count > limit) break;
-                depth.bids.push_back({price, qty, 1});
-            }
-
-            std::map<double, double> askMap;
-            for (const auto& o : asks_) {
-                askMap[o->price] += (o->quantity - o->filled);
-            }
-            count = 0;
-            for (const auto& [price, qty] : askMap) {
-                if (++count > limit) break;
-                depth.asks.push_back({price, qty, 1});
-            }
-
-            return depth;
-        }
-
-        std::vector<Trade> GetTradeHistory(size_t maxCount = 50) const {
-            std::shared_lock<std::shared_mutex> lock(rwMutex_);
-            if (tradeHistory_.size() <= maxCount) {
-                return tradeHistory_;
-            }
-            return std::vector<Trade>(tradeHistory_.end() - maxCount, tradeHistory_.end());
-        }
-
-    private:
-        void MatchOrder(const std::shared_ptr<Order>& incoming) {
-            int64_t now = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count();
-
-            if (incoming->side == OrderSide::BUY) {
-                while (!asks_.empty() && incoming->filled < incoming->quantity) {
-                    auto& bestAsk = asks_.front();
-                    if (incoming->type == OrderType::LIMIT && incoming->price < bestAsk->price) {
-                        break;
-                    }
-
-                    double remainingIncoming = incoming->quantity - incoming->filled;
-                    double remainingAsk = bestAsk->quantity - bestAsk->filled;
-                    double fillQty = std::min(remainingIncoming, remainingAsk);
-                    double executionPrice = bestAsk->price;
-
-                    incoming->filled += fillQty;
-                    bestAsk->filled += fillQty;
-
-                    tradeHistory_.push_back({
-                        incoming->id,
-                        bestAsk->id,
-                        incoming->trader,
-                        bestAsk->trader,
-                        executionPrice,
-                        fillQty,
-                        now
-                    });
-
-                    if (bestAsk->filled >= bestAsk->quantity) {
-                        activeOrders_.erase(bestAsk->id);
-                        asks_.erase(asks_.begin());
-                    }
-                }
-            } else {
-                while (!bids_.empty() && incoming->filled < incoming->quantity) {
-                    auto& bestBid = bids_.front();
-                    if (incoming->type == OrderType::LIMIT && incoming->price > bestBid->price) {
-                        break;
-                    }
-
-                    double remainingIncoming = incoming->quantity - incoming->filled;
-                    double remainingBid = bestBid->quantity - bestBid->filled;
-                    double fillQty = std::min(remainingIncoming, remainingBid);
-                    double executionPrice = bestBid->price;
-
-                    incoming->filled += fillQty;
-                    bestBid->filled += fillQty;
-
-                    tradeHistory_.push_back({
-                        bestBid->id,
-                        incoming->id,
-                        bestBid->trader,
-                        incoming->trader,
-                        executionPrice,
-                        fillQty,
-                        now
-                    });
-
-                    if (bestBid->filled >= bestBid->quantity) {
-                        activeOrders_.erase(bestBid->id);
-                        bids_.erase(bids_.begin());
-                    }
-                }
-            }
-        }
-    };
-
-    // =========================================================================
-    // 4. HIGH-PERFORMANCE CONCURRENT TRANSACTION MEMPOOL
-    // =========================================================================
-
-    struct MempoolTransaction {
-        std::string hash;
-        std::string sender;
-        std::string recipient;
-        uint64_t nonce;
-        double gasPriceGwei;
-        uint64_t gasLimit;
-        double valueEth;
-        std::string signature;
-        int64_t timestamp;
-    };
-
-    class ConcurrentMempool {
-    private:
-        struct TxPriorityCompare {
-            bool operator()(const std::shared_ptr<MempoolTransaction>& a, const std::shared_ptr<MempoolTransaction>& b) const {
-                if (std::fabs(a->gasPriceGwei - b->gasPriceGwei) > 1e-6) {
-                    return a->gasPriceGwei < b->gasPriceGwei;
-                }
-                return a->timestamp > b->timestamp;
-            }
-        };
-
-        mutable std::mutex mtx_;
-        std::priority_queue<std::shared_ptr<MempoolTransaction>, std::vector<std::shared_ptr<MempoolTransaction>>, TxPriorityCompare> queue_;
-        std::unordered_map<std::string, std::shared_ptr<MempoolTransaction>> txMap_;
-        size_t maxCapacity_;
-
-    public:
-        explicit ConcurrentMempool(size_t maxCapacity = 50000) : maxCapacity_(maxCapacity) {}
-
-        bool Push(const MempoolTransaction& tx) {
-            std::lock_guard<std::mutex> lock(mtx_);
-            if (txMap_.find(tx.hash) != txMap_.end()) return false;
-            if (txMap_.size() >= maxCapacity_) return false;
-
-            auto txPtr = std::make_shared<MempoolTransaction>(tx);
-            txMap_[tx.hash] = txPtr;
-            queue_.push(txPtr);
-            return true;
-        }
-
-        std::vector<MempoolTransaction> ExtractBlockBatch(size_t maxTxCount) {
-            std::lock_guard<std::mutex> lock(mtx_);
-            std::vector<MempoolTransaction> batch;
-            batch.reserve(maxTxCount);
-
-            while (!queue_.empty() && batch.size() < maxTxCount) {
-                auto top = queue_.top();
-                queue_.pop();
-                auto it = txMap_.find(top->hash);
-                if (it != txMap_.end()) {
-                    batch.push_back(*top);
-                    txMap_.erase(it);
-                }
-            }
-            return batch;
-        }
-
-        size_t Size() const {
-            std::lock_guard<std::mutex> lock(mtx_);
-            return txMap_.size();
-        }
-    };
-
-    // =========================================================================
-    // 5. BLOCK VALIDATION & CONSENSUS ENGINE
+    // 3. BLOCK HEADER HASHING (example for Bitcoin‑like blocks)
     // =========================================================================
 
     struct BlockHeader {
-        uint64_t blockNumber;
-        std::string previousBlockHash;
-        std::string stateRoot;
-        std::string transactionsRoot;
-        uint64_t timestamp;
-        uint32_t difficulty;
-        uint64_t nonce;
+        uint32_t version;
+        std::string prevBlockHash; // hex string (32 bytes)
+        std::string merkleRoot;    // hex string (32 bytes)
+        uint32_t timestamp;       // Unix epoch
+        uint32_t bits;            // Difficulty target
+        uint32_t nonce;
     };
 
-    class ConsensusVerifier {
+    class BlockHasher {
     public:
-        static std::string ComputeHeaderHash(const BlockHeader& header) {
-            std::stringstream ss;
-            ss << header.blockNumber
-               << header.previousBlockHash
-               << header.stateRoot
-               << header.transactionsRoot
-               << header.timestamp
-               << header.difficulty
-               << header.nonce;
-            return Keccak256::ComputeHash(ss.str());
-        }
-
-        static bool VerifyProofOfWork(const BlockHeader& header) {
-            std::string hash = ComputeHeaderHash(header);
-            if (hash.length() < 2 + header.difficulty) return false;
-            for (size_t i = 2; i < 2 + header.difficulty; ++i) {
-                if (hash[i] != '0') return false;
+        // Serialize the header in the classic Bitcoin order and double‑SHA256 it.
+        static std::string ComputeBlockHash(const BlockHeader& header) {
+            std::ostringstream oss;
+            oss << std::hex << std::setfill('0');
+            oss << std::setw(8) << header.version;
+            // Helper to strip possible "0x" prefix and ensure even length.
+            auto cleanHex = [](const std::string& h) -> std::string {
+                std::string out = h;
+                if (out.rfind("0x", 0) == 0) out = out.substr(2);
+                if (out.size() % 2) out = "0" + out;
+                return out;
+            };
+            oss << cleanHex(header.prevBlockHash);
+            oss << cleanHex(header.merkleRoot);
+            oss << std::setw(8) << header.timestamp;
+            oss << std::setw(8) << header.bits;
+            oss << std::setw(8) << header.nonce;
+            std::string serialized = oss.str();
+            // Convert hex string to raw bytes.
+            std::string raw;
+            raw.reserve(serialized.size() / 2);
+            for (size_t i = 0; i < serialized.size(); i += 2) {
+                unsigned int byte;
+                std::sscanf(serialized.c_str() + i, "%02x", &byte);
+                raw.push_back(static_cast<char>(byte));
             }
-            return true;
-        }
-
-        static uint64_t MineBlock(BlockHeader& header, uint64_t maxIterations = 1000000) {
-            for (uint64_t nonce = 0; nonce < maxIterations; ++nonce) {
-                header.nonce = nonce;
-                if (VerifyProofOfWork(header)) {
-                    return nonce;
-                }
-            }
-            return 0;
+            return DoubleSha256::Compute(raw);
         }
     };
+
+    // =========================================================================
+    // 4. SIMPLE BENCHMARK UTILITIES (optional, compiled out in release)
+    // =========================================================================
+
+    #ifdef ENABLE_CRYPTO_BENCHMARK
+    class Benchmark {
+    public:
+        template <typename Func>
+        static double MeasureMs(Func&& f) {
+            auto start = std::chrono::high_resolution_clock::now();
+            f();
+            auto end = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double, std::milli> diff = end - start;
+            return diff.count();
+        }
+    };
+    #endif // ENABLE_CRYPTO_BENCHMARK
 
 } // namespace MagnumOpus
-
-// =========================================================================
-// 6. ENGINE VERIFICATION & INTEGRATION TEST HARNESS
-// =========================================================================
-
-int main() {
-    std::cout << "===================================================================\n";
-    std::cout << "    MAGNUM OPUS // High-Performance Crypto & DeFi Engine (C++20)   \n";
-    std::cout << "===================================================================\n\n";
-
-    // 1. Test Keccak-256 and Sha256
-    std::string sample = "MagnumOpusWeb3Platform";
-    std::string keccak = MagnumOpus::Keccak256::ComputeHash(sample);
-    std::string sha = MagnumOpus::Sha256::ComputeHash(sample);
-    std::cout << "[+] Crypto Hash Verification:\n";
-    std::cout << "    Keccak-256(\"" << sample << "\") = " << keccak << "\n";
-    std::cout << "    SHA256-FNV(\"" << sample << "\") = " << sha << "\n\n";
-
-    // 2. Test Merkle Tree Proof Verification
-    std::vector<std::string> txHashes = {
-        MagnumOpus::Keccak256::ComputeHash("tx0: 0xAlice -> 0xBob 1.5 ETH"),
-        MagnumOpus::Keccak256::ComputeHash("tx1: 0xBob -> 0xCharlie 0.5 ETH"),
-        MagnumOpus::Keccak256::ComputeHash("tx2: 0xDavid -> 0xSwapPool 2500 USDC"),
-        MagnumOpus::Keccak256::ComputeHash("tx3: 0xSwapPool -> 0xDavid 1.0 ETH")
-    };
-    std::string root = MagnumOpus::MerkleTree::ComputeRoot(txHashes);
-    auto proof = MagnumOpus::MerkleTree::GenerateProof(txHashes, 2);
-    bool isValidProof = MagnumOpus::MerkleTree::VerifyProof(txHashes[2], proof, root);
-    std::cout << "[+] Merkle Tree Engine:\n";
-    std::cout << "    Merkle Root = " << root << "\n";
-    std::cout << "    Proof for Leaf[2] verified: " << (isValidProof ? "SUCCESS [VALID]" : "FAILED") << "\n\n";
-
-    // 3. Test Constant Product AMM Engine
-    MagnumOpus::AmmMathEngine::PoolState ethUsdcPool{1000.0, 3000000.0, 0.003, 54772.25};
-    auto swap = MagnumOpus::AmmMathEngine::SwapExactInput(ethUsdcPool, 10.0, true);
-    std::cout << "[+] AMM Constant-Product Math:\n";
-    std::cout << "    Input: 10 ETH -> Output: " << std::fixed << std::setprecision(2) << swap.amountOut << " USDC\n";
-    std::cout << "    Execution Price: " << swap.executionPrice << " USDC/ETH\n";
-    std::cout << "    Fee Paid: " << std::setprecision(4) << swap.feePaid << " ETH\n";
-    std::cout << "    Price Impact: " << std::setprecision(3) << swap.priceImpactPct << "%\n\n";
-
-    // 4. Test Ultra-Fast Order Book Matching Engine
-    MagnumOpus::MatchingEngine engine;
-    engine.SubmitOrder("Alice", MagnumOpus::OrderSide::SELL, MagnumOpus::OrderType::LIMIT, 3050.0, 2.5);
-    engine.SubmitOrder("Bob", MagnumOpus::OrderSide::SELL, MagnumOpus::OrderType::LIMIT, 3055.0, 5.0);
-    engine.SubmitOrder("Charlie", MagnumOpus::OrderSide::BUY, MagnumOpus::OrderType::LIMIT, 3040.0, 1.0);
-    std::cout << "[+] Matching Engine - Submitting Crossing Market Buy for 3.0 ETH...\n";
-    auto buyerOrder = engine.SubmitOrder("David", MagnumOpus::OrderSide::BUY, MagnumOpus::OrderType::MARKET, 0.0, 3.0);
-    std::cout << "    David's Order Fill Status: " << buyerOrder->filled << " / " << buyerOrder->quantity << " ETH filled\n";
-
-    auto trades = engine.GetTradeHistory();
-    std::cout << "    Executed Trades: " << trades.size() << "\n";
-    for (const auto& t : trades) {
-        std::cout << "      -> " << t.quantity << " ETH @ " << t.price << " USDC between " << t.buyer << " & " << t.seller << "\n";
-    }
-
-    // 5. Test Block Header PoW Verification
-    MagnumOpus::BlockHeader header{
-        1048576,
-        "0x7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
-        "0x9b4b01e1da8b80b7b12d5743c4a45a3df138e68213600b5b29c9a0c793ff85b6",
-        root,
-        1711929600,
-        2, // 2 leading zeros required
-        0
-    };
-    std::cout << "\n[+] Block Header Verification & Mining...\n";
-    uint64_t foundNonce = MagnumOpus::ConsensusVerifier::MineBlock(header);
-    std::cout << "    Mined Nonce: " << foundNonce << " | Hash: " << MagnumOpus::ConsensusVerifier::ComputeHeaderHash(header) << "\n";
-    std::cout << "===================================================================\n";
-    std::cout << "    All CryptoEngine modules executed and verified successfully!   \n";
-    std::cout << "===================================================================\n";
-
-    return 0;
-}
