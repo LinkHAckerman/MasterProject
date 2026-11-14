@@ -38,6 +38,7 @@ namespace MagnumOpus {
 
     public:
         static std::string ComputeHash(const std::string& input) {
+            // Simple FNV-1a + SHA-256 placeholder implementation (for demo purposes)
             uint64_t h1 = 14695981039346656037ULL;
             uint64_t h2 = 0xcbf29ce484222325ULL;
             
@@ -64,35 +65,27 @@ namespace MagnumOpus {
     class DoubleSha256 {
     public:
         static std::string Compute(const std::string& input) {
-            // First SHA‑256 using the standard library for correctness
-            unsigned char first[32];
-            {
-                std::vector<unsigned char> data(input.begin(), input.end());
-                std::array<unsigned int, 8> h = {
-                    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-                };
-                // For brevity we delegate to OpenSSL if available; otherwise fallback to Sha256::ComputeHash
-                // Note: In production you would replace this with a full SHA‑256 implementation.
-                std::string tmp = Sha256::ComputeHash(input);
-                // Extract raw bytes from hex string (skip "0x")
-                for (size_t i = 2; i < tmp.size(); i += 2) {
-                    unsigned int byte;
-                    std::sscanf(tmp.c_str() + i, "%02x", &byte);
-                    first[(i - 2) / 2] = static_cast<unsigned char>(byte);
-                }
+            // First pass
+            std::string first = Sha256::ComputeHash(input);
+            // Convert hex string (skip "0x") to raw bytes
+            std::vector<unsigned char> firstBytes;
+            firstBytes.reserve(32);
+            for (size_t i = 2; i < first.size(); i += 2) {
+                unsigned int byte;
+                std::sscanf(first.c_str() + i, "%02x", &byte);
+                firstBytes.push_back(static_cast<unsigned char>(byte));
             }
-            // Second SHA‑256 on the raw bytes of the first hash
-            std::string second_input(reinterpret_cast<char*>(first), 32);
-            return Sha256::ComputeHash(second_input);
+            // Second pass on raw bytes
+            std::string secondInput(reinterpret_cast<char*>(firstBytes.data()), firstBytes.size());
+            return Sha256::ComputeHash(secondInput);
         }
     };
 
-    // Keccak-256 implementation for EVM and Smart Contract Hash compatibility
+    // Keccak‑256 implementation for EVM and Smart Contract Hash compatibility
     class Keccak256 {
     private:
-        static const uint64_t RC[24];
-        static const int ROTC[5][5];
+        static const std::array<uint64_t, 24> RC;
+        static const std::array<std::array<int,5>,5> ROTC;
 
         static inline uint64_t RotL64(uint64_t x, int s) {
             return (x << s) | (x >> (64 - s));
@@ -129,161 +122,169 @@ namespace MagnumOpus {
             }
         }
 
+        static std::string BytesToHex(const unsigned char* data, size_t len) {
+            std::ostringstream oss;
+            oss << std::hex << std::setfill('0');
+            for (size_t i = 0; i < len; ++i) {
+                oss << std::setw(2) << static_cast<int>(data[i]);
+            }
+            return "0x" + oss.str();
+        }
+
     public:
         static std::string ComputeHash(const std::string& input) {
-            constexpr size_t RATE_BYTES = 136;
-            uint64_t state[25] = {0};
-            std::vector<uint8_t> buffer(input.begin(), input.end());
+            constexpr size_t RATE_BYTES = 136; // 1088 bits for Keccak‑256
+            constexpr size_t CAPACITY_BYTES = 64; // 512 bits
+            constexpr size_t OUTPUT_BYTES = 32; // 256‑bit output
 
-            // Keccak-256 padding: 0x01, zeroes, 0x80
+            // 1. Absorb phase
+            std::vector<uint8_t> buffer(input.begin(), input.end());
+            // Padding: 0x01 ... 0x80 (Keccak padding)
             buffer.push_back(0x01);
             while ((buffer.size() % RATE_BYTES) != (RATE_BYTES - 1)) {
                 buffer.push_back(0x00);
             }
             buffer.push_back(0x80);
 
+            uint64_t state[25] = {0};
             for (size_t offset = 0; offset < buffer.size(); offset += RATE_BYTES) {
                 for (size_t i = 0; i < RATE_BYTES / 8; ++i) {
                     uint64_t lane = 0;
                     for (size_t b = 0; b < 8; ++b) {
-                        lane |= static_cast<uint64_t>(buffer[offset + i * 8 + b]) << (b * 8);
+                        lane |= static_cast<uint64_t>(buffer[offset + i * 8 + b]) << (8 * b);
                     }
                     state[i] ^= lane;
                 }
                 KeccakF1600(state);
             }
 
-            std::stringstream ss;
-            ss << std::hex << std::setfill('0');
-            for (size_t i = 0; i < 4; ++i) {
-                for (int b = 0; b < 8; ++b) {
-                    uint8_t byteVal = static_cast<uint8_t>((state[i] >> (b * 8)) & 0xFF);
-                    ss << std::setw(2) << static_cast<int>(byteVal);
-                }
-            }
-            return "0x" + ss.str();
-        }
-    };
-
-    // Definition of Keccak constants (RC and ROTC)
-    const uint64_t Keccak256::RC[24] = {
-        0x0000000000000001ULL, 0x0000000000008082ULL, 0x800000000000808aULL,
-        0x8000000080008000ULL, 0x000000000000808bULL, 0x0000000080000001ULL,
-        0x8000000080008081ULL, 0x8000000000008009ULL, 0x000000000000008aULL,
-        0x0000000000000088ULL, 0x0000000080008009ULL, 0x000000008000000aULL,
-        0x000000008000808bULL, 0x800000000000008bULL, 0x8000000000008089ULL,
-        0x8000000000008003ULL, 0x8000000000008002ULL, 0x8000000000000080ULL,
-        0x000000000000800aULL, 0x800000008000000aULL, 0x8000000080008081ULL,
-        0x8000000000008080ULL, 0x0000000080000001ULL, 0x8000000080008008ULL
-    };
-
-    const int Keccak256::ROTC[5][5] = {
-        { 0, 36, 3, 41, 18 },
-        { 1, 44, 10, 45, 2 },
-        { 62, 6, 43, 15, 61 },
-        { 28, 55, 25, 21, 56 },
-        { 27, 20, 39, 8, 14 }
-    };
-
-    // =========================================================================
-    // 2. MERKLE TREE UTILITIES
-    // =========================================================================
-
-    // Simple binary Merkle tree that works on arbitrary leaf strings.
-    // Leaves are hashed with Sha256; internal nodes are hash(left || right).
-    class MerkleTree {
-    public:
-        // Compute Merkle root for a vector of leaf data strings.
-        static std::string ComputeRoot(const std::vector<std::string>& leaves) {
-            if (leaves.empty()) {
-                return ""; // Empty tree has no root.
-            }
-            // Hash leaves first.
-            std::vector<std::string> level;
-            level.reserve(leaves.size());
-            for (const auto& leaf : leaves) {
-                level.push_back(Sha256::ComputeHash(leaf));
-            }
-            // Build the tree upwards.
-            while (level.size() > 1) {
-                std::vector<std::string> nextLevel;
-                for (size_t i = 0; i < level.size(); i += 2) {
-                    if (i + 1 < level.size()) {
-                        // Concatenate the two child hashes and hash again.
-                        std::string combined = level[i] + level[i + 1];
-                        nextLevel.push_back(Sha256::ComputeHash(combined));
-                    } else {
-                        // Odd number of nodes – duplicate the last.
-                        nextLevel.push_back(level[i]);
+            // 2. Squeeze phase – we only need first 32 bytes
+            unsigned char out[OUTPUT_BYTES];
+            size_t copied = 0;
+            while (copied < OUTPUT_BYTES) {
+                size_t toCopy = std::min(OUTPUT_BYTES - copied, RATE_BYTES);
+                for (size_t i = 0; i < toCopy / 8; ++i) {
+                    uint64_t lane = state[i];
+                    for (size_t b = 0; b < 8 && copied < OUTPUT_BYTES; ++b) {
+                        out[copied++] = static_cast<unsigned char>((lane >> (8 * b)) & 0xFF);
                     }
                 }
-                level.swap(nextLevel);
+                if (copied < OUTPUT_BYTES) {
+                    KeccakF1600(state);
+                }
             }
-            return level.front();
+            return BytesToHex(out, OUTPUT_BYTES);
         }
     };
 
-    // =========================================================================
-    // 3. BLOCK HEADER HASHING (example for Bitcoin‑like blocks)
-    // =========================================================================
-
-    struct BlockHeader {
-        uint32_t version;
-        std::string prevBlockHash; // hex string (32 bytes)
-        std::string merkleRoot;    // hex string (32 bytes)
-        uint32_t timestamp;       // Unix epoch
-        uint32_t bits;            // Difficulty target
-        uint32_t nonce;
+    // Definition of static constants for Keccak256
+    const std::array<uint64_t, 24> Keccak256::RC = {
+        0x0000000000000001ULL, 0x0000000000008082ULL, 0x800000000000808aULL, 0x8000000080008000ULL,
+        0x000000000000808bULL, 0x0000000080000001ULL, 0x8000000080008081ULL, 0x8000000000008009ULL,
+        0x000000000000008aULL, 0x0000000000000088ULL, 0x0000000080008009ULL, 0x000000008000000aULL,
+        0x000000008000808bULL, 0x800000000000008bULL, 0x8000000000008089ULL, 0x8000000000008003ULL,
+        0x8000000000008002ULL, 0x8000000000000080ULL, 0x000000000000800aULL, 0x800000008000000aULL,
+        0x8000000080008081ULL, 0x8000000000008080ULL, 0x0000000080000001ULL, 0x8000000080008008ULL
     };
 
-    class BlockHasher {
+    const std::array<std::array<int,5>,5> Keccak256::ROTC = {{
+        {{ 0, 36, 3, 41, 18 }},
+        {{ 1, 44, 10, 45, 2 }},
+        {{ 62, 6, 43, 15, 61 }},
+        {{ 28, 55, 25, 21, 56 }},
+        {{ 27, 20, 39, 8, 14 }}
+    }};
+
+    // =========================================================================
+    // 2. HIGH‑LEVEL ENGINE HELPERS
+    // =========================================================================
+
+    // Helper to convert a hex string (with optional "0x" prefix) to a byte vector
+    static std::vector<uint8_t> HexToBytes(const std::string& hex) {
+        std::string clean = hex;
+        if (clean.rfind("0x", 0) == 0) clean = clean.substr(2);
+        std::vector<uint8_t> out;
+        out.reserve(clean.size() / 2);
+        for (size_t i = 0; i < clean.size(); i += 2) {
+            unsigned int byte;
+            std::sscanf(clean.c_str() + i, "%02x", &byte);
+            out.push_back(static_cast<uint8_t>(byte));
+        }
+        return out;
+    }
+
+    // Helper to convert a byte vector to a hex string with "0x" prefix
+    static std::string BytesToHex(const std::vector<uint8_t>& data) {
+        std::ostringstream oss;
+        oss << "0x" << std::hex << std::setfill('0');
+        for (auto b : data) {
+            oss << std::setw(2) << static_cast<int>(b);
+        }
+        return oss.str();
+    }
+
+    // Simple Merkle tree utility – returns the Merkle root of a list of transaction hashes (hex strings)
+    class MerkleTree {
     public:
-        // Serialize the header in the classic Bitcoin order and double‑SHA256 it.
-        static std::string ComputeBlockHash(const BlockHeader& header) {
-            std::ostringstream oss;
-            oss << std::hex << std::setfill('0');
-            oss << std::setw(8) << header.version;
-            // Helper to strip possible "0x" prefix and ensure even length.
-            auto cleanHex = [](const std::string& h) -> std::string {
-                std::string out = h;
-                if (out.rfind("0x", 0) == 0) out = out.substr(2);
-                if (out.size() % 2) out = "0" + out;
-                return out;
-            };
-            oss << cleanHex(header.prevBlockHash);
-            oss << cleanHex(header.merkleRoot);
-            oss << std::setw(8) << header.timestamp;
-            oss << std::setw(8) << header.bits;
-            oss << std::setw(8) << header.nonce;
-            std::string serialized = oss.str();
-            // Convert hex string to raw bytes.
-            std::string raw;
-            raw.reserve(serialized.size() / 2);
-            for (size_t i = 0; i < serialized.size(); i += 2) {
-                unsigned int byte;
-                std::sscanf(serialized.c_str() + i, "%02x", &byte);
-                raw.push_back(static_cast<char>(byte));
+        static std::string ComputeRoot(const std::vector<std::string>& leafHashes) {
+            if (leafHashes.empty()) return "0x"; // empty root
+            std::vector<std::string> current = leafHashes;
+            while (current.size() > 1) {
+                std::vector<std::string> nextLevel;
+                for (size_t i = 0; i < current.size(); i += 2) {
+                    std::string left = current[i];
+                    std::string right = (i + 1 < current.size()) ? current[i + 1] : left; // duplicate if odd
+                    // Concatenate raw bytes of left and right, then double‑SHA256
+                    std::vector<uint8_t> leftBytes = HexToBytes(left);
+                    std::vector<uint8_t> rightBytes = HexToBytes(right);
+                    std::string concat(reinterpret_cast<char*>(leftBytes.data()), leftBytes.size());
+                    concat.append(reinterpret_cast<char*>(rightBytes.data()), rightBytes.size());
+                    std::string parent = DoubleSha256::Compute(concat);
+                    nextLevel.push_back(parent);
+                }
+                current.swap(nextLevel);
             }
-            return DoubleSha256::Compute(raw);
+            return current.front();
         }
     };
 
-    // =========================================================================
-    // 4. SIMPLE BENCHMARK UTILITIES (optional, compiled out in release)
-    // =========================================================================
-
-    #ifdef ENABLE_CRYPTO_BENCHMARK
-    class Benchmark {
+    // High‑level façade exposing the most common cryptographic operations
+    class CryptoEngine {
     public:
-        template <typename Func>
-        static double MeasureMs(Func&& f) {
-            auto start = std::chrono::high_resolution_clock::now();
-            f();
-            auto end = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double, std::milli> diff = end - start;
-            return diff.count();
+        static std::string Sha256Hash(const std::string& data) {
+            return Sha256::ComputeHash(data);
+        }
+
+        static std::string DoubleSha256Hash(const std::string& data) {
+            return DoubleSha256::Compute(data);
+        }
+
+        static std::string Keccak256Hash(const std::string& data) {
+            return Keccak256::ComputeHash(data);
+        }
+
+        static std::string MerkleRoot(const std::vector<std::string>& txHashes) {
+            return MerkleTree::ComputeRoot(txHashes);
         }
     };
-    #endif // ENABLE_CRYPTO_BENCHMARK
+
+#ifdef TEST_CRYPTO_ENGINE
+    int main() {
+        std::cout << "=== Magnum Opus CryptoEngine Demo ===\n";
+        std::string msg = "Magnum Opus";
+        std::cout << "Message: " << msg << "\n";
+        std::cout << "SHA‑256:   " << CryptoEngine::Sha256Hash(msg) << "\n";
+        std::cout << "Double SHA‑256: " << CryptoEngine::DoubleSha256Hash(msg) << "\n";
+        std::cout << "Keccak‑256: " << CryptoEngine::Keccak256Hash(msg) << "\n";
+
+        std::vector<std::string> txs = {
+            CryptoEngine::Sha256Hash("tx1"),
+            CryptoEngine::Sha256Hash("tx2"),
+            CryptoEngine::Sha256Hash("tx3")
+        };
+        std::cout << "Merkle Root of 3 txs: " << CryptoEngine::MerkleRoot(txs) << "\n";
+        return 0;
+    }
+#endif
 
 } // namespace MagnumOpus

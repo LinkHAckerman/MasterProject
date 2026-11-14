@@ -222,13 +222,29 @@ defmodule GossipNode.PeerConnectionManager do
     {:ok, state}
   end
 
-  def handle_info({:peer_connected, pid}, state) do
-    GenServer.cast(GossipNode.GossipServer, {:peer_connected, pid})
+  def connect_to_peer(peer_pid) do
+    GenServer.cast(__MODULE__, {:connect, peer_pid})
+  end
+
+  def disconnect_from_peer(peer_pid) do
+    GenServer.cast(__MODULE__, {:disconnect, peer_pid})
+  end
+
+  def handle_cast({:connect, peer_pid}, state) do
+    if not GossipNode.PeerRegistry.peer_exists?(peer_pid) do
+      GossipNode.PeerRegistry.add_peer(peer_pid)
+      GossipNode.PeerConnection.start_link(peer_pid)
+      GenServer.cast(GossipNode.GossipServer, {:peer_connected, peer_pid})
+    end
     {:noreply, state}
   end
 
-  def handle_info({:peer_disconnected, pid}, state) do
-    GenServer.cast(GossipNode.GossipServer, {:peer_disconnected, pid})
+  def handle_cast({:disconnect, peer_pid}, state) do
+    if GossipNode.PeerRegistry.peer_exists?(peer_pid) do
+      GossipNode.PeerRegistry.remove_peer(peer_pid)
+      GenServer.cast(peer_pid, :disconnect)
+      GenServer.cast(GossipNode.GossipServer, {:peer_disconnected, peer_pid})
+    end
     {:noreply, state}
   end
 end
