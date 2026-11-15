@@ -5,7 +5,7 @@ pragma solidity ^0.8.20;
  * Magnum Opus – Unified Token & NFT Suite
  * -------------------------------------------------
  * This file contains two upgradeable contracts:
- *   1. MagnumOpusToken   – ERC20 with snapshot, permit, burn, pausable, role‑based minting, airdrop and batch transfer.
+ *   1. MagnumOpusToken   – ERC20 with snapshot, permit, burn, pausable, role–based minting, airdrop and batch transfer.
  *   2. MagnumOpusNFT     – ERC721 with enumerable, URI storage, ERC2981 royalties, lazy minting, batch mint, pausable and upgradeable.
  * Both contracts use OpenZeppelin Upgradeable libraries and follow the UUPS proxy pattern.
  */
@@ -28,7 +28,7 @@ import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.
 
 /**
  * @title MagnumOpusToken
- * @dev ERC20 token with upgradeability, snapshot, permit, role‑based minting, airdrop, batch transfer and pausable controls.
+ * @dev ERC20 token with upgradeability, snapshot, permit, role–based minting, airdrop, batch transfer and pausable controls.
  */
 contract MagnumOpusToken is
     Initializable,
@@ -89,7 +89,7 @@ contract MagnumOpusToken is
     }
 
     // ---------------------------------------------------------------------
-    // Access‑controlled functions
+    // Access–controlled functions
     // ---------------------------------------------------------------------
     function mint(address to, uint256 amount) external onlyRole(MINTER_ROLE) {
         require(totalSupply() + amount <= maxSupply, "MOP: exceeds max supply");
@@ -114,19 +114,41 @@ contract MagnumOpusToken is
         emit MaxSupplyUpdated(newCap);
     }
 
-    // New function to handle batch transfers
-    function batchTransfer(address[] memory recipients, uint256[] memory amounts) public onlyRole(MINTER_ROLE) {
-        require(recipients.length == amounts.length, "MOP: recipients and amounts arrays must be the same length");
+    // ---------------------------------------------------------------------
+    // Airdrop and batch transfer functions
+    // ---------------------------------------------------------------------
+    function airdrop(address[] calldata recipients, uint256[] calldata amounts) external onlyRole(AIRDROP_ROLE) {
+        require(recipients.length == amounts.length, "MOP: recipients and amounts length mismatch");
+        require(totalSupply() + amounts.reduce((x, y) => x + y) <= maxSupply, "MOP: exceeds max supply");
+
+        for (uint256 i = 0; i < recipients.length; i++) {
+            _mint(recipients[i], amounts[i]);
+            emit Airdrop(recipients[i], amounts[i]);
+        }
+    }
+
+    function batchTransfer(address[] calldata recipients, uint256[] calldata amounts) external {
+        require(recipients.length == amounts.length, "MOP: recipients and amounts length mismatch");
+        uint256 totalAmount = amounts.reduce((x, y) => x + y);
+        require(balanceOf(msg.sender) >= totalAmount, "MOP: insufficient balance");
+
         for (uint256 i = 0; i < recipients.length; i++) {
             _transfer(msg.sender, recipients[i], amounts[i]);
         }
         emit BatchTransfer(msg.sender, recipients, amounts);
     }
 
-    // New function to handle airdrops
-    function airdrop(address recipient, uint256 amount) public onlyRole(AIRDROP_ROLE) {
-        _transfer(msg.sender, recipient, amount);
-        emit Airdrop(recipient, amount);
+    // ---------------------------------------------------------------------
+    // UUPS Upgradeability
+    // ---------------------------------------------------------------------
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {}
+
+    function upgradeTo(address newImplementation) external onlyRole(ADMIN_ROLE) {
+        _upgradeTo(newImplementation);
+    }
+
+    function upgradeToAndCall(address newImplementation, bytes memory data) external onlyRole(ADMIN_ROLE) {
+        _upgradeToAndCall(newImplementation, data);
     }
 }
 
@@ -140,50 +162,50 @@ contract MagnumOpusNFT is
     ERC721EnumerableUpgradeable,
     ERC721URIStorageUpgradeable,
     ERC2981Upgradeable,
-    ReentrancyGuardUpgradeable,
+    AccessControlUpgradeable,
     PausableUpgradeable,
+    ReentrancyGuardUpgradeable,
     UUPSUpgradeable
 {
     // Roles
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-
-    // Immutable royalty percentage set at initialization
-    uint256 public royaltyPercentage;
+    bytes32 public constant ROYALTY_ROLE = keccak256("ROYALTY_ROLE");
 
     // Events
-    event RoyaltyUpdated(uint256 newRoyaltyPercentage);
+    event RoyaltyUpdated(uint256 feeNumerator);
+    event BatchMint(address indexed to, uint256[] tokenIds, string[] tokenURIs);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() initializer {}
 
-    function initialize(uint256 initialRoyaltyPercentage) public initializer {
-        __ERC721_init("Magnum Opus NFT", "MOPNFT");
+    function initialize(string memory name, string memory symbol, uint256 feeNumerator) public initializer {
+        __ERC721_init(name, symbol);
         __ERC721Enumerable_init();
         __ERC721URIStorage_init();
-        __ERC2981_init();
-        __ReentrancyGuard_init_unchained();
+        __ERC2981_init(feeNumerator);
+        __AccessControl_init();
         __Pausable_init();
+        __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
 
-        require(initialRoyaltyPercentage <= 100, "MOPNFT: royalty percentage must be <= 100");
-        royaltyPercentage = initialRoyaltyPercentage;
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ADMIN_ROLE, msg.sender);
         _grantRole(MINTER_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
+        _grantRole(ROYALTY_ROLE, msg.sender);
     }
 
     // ---------------------------------------------------------------------
     // Core ERC721 overrides
     // ---------------------------------------------------------------------
-    function _beforeTokenTransfer(address from, address to, uint256 tokenId) internal override(ERC721Upgradeable, ERC721EnumerableUpgradeable, ERC721URIStorageUpgradeable) whenNotPaused {
+    function _beforeTokenTransfer(address from, address to, uint256 tokenId) internal override(ERC721Upgradeable, ERC2981Upgradeable) whenNotPaused {
         super._beforeTokenTransfer(from, to, tokenId);
     }
 
     // ---------------------------------------------------------------------
-    // Access‑controlled functions
+    // Access–controlled functions
     // ---------------------------------------------------------------------
     function mint(address to, uint256 tokenId, string memory tokenURI) external onlyRole(MINTER_ROLE) {
         _mint(to, tokenId);
@@ -198,9 +220,41 @@ contract MagnumOpusNFT is
         _unpause();
     }
 
-    function updateRoyaltyPercentage(uint256 newRoyaltyPercentage) external onlyRole(ADMIN_ROLE) {
-        require(newRoyaltyPercentage <= 100, "MOPNFT: royalty percentage must be <= 100");
-        royaltyPercentage = newRoyaltyPercentage;
-        emit RoyaltyUpdated(newRoyaltyPercentage);
+    function updateRoyalty(uint256 feeNumerator) external onlyRole(ROYALTY_ROLE) {
+        _setDefaultRoyalty(msg.sender, feeNumerator);
+        emit RoyaltyUpdated(feeNumerator);
+    }
+
+    // ---------------------------------------------------------------------
+    // Lazy minting and batch minting functions
+    // ---------------------------------------------------------------------
+    function lazyMint(address to, uint256 tokenId, string memory tokenURI) external onlyRole(MINTER_ROLE) {
+        require(!_exists(tokenId), "MOP: token already exists");
+        _mint(to, tokenId);
+        _setTokenURI(tokenId, tokenURI);
+    }
+
+    function batchMint(address to, uint256[] calldata tokenIds, string[] calldata tokenURIs) external onlyRole(MINTER_ROLE) {
+        require(tokenIds.length == tokenURIs.length, "MOP: tokenIds and tokenURIs length mismatch");
+
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            require(!_exists(tokenIds[i]), "MOP: token already exists");
+            _mint(to, tokenIds[i]);
+            _setTokenURI(tokenIds[i], tokenURIs[i]);
+        }
+        emit BatchMint(to, tokenIds, tokenURIs);
+    }
+
+    // ---------------------------------------------------------------------
+    // UUPS Upgradeability
+    // ---------------------------------------------------------------------
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {}
+
+    function upgradeTo(address newImplementation) external onlyRole(ADMIN_ROLE) {
+        _upgradeTo(newImplementation);
+    }
+
+    function upgradeToAndCall(address newImplementation, bytes memory data) external onlyRole(ADMIN_ROLE) {
+        _upgradeToAndCall(newImplementation, data);
     }
 }

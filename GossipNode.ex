@@ -91,6 +91,11 @@ defmodule GossipNode.PeerRegistry do
   def peer_exists?(pid) when is_pid(pid) do
     Registry.lookup(GossipNode.PeerRegistry, pid) != []
   end
+
+  # Get the number of registered peers
+  def count_peers do
+    Registry.count(GossipNode.PeerRegistry)
+  end
 end
 
 defmodule GossipNode.GossipServer do
@@ -143,6 +148,11 @@ defmodule GossipNode.GossipServer do
     GossipNode.PeerRegistry.add_peer(pid)
     {:noreply, state}
   end
+
+  def handle_info({:tx, hash, tx}, state) do
+    GossipNode.Mempool.submit_tx(tx)
+    {:noreply, state}
+  end
 end
 
 defmodule GossipNode.PeerConnection do
@@ -162,7 +172,7 @@ defmodule GossipNode.PeerConnection do
   end
 
   def handle_info(:disconnect, peer_pid) do
-    GenServer.cast(GossipNode.GossipServer, {:peer_disconnected, peer_pid})
+    GenServer.cast(GossipNode.GossipServer, {:peer_disconnected, pid})
     {:stop, :normal, peer_pid}
   end
 end
@@ -222,29 +232,12 @@ defmodule GossipNode.PeerConnectionManager do
     {:ok, state}
   end
 
-  def connect_to_peer(peer_pid) do
-    GenServer.cast(__MODULE__, {:connect, peer_pid})
-  end
-
-  def disconnect_from_peer(peer_pid) do
-    GenServer.cast(__MODULE__, {:disconnect, peer_pid})
-  end
-
-  def handle_cast({:connect, peer_pid}, state) do
-    if not GossipNode.PeerRegistry.peer_exists?(peer_pid) do
-      GossipNode.PeerRegistry.add_peer(peer_pid)
-      GossipNode.PeerConnection.start_link(peer_pid)
-      GenServer.cast(GossipNode.GossipServer, {:peer_connected, peer_pid})
-    end
+  def handle_info({:peer_connected, pid}, state) do
+    GossipNode.PeerHandler.start_link(pid)
     {:noreply, state}
   end
 
-  def handle_cast({:disconnect, peer_pid}, state) do
-    if GossipNode.PeerRegistry.peer_exists?(peer_pid) do
-      GossipNode.PeerRegistry.remove_peer(peer_pid)
-      GenServer.cast(peer_pid, :disconnect)
-      GenServer.cast(GossipNode.GossipServer, {:peer_disconnected, peer_pid})
-    end
+  def handle_info({:peer_disconnected, pid}, state) do
     {:noreply, state}
   end
 end
