@@ -199,6 +199,43 @@ defmodule GossipNode.PeerDiscovery do
   end
 end
 
+defmodule GossipNode.PeerConnectionManager do
+  use GenServer
+
+  def start_link(_args) do
+    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
+  end
+
+  def init(state) do
+    {:ok, state}
+  end
+
+  def connect_to_peer(peer_pid) do
+    GenServer.cast(__MODULE__, {:connect_to_peer, peer_pid})
+  end
+
+  def disconnect_from_peer(peer_pid) do
+    GenServer.cast(__MODULE__, {:disconnect_from_peer, peer_pid})
+  end
+
+  def handle_cast({:connect_to_peer, peer_pid}, state) do
+    if not GossipNode.PeerRegistry.peer_exists?(peer_pid) do
+      GossipNode.PeerRegistry.add_peer(peer_pid)
+      GossipNode.PeerConnection.start_link(peer_pid)
+      GenServer.cast(GossipNode.GossipServer, {:peer_connected, peer_pid})
+    end
+    {:noreply, state}
+  end
+
+  def handle_cast({:disconnect_from_peer, peer_pid}, state) do
+    if GossipNode.PeerRegistry.peer_exists?(peer_pid) do
+      GossipNode.PeerRegistry.remove_peer(peer_pid)
+      GenServer.cast(GossipNode.GossipServer, {:peer_disconnected, peer_pid})
+    end
+    {:noreply, state}
+  end
+end
+
 defmodule GossipNode.PeerHandler do
   use GenServer
 
@@ -218,26 +255,5 @@ defmodule GossipNode.PeerHandler do
   def handle_info(:disconnect, peer_pid) do
     GenServer.cast(GossipNode.GossipServer, {:peer_disconnected, peer_pid})
     {:stop, :normal, peer_pid}
-  end
-end
-
-defmodule GossipNode.PeerConnectionManager do
-  use GenServer
-
-  def start_link(_args) do
-    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
-  end
-
-  def init(state) do
-    {:ok, state}
-  end
-
-  def handle_info({:peer_connected, pid}, state) do
-    GossipNode.PeerHandler.start_link(pid)
-    {:noreply, state}
-  end
-
-  def handle_info({:peer_disconnected, pid}, state) do
-    {:noreply, state}
   end
 end

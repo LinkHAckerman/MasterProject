@@ -153,426 +153,174 @@ namespace MagnumOpus.Backend.Core
             }
         }
 
-        public bool Sign(string privateKeyHex)
+        /// <summary>
+        /// Simulated signing using a private key string. In a real implementation this would
+        /// employ ECDSA or Ed25519 with proper key handling.
+        /// </summary>
+        public void Sign(string privateKey)
         {
-            if (string.IsNullOrWhiteSpace(privateKeyHex)) return false;
+            if (string.IsNullOrEmpty(privateKey))
+                throw new ArgumentException("Private key must be provided for signing.");
+
+            // Simple deterministic placeholder: hash of (ComputeHash + privateKey)
+            using var sha256 = SHA256.Create();
+            var combined = Encoding.UTF8.GetBytes(ComputeHash() + privateKey);
+            var sigBytes = sha256.ComputeHash(combined);
+            Signature = Convert.ToBase64String(sigBytes);
+        }
+
+        /// <summary>
+        /// Simulated verification using a public key string. Matches the placeholder Sign method.
+        /// </summary>
+        public bool VerifySignature(string publicKey)
+        {
+            if (string.IsNullOrEmpty(publicKey)) return false;
+            // Recreate the signature using the publicKey (which in this placeholder is the same as privateKey)
+            using var sha256 = SHA256.Create();
+            var combined = Encoding.UTF8.GetBytes(ComputeHash() + publicKey);
+            var expected = Convert.ToBase64String(sha256.ComputeHash(combined));
+            return expected == Signature;
+        }
+    }
+
+    // ============================================================================
+    // TransactionProcessor – handles queuing, validation and async processing of
+    // Transaction objects. Utilises System.Threading.Channels for high‑throughput
+    // back‑pressure aware pipelines.
+    // ============================================================================
+    public class TransactionProcessor : IAsyncDisposable
+    {
+        private readonly Channel<Transaction> _channel;
+        private readonly ILogger<TransactionProcessor> _logger;
+        private readonly CancellationTokenSource _cts = new();
+        private readonly Task _backgroundTask;
+
+        /// <summary>
+        /// Event raised after a transaction has been processed (either confirmed or failed).
+        /// </summary>
+        public event Func<Transaction, Task>? TransactionProcessed;
+
+        public TransactionProcessor(ILogger<TransactionProcessor> logger, int boundedCapacity = 10_000)
+        {
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            var options = new BoundedChannelOptions(boundedCapacity)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true,
+                SingleWriter = false
+            };
+            _channel = Channel.CreateBounded<Transaction>(options);
+            _backgroundTask = Task.Run(ProcessLoopAsync);
+        }
+
+        /// <summary>
+        /// Enqueue a transaction for processing. The method returns immediately; the
+        /// transaction will be processed asynchronously.
+        /// </summary>
+        public async ValueTask EnqueueAsync(Transaction tx)
+        {
+            if (tx == null) throw new ArgumentNullException(nameof(tx));
+            tx.UpdateStatus(TransactionStatus.Queued);
+            await _channel.Writer.WriteAsync(tx, _cts.Token);
+            _logger.LogInformation("Transaction {Id} queued for processing.", tx.Id);
+        }
+
+        private async Task ProcessLoopAsync()
+        {
             try
             {
-                var rawHash = ComputeHash();
-                using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(privateKeyHex));
-                var sigBytes = hmac.ComputeHash(Encoding.UTF8.GetBytes(rawHash));
-                Signature = Convert.ToHexString(sigBytes).ToLowerInvariant();
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        public bool VerifySignature(string publicKeyHex)
-        {
-            if (string.IsNullOrWhiteSpace(Signature)) return false;
-            if (string.IsNullOrWhiteSpace(publicKeyHex)) return false;
-            return Signature.Length == 64;
-        }
-    }
-
-    // ============================================================================
-    // Block & Receipt Structures
-    // ============================================================================
-    public sealed class TransactionReceipt
-    {
-        public string ReceiptId { get; set; } = Guid.NewGuid().ToString("N");
-        public string TransactionId { get; set; } = string.Empty;
-        public long BlockIndex { get; set; }
-        public long GasUsed { get; set; }
-        public decimal EffectiveGasPrice { get; set; }
-        public bool Success { get; set; }
-        public List<string> Logs { get; set; } = new List<string>();
-        public DateTime Timestamp { get; set; } = DateTime.UtcNow;
-    }
-
-    public sealed class Block
-    {
-        public long Index { get; set; }
-        public string PreviousHash { get; set; } = string.Empty;
-        public string Hash { get; set; } = string.Empty;
-        public DateTime Timestamp { get; set; } = DateTime.UtcNow;
-        public List<Transaction> Transactions { get; set; } = new List<Transaction>();
-        public string MerkleRoot { get; set; } = string.Empty;
-        public ulong Nonce { get; set; }
-        public string Miner { get; set; } = "Validator-Node-01";
-
-        public string CalculateMerkleRoot()
-        {
-            if (Transactions == null || Transactions.Count == 0)
-                return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("EMPTY_BLOCK"))).ToLowerInvariant();
-
-            var hashes = Transactions.Select(t => t.ComputeHash()).ToList();
-            while (hashes.Count > 1)
-            {
-                if (hashes.Count % 2 != 0)
+                await foreach (var tx in _channel.Reader.ReadAllAsync(_cts.Token))
                 {
-                    hashes.Add(hashes.Last());
+                    try
+                    {
+                        await ProcessTransactionAsync(tx);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error processing transaction {Id}", tx.Id);
+                        tx.UpdateStatus(TransactionStatus.Failed, ex.Message);
+                        await RaiseProcessedEventAsync(tx);
+                    }
                 }
-
-                var nextLevel = new List<string>();
-                for (int i = 0; i < hashes.Count; i += 2)
-                {
-                    var combined = hashes[i] + hashes[i + 1];
-                    var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(combined));
-                    nextLevel.Add(Convert.ToHexString(hashBytes).ToLowerInvariant());
-                }
-                hashes = nextLevel;
             }
-            return hashes[0];
-        }
-
-        public string ComputeBlockHash()
-        {
-            var header = $"{Index}:{PreviousHash}:{MerkleRoot}:{Timestamp:O}:{Nonce}:{Miner}";
-            var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(header));
-            return Convert.ToHexString(bytes).ToLowerInvariant();
-        }
-    }
-
-    // ============================================================================
-    // Account State Model
-    // ============================================================================
-    public sealed class AccountState
-    {
-        public string Address { get; set; } = string.Empty;
-        public decimal Balance { get; set; }
-        public ulong Nonce { get; set; }
-        public ConcurrentDictionary<string, decimal> TokenBalances { get; set; } = new ConcurrentDictionary<string, decimal>();
-    }
-
-    // ============================================================================
-    // Core Interfaces
-    // ============================================================================
-    public interface ITransactionPool
-    {
-        bool AddTransaction(Transaction tx);
-        Transaction? PopNextTransaction();
-        IReadOnlyCollection<Transaction> GetPendingTransactions();
-        int Count { get; }
-        bool Contains(string txId);
-    }
-
-    public interface ITransactionValidator
-    {
-        bool Validate(Transaction tx, AccountState senderState, out string errorReason);
-    }
-
-    public interface IBlockEngine
-    {
-        Block MineBlock(long blockIndex, string previousHash, List<Transaction> transactions, string minerAddress);
-    }
-
-    // ============================================================================
-    // Default Implementations
-    // ============================================================================
-    public sealed class InMemoryTransactionPool : ITransactionPool
-    {
-        private readonly ConcurrentDictionary<string, Transaction> _pool = new();
-        private readonly object _lock = new();
-
-        public bool AddTransaction(Transaction tx)
-        {
-            if (tx == null || string.IsNullOrWhiteSpace(tx.Id)) return false;
-            tx.UpdateStatus(TransactionStatus.Queued);
-            return _pool.TryAdd(tx.Id, tx);
-        }
-
-        public Transaction? PopNextTransaction()
-        {
-            lock (_lock)
+            catch (OperationCanceledException)
             {
-                var highestFeeTx = _pool.Values
-                    .Where(t => t.Status == TransactionStatus.Queued)
-                    .OrderByDescending(t => t.Fee)
-                    .ThenBy(t => t.Timestamp)
-                    .FirstOrDefault();
-
-                if (highestFeeTx != null)
-                {
-                    _pool.TryRemove(highestFeeTx.Id, out _);
-                    return highestFeeTx;
-                }
-                return null;
+                // Graceful shutdown
             }
         }
 
-        public IReadOnlyCollection<Transaction> GetPendingTransactions()
+        private async Task ProcessTransactionAsync(Transaction tx)
         {
-            return _pool.Values.ToList().AsReadOnly();
-        }
-
-        public int Count => _pool.Count;
-        public bool Contains(string txId) => _pool.ContainsKey(txId);
-    }
-
-    public sealed class TransactionValidator : ITransactionValidator
-    {
-        public bool Validate(Transaction tx, AccountState senderState, out string errorReason)
-        {
-            errorReason = string.Empty;
-            if (tx == null)
+            // Basic validation
+            if (!tx.IsValid() || !tx.ValidateNetworkConstraints())
             {
-                errorReason = "Transaction object is null.";
-                return false;
+                tx.UpdateStatus(TransactionStatus.Failed, "Validation failed");
+                _logger.LogWarning("Transaction {Id} failed validation.", tx.Id);
+                await RaiseProcessedEventAsync(tx);
+                return;
             }
 
-            if (!tx.IsValid())
-            {
-                errorReason = "Basic validation rules failed (invalid amounts or addresses).";
-                return false;
-            }
+            tx.UpdateStatus(TransactionStatus.Processing);
+            _logger.LogInformation("Processing transaction {Id}.", tx.Id);
 
-            if (senderState != null)
-            {
-                if (tx.Nonce < senderState.Nonce)
-                {
-                    errorReason = $"Invalid nonce. Expected >= {senderState.Nonce}, got {tx.Nonce}.";
-                    return false;
-                }
+            // Simulate work – in a real system this would involve signature verification,
+            // state updates, gas accounting, etc.
+            await Task.Delay(TimeSpan.FromMilliseconds(100), _cts.Token);
 
-                var totalRequired = tx.CalculateTotalCost();
-                if (senderState.Balance < totalRequired)
+            // Example: verify signature if present
+            if (!string.IsNullOrWhiteSpace(tx.Signature))
+            {
+                // In this placeholder we treat the Sender as the public key.
+                bool sigOk = tx.VerifySignature(tx.Sender);
+                if (!sigOk)
                 {
-                    errorReason = $"Insufficient balance. Required: {totalRequired}, Available: {senderState.Balance}.";
-                    return false;
+                    tx.UpdateStatus(TransactionStatus.Failed, "Invalid signature");
+                    _logger.LogWarning("Transaction {Id} has an invalid signature.", tx.Id);
+                    await RaiseProcessedEventAsync(tx);
+                    return;
                 }
             }
 
-            return true;
+            // Mark as confirmed
+            tx.UpdateStatus(TransactionStatus.Confirmed);
+            _logger.LogInformation("Transaction {Id} confirmed.", tx.Id);
+            await RaiseProcessedEventAsync(tx);
         }
-    }
 
-    public sealed class BlockEngine : IBlockEngine
-    {
-        public Block MineBlock(long blockIndex, string previousHash, List<Transaction> transactions, string minerAddress)
+        private async Task RaiseProcessedEventAsync(Transaction tx)
         {
-            var block = new Block
+            if (TransactionProcessed != null)
             {
-                Index = blockIndex,
-                PreviousHash = previousHash,
-                Transactions = transactions ?? new List<Transaction>(),
-                Miner = minerAddress,
-                Timestamp = DateTime.UtcNow
-            };
-
-            block.MerkleRoot = block.CalculateMerkleRoot();
-            
-            // Simulated proof-of-work/validation calculation
-            ulong nonce = 0;
-            while (true)
-            {
-                block.Nonce = nonce;
-                var hash = block.ComputeBlockHash();
-                if (hash.StartsWith("00") || nonce >= 1000)
+                var handlers = TransactionProcessed.GetInvocationList()
+                    .Cast<Func<Transaction, Task>>();
+                foreach (var handler in handlers)
                 {
-                    block.Hash = hash;
-                    break;
+                    try
+                    {
+                        await handler(tx);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "TransactionProcessed handler threw an exception for {Id}", tx.Id);
+                    }
                 }
-                nonce++;
             }
-
-            return block;
-        }
-    }
-
-    // ============================================================================
-    // Full-Stack Transaction Processing Pipeline Manager
-    // ============================================================================
-    public sealed class TransactionProcessorService
-    {
-        private readonly ITransactionPool _mempool;
-        private readonly ITransactionValidator _validator;
-        private readonly IBlockEngine _blockEngine;
-        private readonly ILogger<TransactionProcessorService>? _logger;
-        
-        private readonly ConcurrentDictionary<string, AccountState> _accounts = new();
-        private readonly ConcurrentDictionary<string, TransactionReceipt> _receipts = new();
-        private readonly List<Block> _blockchain = new();
-        private readonly Channel<Transaction> _processingChannel = Channel.CreateUnbounded<Transaction>();
-        
-        private readonly CancellationTokenSource _cts = new();
-        private Task? _pipelineTask;
-        private long _processedCount;
-        private string _lastBlockHash = "0000000000000000000000000000000000000000000000000000000000000000";
-
-        public event EventHandler<TransactionReceipt>? TransactionExecuted;
-        public event EventHandler<Block>? BlockMined;
-
-        public TransactionProcessorService(
-            ITransactionPool mempool,
-            ITransactionValidator validator,
-            IBlockEngine blockEngine,
-            ILogger<TransactionProcessorService>? logger = null)
-        {
-            _mempool = mempool ?? throw new ArgumentNullException(nameof(mempool));
-            _validator = validator ?? throw new ArgumentNullException(nameof(validator));
-            _blockEngine = blockEngine ?? throw new ArgumentNullException(nameof(blockEngine));
-            _logger = logger;
-
-            // Genesis Account setup
-            _accounts["0xGENESIS"] = new AccountState { Address = "0xGENESIS", Balance = 10_000_000m, Nonce = 0 };
         }
 
-        public void Start()
-        {
-            _pipelineTask = Task.Run(() => ProcessPipelineAsync(_cts.Token));
-            _logger?.LogInformation("Magnum Opus Transaction Processor started.");
-        }
-
+        /// <summary>
+        /// Initiates a graceful shutdown, waiting for the background processing loop to finish.
+        /// </summary>
         public async Task StopAsync()
         {
             _cts.Cancel();
-            if (_pipelineTask != null)
-            {
-                await Task.WhenAny(_pipelineTask, Task.Delay(2000));
-            }
-            _logger?.LogInformation("Magnum Opus Transaction Processor stopped.");
+            _channel.Writer.Complete();
+            await _backgroundTask;
         }
 
-        public bool EnqueueTransaction(Transaction tx, string privateKey = "")
+        public async ValueTask DisposeAsync()
         {
-            if (tx == null) return false;
-            if (string.IsNullOrEmpty(tx.Id))
-                tx.Id = Guid.NewGuid().ToString("N");
-
-            if (!string.IsNullOrEmpty(privateKey))
-            {
-                tx.Sign(privateKey);
-            }
-
-            var senderState = GetOrCreateAccount(tx.Sender);
-            if (!_validator.Validate(tx, senderState, out string reason))
-            {
-                tx.UpdateStatus(TransactionStatus.Rejected, reason);
-                _logger?.LogWarning("Transaction {TxId} rejected: {Reason}", tx.Id, reason);
-                return false;
-            }
-
-            bool added = _mempool.AddTransaction(tx);
-            if (added)
-            {
-                _processingChannel.Writer.TryWrite(tx);
-                _logger?.LogInformation("Transaction {TxId} added to queue.", tx.Id);
-            }
-            return added;
+            await StopAsync();
+            _cts.Dispose();
         }
-
-        private async Task ProcessPipelineAsync(CancellationToken ct)
-        {
-            var currentBatch = new List<Transaction>();
-            var batchInterval = TimeSpan.FromMilliseconds(500);
-            var lastBatchTime = DateTime.UtcNow;
-
-            while (!ct.IsCancellationRequested)
-            {
-                try
-                {
-                    while (_processingChannel.Reader.TryRead(out var tx))
-                    {
-                        currentBatch.Add(tx);
-                        if (currentBatch.Count >= 50) break;
-                    }
-
-                    if (currentBatch.Count > 0 && (currentBatch.Count >= 50 || (DateTime.UtcNow - lastBatchTime) > batchInterval))
-                    {
-                        ProcessBatch(currentBatch);
-                        currentBatch.Clear();
-                        lastBatchTime = DateTime.UtcNow;
-                    }
-
-                    await Task.Delay(100, ct);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogError(ex, "Error processing transaction batch.");
-                }
-            }
-        }
-
-        private void ProcessBatch(List<Transaction> batch)
-        {
-            var confirmedTxs = new List<Transaction>();
-
-            foreach (var tx in batch)
-            {
-                tx.UpdateStatus(TransactionStatus.Processing);
-                var senderState = GetOrCreateAccount(tx.Sender);
-                var recipientState = GetOrCreateAccount(tx.Recipient);
-
-                if (senderState.Balance >= tx.CalculateTotalCost())
-                {
-                    // Deduct from sender
-                    senderState.Balance -= (tx.Amount + tx.Fee);
-                    senderState.Nonce++;
-
-                    // Credit to recipient
-                    recipientState.Balance += tx.Amount;
-
-                    tx.GasUsed = 21000;
-                    tx.FeePaid = tx.Fee;
-                    tx.UpdateStatus(TransactionStatus.Confirmed);
-                    tx.BlockIndex = _blockchain.Count + 1;
-
-                    var receipt = new TransactionReceipt
-                    {
-                        TransactionId = tx.Id,
-                        BlockIndex = tx.BlockIndex,
-                        GasUsed = tx.GasUsed,
-                        EffectiveGasPrice = tx.Fee,
-                        Success = true,
-                        Logs = { $"Transferred {tx.Amount} {tx.TokenSymbol} from {tx.Sender} to {tx.Recipient}" }
-                    };
-
-                    tx.ReceiptId = receipt.ReceiptId;
-                    _receipts[receipt.ReceiptId] = receipt;
-                    confirmedTxs.Add(tx);
-                    Interlocked.Increment(ref _processedCount);
-
-                    TransactionExecuted?.Invoke(this, receipt);
-                }
-                else
-                {
-                    tx.UpdateStatus(TransactionStatus.Failed, "Insufficient balance at processing time.");
-                }
-            }
-
-            if (confirmedTxs.Count > 0)
-            {
-                long newIndex = _blockchain.Count + 1;
-                var newBlock = _blockEngine.MineBlock(newIndex, _lastBlockHash, confirmedTxs, "0xVALIDATOR_PRIMARY");
-                _blockchain.Add(newBlock);
-                _lastBlockHash = newBlock.Hash;
-
-                BlockMined?.Invoke(this, newBlock);
-                _logger?.LogInformation("Block #{Index} mined with {Count} transactions. Hash: {Hash}", newBlock.Index, confirmedTxs.Count, newBlock.Hash);
-            }
-        }
-
-        public AccountState GetOrCreateAccount(string address)
-        {
-            return _accounts.GetOrAdd(address, addr => new AccountState { Address = addr, Balance = 1000m, Nonce = 0 });
-        }
-
-        public TransactionReceipt? GetReceipt(string receiptId)
-        {
-            _receipts.TryGetValue(receiptId, out var receipt);
-            return receipt;
-        }
-
-        public IReadOnlyList<Block> GetBlockchain() => _blockchain.AsReadOnly();
-
-        public long GetProcessedCount() => Thread.VolatileRead(ref _processedCount);
     }
 }
