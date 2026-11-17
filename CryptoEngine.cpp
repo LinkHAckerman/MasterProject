@@ -139,7 +139,7 @@ namespace MagnumOpus {
 
             // 1. Absorb phase
             std::vector<uint8_t> buffer(input.begin(), input.end());
-            // Padding: 0x01 ... 0x80 (Keccak padding)
+            // Padding per Keccak spec (simple 0x01 ... 0x80)
             buffer.push_back(0x01);
             while ((buffer.size() % RATE_BYTES) != (RATE_BYTES - 1)) {
                 buffer.push_back(0x00);
@@ -158,15 +158,14 @@ namespace MagnumOpus {
                 KeccakF1600(state);
             }
 
-            // 2. Squeeze phase – we only need first 32 bytes
+            // 2. Squeeze phase
             unsigned char out[OUTPUT_BYTES];
             size_t copied = 0;
             while (copied < OUTPUT_BYTES) {
-                size_t toCopy = std::min(OUTPUT_BYTES - copied, RATE_BYTES);
-                for (size_t i = 0; i < toCopy / 8; ++i) {
+                for (size_t i = 0; i < RATE_BYTES / 8 && copied < OUTPUT_BYTES; ++i) {
                     uint64_t lane = state[i];
                     for (size_t b = 0; b < 8 && copied < OUTPUT_BYTES; ++b) {
-                        out[copied++] = static_cast<unsigned char>((lane >> (8 * b)) & 0xFF);
+                        out[copied++] = static_cast<unsigned char>((lane >> (8 * b)) & 0xff);
                     }
                 }
                 if (copied < OUTPUT_BYTES) {
@@ -177,114 +176,210 @@ namespace MagnumOpus {
         }
     };
 
-    // Definition of static constants for Keccak256
-    const std::array<uint64_t, 24> Keccak256::RC = {
-        0x0000000000000001ULL, 0x0000000000008082ULL, 0x800000000000808aULL, 0x8000000080008000ULL,
-        0x000000000000808bULL, 0x0000000080000001ULL, 0x8000000080008081ULL, 0x8000000000008009ULL,
-        0x000000000000008aULL, 0x0000000000000088ULL, 0x0000000080008009ULL, 0x000000008000000aULL,
-        0x000000008000808bULL, 0x800000000000008bULL, 0x8000000000008089ULL, 0x8000000000008003ULL,
-        0x8000000000008002ULL, 0x8000000000000080ULL, 0x000000000000800aULL, 0x800000008000000aULL,
-        0x8000000080008081ULL, 0x8000000000008080ULL, 0x0000000080000001ULL, 0x8000000080008008ULL
+    // ---------------------------------------------------------------------
+    // 2. HIGH‑LEVEL DATA STRUCTURES (Transaction, Block, Blockchain)
+    // ---------------------------------------------------------------------
+
+    struct Transaction {
+        std::string id;          // UUID or hash identifier
+        std::string from;
+        std::string to;
+        double amount;           // Simple token amount for demo
+        uint64_t timestamp;      // Unix epoch seconds
+
+        Transaction() = default;
+        Transaction(const std::string& f, const std::string& t, double a)
+            : from(f), to(t), amount(a) {
+            timestamp = static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
+            // Compute a deterministic id based on fields
+            std::stringstream ss;
+            ss << from << to << amount << timestamp;
+            id = Sha256::ComputeHash(ss.str());
+        }
+
+        std::string hash() const {
+            std::stringstream ss;
+            ss << id << from << to << std::fixed << std::setprecision(8) << amount << timestamp;
+            return Sha256::ComputeHash(ss.str());
+        }
     };
 
-    const std::array<std::array<int,5>,5> Keccak256::ROTC = {{
-        {{ 0, 36, 3, 41, 18 }},
-        {{ 1, 44, 10, 45, 2 }},
-        {{ 62, 6, 43, 15, 61 }},
-        {{ 28, 55, 25, 21, 56 }},
-        {{ 27, 20, 39, 8, 14 }}
-    }};
+    struct Block {
+        uint64_t index;
+        std::string previousHash;
+        uint64_t timestamp;
+        std::vector<Transaction> transactions;
+        uint64_t nonce;
+        std::string hash;
 
-    // =========================================================================
-    // 2. HIGH‑LEVEL ENGINE HELPERS
-    // =========================================================================
-
-    // Helper to convert a hex string (with optional "0x" prefix) to a byte vector
-    static std::vector<uint8_t> HexToBytes(const std::string& hex) {
-        std::string clean = hex;
-        if (clean.rfind("0x", 0) == 0) clean = clean.substr(2);
-        std::vector<uint8_t> out;
-        out.reserve(clean.size() / 2);
-        for (size_t i = 0; i < clean.size(); i += 2) {
-            unsigned int byte;
-            std::sscanf(clean.c_str() + i, "%02x", &byte);
-            out.push_back(static_cast<uint8_t>(byte));
+        Block() = default;
+        Block(uint64_t idx, const std::string& prev, const std::vector<Transaction>& txs)
+            : index(idx), previousHash(prev), transactions(txs), nonce(0) {
+            timestamp = static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
+            hash = computeHash();
         }
-        return out;
-    }
 
-    // Helper to convert a byte vector to a hex string with "0x" prefix
-    static std::string BytesToHex(const std::vector<uint8_t>& data) {
-        std::ostringstream oss;
-        oss << "0x" << std::hex << std::setfill('0');
-        for (auto b : data) {
-            oss << std::setw(2) << static_cast<int>(b);
-        }
-        return oss.str();
-    }
-
-    // Simple Merkle tree utility – returns the Merkle root of a list of transaction hashes (hex strings)
-    class MerkleTree {
-    public:
-        static std::string ComputeRoot(const std::vector<std::string>& leafHashes) {
-            if (leafHashes.empty()) return "0x"; // empty root
-            std::vector<std::string> current = leafHashes;
-            while (current.size() > 1) {
-                std::vector<std::string> nextLevel;
-                for (size_t i = 0; i < current.size(); i += 2) {
-                    std::string left = current[i];
-                    std::string right = (i + 1 < current.size()) ? current[i + 1] : left; // duplicate if odd
-                    // Concatenate raw bytes of left and right, then double‑SHA256
-                    std::vector<uint8_t> leftBytes = HexToBytes(left);
-                    std::vector<uint8_t> rightBytes = HexToBytes(right);
-                    std::string concat(reinterpret_cast<char*>(leftBytes.data()), leftBytes.size());
-                    concat.append(reinterpret_cast<char*>(rightBytes.data()), rightBytes.size());
-                    std::string parent = DoubleSha256::Compute(concat);
-                    nextLevel.push_back(parent);
-                }
-                current.swap(nextLevel);
+        std::string computeHash() const {
+            std::stringstream ss;
+            ss << index << previousHash << timestamp << nonce;
+            for (const auto& tx : transactions) {
+                ss << tx.hash();
             }
-            return current.front();
+            return DoubleSha256::Compute(ss.str());
         }
     };
 
-    // High‑level façade exposing the most common cryptographic operations
-    class CryptoEngine {
+    class Blockchain {
+    private:
+        std::vector<Block> chain;
+        size_t difficulty; // Number of leading zero hex digits required
+
+        std::string proofOfWork(const Block& block) const {
+            Block mutableBlock = block; // copy to modify nonce
+            std::string target(difficulty, '0');
+            while (true) {
+                mutableBlock.nonce++;
+                std::string hash = mutableBlock.computeHash();
+                if (hash.compare(0, difficulty, target) == 0) {
+                    return hash;
+                }
+            }
+        }
+
+        bool isValidNewBlock(const Block& newBlock, const Block& previousBlock) const {
+            if (previousBlock.index + 1 != newBlock.index) return false;
+            if (previousBlock.hash != newBlock.previousHash) return false;
+            if (newBlock.computeHash() != newBlock.hash) return false;
+            std::string target(difficulty, '0');
+            if (newBlock.hash.compare(0, difficulty, target) != 0) return false;
+            return true;
+        }
+
     public:
-        static std::string Sha256Hash(const std::string& data) {
-            return Sha256::ComputeHash(data);
+        explicit Blockchain(size_t diff = 4) : difficulty(diff) {
+            // Genesis block
+            Block genesis(0, "0", {});
+            genesis.nonce = 0;
+            genesis.hash = genesis.computeHash();
+            chain.push_back(genesis);
         }
 
-        static std::string DoubleSha256Hash(const std::string& data) {
-            return DoubleSha256::Compute(data);
+        const Block& latestBlock() const { return chain.back(); }
+
+        bool addBlock(const std::vector<Transaction>& txs) {
+            Block newBlock(chain.size(), latestBlock().hash, txs);
+            newBlock.hash = proofOfWork(newBlock);
+            if (isValidNewBlock(newBlock, latestBlock())) {
+                chain.push_back(newBlock);
+                return true;
+            }
+            return false;
         }
 
-        static std::string Keccak256Hash(const std::string& data) {
-            return Keccak256::ComputeHash(data);
+        const std::vector<Block>& getChain() const { return chain; }
+    };
+
+    // ---------------------------------------------------------------------
+    // 3. TRANSACTION POOL & MINER (Thread‑Safe)
+    // ---------------------------------------------------------------------
+
+    class TransactionPool {
+    private:
+        std::queue<Transaction> pending;
+        mutable std::mutex mtx;
+        std::condition_variable cv;
+    public:
+        void push(const Transaction& tx) {
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                pending.push(tx);
+            }
+            cv.notify_one();
         }
 
-        static std::string MerkleRoot(const std::vector<std::string>& txHashes) {
-            return MerkleTree::ComputeRoot(txHashes);
+        // Waits until at least one transaction is available and returns a batch
+        std::vector<Transaction> popBatch(size_t maxBatchSize) {
+            std::unique_lock<std::mutex> lock(mtx);
+            cv.wait(lock, [this]{ return !pending.empty(); });
+            std::vector<Transaction> batch;
+            while (!pending.empty() && batch.size() < maxBatchSize) {
+                batch.push_back(pending.front());
+                pending.pop();
+            }
+            return batch;
         }
     };
 
-#ifdef TEST_CRYPTO_ENGINE
-    int main() {
-        std::cout << "=== Magnum Opus CryptoEngine Demo ===\n";
-        std::string msg = "Magnum Opus";
-        std::cout << "Message: " << msg << "\n";
-        std::cout << "SHA‑256:   " << CryptoEngine::Sha256Hash(msg) << "\n";
-        std::cout << "Double SHA‑256: " << CryptoEngine::DoubleSha256Hash(msg) << "\n";
-        std::cout << "Keccak‑256: " << CryptoEngine::Keccak256Hash(msg) << "\n";
+    class Miner {
+    private:
+        Blockchain& blockchain;
+        TransactionPool& pool;
+        std::atomic<bool> running{true};
+        std::thread worker;
+        size_t batchSize;
+    public:
+        Miner(Blockchain& bc, TransactionPool& tp, size_t batch = 5)
+            : blockchain(bc), pool(tp), batchSize(batch) {}
 
-        std::vector<std::string> txs = {
-            CryptoEngine::Sha256Hash("tx1"),
-            CryptoEngine::Sha256Hash("tx2"),
-            CryptoEngine::Sha256Hash("tx3")
-        };
-        std::cout << "Merkle Root of 3 txs: " << CryptoEngine::MerkleRoot(txs) << "\n";
-        return 0;
+        void start() {
+            worker = std::thread([this](){ this->run(); });
+        }
+
+        void stop() {
+            running = false;
+            // Wake up the thread if it's waiting
+            pool.push(Transaction("","",0.0)); // dummy transaction to unblock
+            if (worker.joinable()) worker.join();
+        }
+
+        void run() {
+            while (running) {
+                auto txBatch = pool.popBatch(batchSize);
+                // Remove possible dummy transaction inserted during stop
+                if (!running) break;
+                if (!txBatch.empty()) {
+                    bool ok = blockchain.addBlock(txBatch);
+                    if (ok) {
+                        std::cout << "[Miner] Mined block " << blockchain.latestBlock().index
+                                  << " with hash " << blockchain.latestBlock().hash << std::endl;
+                    } else {
+                        std::cerr << "[Miner] Failed to add block" << std::endl;
+                    }
+                }
+            }
+        }
+    };
+
+    // ---------------------------------------------------------------------
+    // 4. DEMONSTRATION ENTRY POINT (optional for library use)
+    // ---------------------------------------------------------------------
+
+    inline void demo() {
+        Blockchain chain(3); // low difficulty for quick demo
+        TransactionPool pool;
+        Miner miner(chain, pool, 3);
+        miner.start();
+
+        // Simulate incoming transactions
+        for (int i = 0; i < 10; ++i) {
+            Transaction tx("0xAlice", "0xBob", 1.0 + i * 0.1);
+            pool.push(tx);
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        }
+
+        // Allow some time for mining
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        miner.stop();
+
+        std::cout << "Final blockchain length: " << chain.getChain().size() << std::endl;
     }
-#endif
 
 } // namespace MagnumOpus
+
+// If compiled as a standalone program, run the demo.
+#ifdef MAGNUM_OPUS_STANDALONE
+int main() {
+    MagnumOpus::demo();
+    return 0;
+}
+#endif
