@@ -335,6 +335,8 @@ def build_prompt(agent_label, claimed_files, available_files, manifest_json, rep
             f"\nTODAY'S SPECIFIC GOAL for the assigned file: {task}.\n"
             "The file is never 'finished' - implement this goal in working, parseable code, "
             "keep everything already there, and return the COMPLETE file.\n"
+            "Syntax warning: Elixir map types use `%{key: type}` or `%{optional(k) => v}`, never `map(:a => b)`; "
+            "every `def`/`do` block must be closed with `end`.\n"
         )
 
     return f"""
@@ -514,7 +516,30 @@ def _is_unchanged(filename, new_content):
         return False
 
 
-def pick_unclaimed_file(model_names, call_fn, extract_text_fn, claimed_files, max_pick_attempts=3):
+def _elixir_syntax_error(content):
+    """Parse-only check of Elixir source. Returns an error string, or None if
+    it parses (or Elixir isn't installed, in which case we can't tell)."""
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".ex", delete=False, encoding="utf-8") as tmp:
+        tmp.write(content)
+        path = tmp.name
+    try:
+        r = subprocess.run(
+            ["elixir", "-e", f'Code.string_to_quoted!(File.read!("{path}"))'],
+            capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return (r.stdout + r.stderr).strip()[:400]
+        return None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def pick_unclaimed_file(model_names, call_fn, extract_text_fn, claimed_files, max_pick_attempts=5):
     """
     Full generation flow: ask for the assigned file's new content (trying
     every model in the list, per try_generate's rules, until one produces
@@ -559,6 +584,13 @@ def pick_unclaimed_file(model_names, call_fn, extract_text_fn, claimed_files, ma
                       f"unchanged (a copy of the current file). Trying a different model.")
                 remaining_models = [m for m in remaining_models if m != model]
                 continue
+            if candidate_file.endswith(".ex"):
+                err = _elixir_syntax_error(candidate_content)
+                if err:
+                    print(f"Attempt {pick_attempt}/{max_pick_attempts}: {model} produced Elixir that does not parse "
+                          f"({err.splitlines()[0] if err else ''}). Trying a different model.")
+                    remaining_models = [m for m in remaining_models if m != model]
+                    continue
             if candidate_file == "README.md":
                 if len(candidate_content) < README_MIN_CHARS:
                     print(f"Attempt {pick_attempt}/{max_pick_attempts}: README too short "
