@@ -115,7 +115,7 @@ contract MagnumOpusToken is
     }
 
     // ---------------------------------------------------------------------
-    // Airdrop and batch transfer functions
+    // Airdrop functionality
     // ---------------------------------------------------------------------
     function airdrop(address[] calldata recipients, uint256[] calldata amounts) external onlyRole(AIRDROP_ROLE) {
         require(recipients.length == amounts.length, "MOP: recipients and amounts length mismatch");
@@ -127,34 +127,23 @@ contract MagnumOpusToken is
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Batch transfer functionality
+    // ---------------------------------------------------------------------
     function batchTransfer(address[] calldata recipients, uint256[] calldata amounts) external {
         require(recipients.length == amounts.length, "MOP: recipients and amounts length mismatch");
-        uint256 totalAmount = amounts.reduce((x, y) => x + y);
-        require(balanceOf(msg.sender) >= totalAmount, "MOP: insufficient balance");
 
         for (uint256 i = 0; i < recipients.length; i++) {
             _transfer(msg.sender, recipients[i], amounts[i]);
         }
+
         emit BatchTransfer(msg.sender, recipients, amounts);
-    }
-
-    // ---------------------------------------------------------------------
-    // UUPS Upgradeability
-    // ---------------------------------------------------------------------
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {}
-
-    function upgradeTo(address newImplementation) external onlyRole(ADMIN_ROLE) {
-        _upgradeTo(newImplementation);
-    }
-
-    function upgradeToAndCall(address newImplementation, bytes memory data) external onlyRole(ADMIN_ROLE) {
-        _upgradeToAndCall(newImplementation, data);
     }
 }
 
 /**
  * @title MagnumOpusNFT
- * @dev ERC721 token with upgradeability, enumerable, URI storage, ERC2981 royalties, lazy minting, batch mint, pausable and upgradeable.
+ * @dev ERC721 token with upgradeability, enumerable, URI storage, ERC2981 royalties, lazy minting, batch mint and pausable controls.
  */
 contract MagnumOpusNFT is
     Initializable,
@@ -174,17 +163,17 @@ contract MagnumOpusNFT is
     bytes32 public constant ROYALTY_ROLE = keccak256("ROYALTY_ROLE");
 
     // Events
-    event RoyaltyUpdated(uint256 feeNumerator);
-    event BatchMint(address indexed to, uint256[] tokenIds, string[] tokenURIs);
+    event LazyMint(uint256 indexed tokenId, address indexed minter, address indexed to, string uri);
+    event BatchMint(address indexed minter, address[] recipients, uint256[] tokenIds, string[] uris);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() initializer {}
 
-    function initialize(string memory name, string memory symbol, uint256 feeNumerator) public initializer {
+    function initialize(string memory name, string memory symbol, uint256 royaltyFeeNumerator) public initializer {
         __ERC721_init(name, symbol);
         __ERC721Enumerable_init();
         __ERC721URIStorage_init();
-        __ERC2981_init(feeNumerator);
+        __ERC2981_init(royaltyFeeNumerator);
         __AccessControl_init();
         __Pausable_init();
         __ReentrancyGuard_init();
@@ -207,11 +196,6 @@ contract MagnumOpusNFT is
     // ---------------------------------------------------------------------
     // Access–controlled functions
     // ---------------------------------------------------------------------
-    function mint(address to, uint256 tokenId, string memory tokenURI) external onlyRole(MINTER_ROLE) {
-        _mint(to, tokenId);
-        _setTokenURI(tokenId, tokenURI);
-    }
-
     function pause() external onlyRole(PAUSER_ROLE) {
         _pause();
     }
@@ -220,41 +204,34 @@ contract MagnumOpusNFT is
         _unpause();
     }
 
-    function updateRoyalty(uint256 feeNumerator) external onlyRole(ROYALTY_ROLE) {
-        _setDefaultRoyalty(msg.sender, feeNumerator);
-        emit RoyaltyUpdated(feeNumerator);
+    function setRoyaltyRecipient(address recipient) external onlyRole(ROYALTY_ROLE) {
+        _setDefaultRoyalty(recipient, _royaltyFeeNumerator());
     }
 
     // ---------------------------------------------------------------------
-    // Lazy minting and batch minting functions
+    // Lazy minting functionality
     // ---------------------------------------------------------------------
-    function lazyMint(address to, uint256 tokenId, string memory tokenURI) external onlyRole(MINTER_ROLE) {
-        require(!_exists(tokenId), "MOP: token already exists");
+    function lazyMint(address to, string memory uri) external onlyRole(MINTER_ROLE) returns (uint256) {
+        uint256 tokenId = _tokenIdCounter.current();
         _mint(to, tokenId);
-        _setTokenURI(tokenId, tokenURI);
+        _setTokenURI(tokenId, uri);
+        emit LazyMint(tokenId, msg.sender, to, uri);
+        return tokenId;
     }
 
-    function batchMint(address to, uint256[] calldata tokenIds, string[] calldata tokenURIs) external onlyRole(MINTER_ROLE) {
-        require(tokenIds.length == tokenURIs.length, "MOP: tokenIds and tokenURIs length mismatch");
+    // ---------------------------------------------------------------------
+    // Batch minting functionality
+    // ---------------------------------------------------------------------
+    function batchMint(address[] calldata recipients, string[] calldata uris) external onlyRole(MINTER_ROLE) {
+        require(recipients.length == uris.length, "MOP: recipients and uris length mismatch");
 
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            require(!_exists(tokenIds[i]), "MOP: token already exists");
-            _mint(to, tokenIds[i]);
-            _setTokenURI(tokenIds[i], tokenURIs[i]);
+        uint256[] memory tokenIds = new uint256[](recipients.length);
+        for (uint256 i = 0; i < recipients.length; i++) {
+            tokenIds[i] = _tokenIdCounter.current();
+            _mint(recipients[i], tokenIds[i]);
+            _setTokenURI(tokenIds[i], uris[i]);
         }
-        emit BatchMint(to, tokenIds, tokenURIs);
-    }
 
-    // ---------------------------------------------------------------------
-    // UUPS Upgradeability
-    // ---------------------------------------------------------------------
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {}
-
-    function upgradeTo(address newImplementation) external onlyRole(ADMIN_ROLE) {
-        _upgradeTo(newImplementation);
-    }
-
-    function upgradeToAndCall(address newImplementation, bytes memory data) external onlyRole(ADMIN_ROLE) {
-        _upgradeToAndCall(newImplementation, data);
+        emit BatchMint(msg.sender, recipients, tokenIds, uris);
     }
 }
