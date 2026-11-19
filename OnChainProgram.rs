@@ -200,6 +200,124 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct UpdateConfig<'info> {
+    #[account(
+        mut,
+        seeds = [b"magnum_opus_state"],
+        bump = state.bump,
+        has_one = authority
+    )]
+    pub state: Account<'info, MagnumOpusState>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ProcessTransaction<'info> {
+    #[account(
+        mut,
+        seeds = [b"magnum_opus_state"],
+        bump = state.bump
+    )]
+    pub state: Account<'info, MagnumOpusState>,
+    #[account(
+        mut,
+        seeds = [b"user_account", sender.key().as_ref()],
+        bump = sender_account.bump,
+        has_one = owner
+    )]
+    pub sender_account: Account<'info, UserAccount>,
+    #[account(
+        mut,
+        seeds = [b"user_account", recipient.key().as_ref()],
+        bump = recipient_account.bump
+    )]
+    pub recipient_account: Account<'info, UserAccount>,
+    #[account(
+        init,
+        payer = sender,
+        space = 8 + std::mem::size_of::<TransactionRecord>(),
+        seeds = [b"transaction_record", tx_id.as_ref()],
+        bump
+    )]
+    pub transaction_record: Account<'info, TransactionRecord>,
+    #[account(mut)]
+    pub sender: Signer<'info>,
+    pub recipient: SystemAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawFees<'info> {
+    #[account(
+        mut,
+        seeds = [b"magnum_opus_state"],
+        bump = state.bump,
+        has_one = authority
+    )]
+    pub state: Account<'info, MagnumOpusState>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(mut)]
+    pub treasury: SystemAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(
+        mut,
+        seeds = [b"magnum_opus_state"],
+        bump = state.bump
+    )]
+    pub state: Account<'info, MagnumOpusState>,
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + std::mem::size_of::<UserAccount>(),
+        seeds = [b"user_account", user.key().as_ref()],
+        bump
+    )]
+    pub user_account: Account<'info, UserAccount>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(
+        mut,
+        seeds = [b"magnum_opus_state"],
+        bump = state.bump
+    )]
+    pub state: Account<'info, MagnumOpusState>,
+    #[account(
+        mut,
+        seeds = [b"user_account", user.key().as_ref()],
+        bump = user_account.bump,
+        has_one = owner
+    )]
+    pub user_account: Account<'info, UserAccount>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateRewardRate<'info> {
+    #[account(
+        mut,
+        seeds = [b"magnum_opus_state"],
+        bump = state.bump,
+        has_one = authority
+    )]
+    pub state: Account<'info, MagnumOpusState>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
 #[program]
 pub mod magnum_opus {
     use super::*;
@@ -236,5 +354,245 @@ pub mod magnum_opus {
         Ok(())
     }
 
-    // Add more instruction handlers here
+    pub fn update_config(
+        ctx: Context<UpdateConfig>,
+        fee_basis_points: Option<u16>,
+        treasury: Option<Pubkey>,
+        is_paused: Option<bool>,
+    ) -> Result<()> {
+        let state = &mut ctx.accounts.state;
+
+        // Update fee basis points if provided
+        if let Some(fee_basis_points) = fee_basis_points {
+            if fee_basis_points > 10000 {
+                return Err(MagnumError::InvalidFeeBasisPoints.into());
+            }
+            state.fee_basis_points = fee_basis_points;
+        }
+
+        // Update treasury if provided
+        if let Some(treasury) = treasury {
+            state.treasury = treasury;
+        }
+
+        // Update paused state if provided
+        if let Some(is_paused) = is_paused {
+            state.is_paused = is_paused;
+        }
+
+        // Emit event
+        emit!(ConfigUpdatedEvent {
+            authority: ctx.accounts.authority.key(),
+            fee_basis_points: state.fee_basis_points,
+            treasury: state.treasury,
+            is_paused: state.is_paused,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
+        Ok(())
+    }
+
+    pub fn process_transaction(
+        ctx: Context<ProcessTransaction>,
+        tx_id: [u8; 32],
+        gross_amount: u64,
+        memo: String,
+    ) -> Result<()> {
+        let state = &mut ctx.accounts.state;
+        let sender_account = &mut ctx.accounts.sender_account;
+        let recipient_account = &mut ctx.accounts.recipient_account;
+        let transaction_record = &mut ctx.accounts.transaction_record;
+
+        // Check if protocol is paused
+        if state.is_paused {
+            return Err(MagnumError::ProtocolPaused.into());
+        }
+
+        // Validate amount
+        if gross_amount == 0 {
+            return Err(MagnumError::InvalidAmount.into());
+        }
+
+        // Validate memo length
+        if memo.len() > 100 {
+            return Err(MagnumError::InvalidMemoLength.into());
+        }
+
+        // Calculate fee
+        let fee_amount = calculate_fee(gross_amount, state.fee_basis_points)?;
+        let net_amount = gross_amount.checked_sub(fee_amount).ok_or(MagnumError::MathOverflow)?;
+
+        // Check sender has sufficient funds
+        if sender_account.balance < gross_amount {
+            return Err(MagnumError::InsufficientFunds.into());
+        }
+
+        // Update sender account
+        sender_account.balance = sender_account.balance.checked_sub(gross_amount).ok_or(MagnumError::MathOverflow)?;
+        sender_account.last_updated = Clock::get()?.unix_timestamp;
+
+        // Update recipient account
+        recipient_account.balance = recipient_account.balance.checked_add(net_amount).ok_or(MagnumError::MathOverflow)?;
+        recipient_account.last_updated = Clock::get()?.unix_timestamp;
+
+        // Update state
+        state.transaction_count = state.transaction_count.checked_add(1).ok_or(MagnumError::MathOverflow)?;
+        state.total_volume = state.total_volume.checked_add(gross_amount).ok_or(MagnumError::MathOverflow)?;
+        state.accumulated_fees = state.accumulated_fees.checked_add(fee_amount).ok_or(MagnumError::MathOverflow)?;
+
+        // Initialize transaction record
+        transaction_record.tx_id = tx_id;
+        transaction_record.sender = ctx.accounts.sender.key();
+        transaction_record.recipient = ctx.accounts.recipient.key();
+        transaction_record.gross_amount = gross_amount;
+        transaction_record.fee_amount = fee_amount;
+        transaction_record.net_amount = net_amount;
+        transaction_record.memo = memo;
+        transaction_record.timestamp = Clock::get()?.unix_timestamp;
+        transaction_record.bump = *ctx.bumps.get("transaction_record").unwrap();
+
+        // Emit event
+        emit!(TransactionProcessedEvent {
+            sender: ctx.accounts.sender.key(),
+            recipient: ctx.accounts.recipient.key(),
+            gross_amount,
+            fee_amount,
+            net_amount,
+            memo,
+            timestamp: transaction_record.timestamp,
+        });
+
+        Ok(())
+    }
+
+    pub fn withdraw_fees(ctx: Context<WithdrawFees>, amount: u64) -> Result<()> {
+        let state = &mut ctx.accounts.state;
+
+        // Check if amount is valid
+        if amount == 0 || amount > state.accumulated_fees {
+            return Err(MagnumError::InvalidAmount.into());
+        }
+
+        // Transfer fees to treasury
+        let treasury = &mut ctx.accounts.treasury;
+        **treasury.lamports.borrow_mut() = treasury.lamports()
+            .checked_add(amount)
+            .ok_or(MagnumError::MathOverflow)?;
+        **ctx.accounts.authority.lamports.borrow_mut() = ctx.accounts.authority.lamports()
+            .checked_sub(amount)
+            .ok_or(MagnumError::MathOverflow)?;
+
+        // Update state
+        state.accumulated_fees = state.accumulated_fees.checked_sub(amount).ok_or(MagnumError::MathOverflow)?;
+
+        // Emit event
+        emit!(FeesWithdrawnEvent {
+            authority: ctx.accounts.authority.key(),
+            amount,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
+        Ok(())
+    }
+
+    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        let state = &ctx.accounts.state;
+        let user_account = &mut ctx.accounts.user_account;
+
+        // Check if protocol is paused
+        if state.is_paused {
+            return Err(MagnumError::ProtocolPaused.into());
+        }
+
+        // Validate amount
+        if amount == 0 {
+            return Err(MagnumError::InvalidAmount.into());
+        }
+
+        // Transfer funds to user account
+        let user = &mut ctx.accounts.user;
+        **user.lamports.borrow_mut() = user.lamports()
+            .checked_sub(amount)
+            .ok_or(MagnumError::MathOverflow)?;
+        **user_account.to_account_info().lamports.borrow_mut() = user_account.to_account_info().lamports()
+            .checked_add(amount)
+            .ok_or(MagnumError::MathOverflow)?;
+
+        // Update user account
+        if user_account.owner == Pubkey::default() {
+            user_account.owner = user.key();
+            user_account.bump = *ctx.bumps.get("user_account").unwrap();
+        }
+        user_account.balance = user_account.balance.checked_add(amount).ok_or(MagnumError::MathOverflow)?;
+        user_account.last_updated = Clock::get()?.unix_timestamp;
+
+        // Emit event
+        emit!(DepositEvent {
+            user: user.key(),
+            amount,
+            timestamp: user_account.last_updated,
+        });
+
+        Ok(())
+    }
+
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        let state = &ctx.accounts.state;
+        let user_account = &mut ctx.accounts.user_account;
+
+        // Check if protocol is paused
+        if state.is_paused {
+            return Err(MagnumError::ProtocolPaused.into());
+        }
+
+        // Validate amount
+        if amount == 0 || amount > user_account.balance {
+            return Err(MagnumError::InvalidAmount.into());
+        }
+
+        // Transfer funds from user account
+        let user = &mut ctx.accounts.user;
+        **user.lamports.borrow_mut() = user.lamports()
+            .checked_add(amount)
+            .ok_or(MagnumError::MathOverflow)?;
+        **user_account.to_account_info().lamports.borrow_mut() = user_account.to_account_info().lamports()
+            .checked_sub(amount)
+            .ok_or(MagnumError::MathOverflow)?;
+
+        // Update user account
+        user_account.balance = user_account.balance.checked_sub(amount).ok_or(MagnumError::MathOverflow)?;
+        user_account.last_updated = Clock::get()?.unix_timestamp;
+
+        // Emit event
+        emit!(WithdrawalEvent {
+            user: user.key(),
+            amount,
+            timestamp: user_account.last_updated,
+        });
+
+        Ok(())
+    }
+
+    pub fn update_reward_rate(ctx: Context<UpdateRewardRate>, new_reward_rate: u64) -> Result<()> {
+        let state = &mut ctx.accounts.state;
+
+        // Validate reward rate
+        if new_reward_rate == 0 {
+            return Err(MagnumError::InvalidRewardRate.into());
+        }
+
+        // Update reward rate
+        let old_reward_rate = state.reward_rate_per_sec;
+        state.reward_rate_per_sec = new_reward_rate;
+
+        // Emit event
+        emit!(RewardRateUpdatedEvent {
+            authority: ctx.accounts.authority.key(),
+            old_reward_rate,
+            new_reward_rate,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
+        Ok(())
+    }
 }

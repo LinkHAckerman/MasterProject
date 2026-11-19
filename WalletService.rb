@@ -20,6 +20,7 @@ module MagnumOpus
   class RateLimitError < WalletServiceError; end
   class CalculationError < WalletServiceError; end
   class OracleError < WalletServiceError; end
+  class ConfigurationError < WalletServiceError; end
 
   ##
   # MagnumOpus::WalletService
@@ -179,22 +180,23 @@ module MagnumOpus
         json = fetch_json(uri)
         raise OracleError, "Etherscan error: #{json['message']}" unless json['status'] == '1'
         wei = BigDecimal(json['result'])
-        eth = wei / (10**18)
-        eth
+        wei / (10**18)
       else
         raise NotImplementedError, "Native balance lookup not implemented for #{chain}"
       end
     end
 
-    # Retrieves the token balance for a known token on a supported chain.
-    # Uses the same Etherscan‑compatible API (or Solana RPC for SOL tokens).
-    def token_balance(address, chain, token_symbol)
+    # Retrieves the token balance for a known ERC‑20 (or BEP‑20) token on supported EVM chains.
+    def token_balance(chain, address, token_symbol)
       validate_address!(address)
       chain_key = chain.to_sym
       raise ArgumentError, "Unsupported chain #{chain}" unless SUPPORTED_CHAINS.include?(chain_key)
 
       token_info = KNOWN_TOKENS.dig(chain_key, token_symbol.upcase)
       raise ArgumentError, "Unknown token #{token_symbol} on #{chain}" unless token_info
+
+      contract = token_info[:address]
+      decimals = token_info[:decimals]
 
       case chain_key
       when :ethereum, :bsc, :polygon, :arbitrum, :optimism, :avalanche
@@ -209,126 +211,90 @@ module MagnumOpus
                    when :avalanche then 'https://api.snowtrace.io/api'
                    end
         uri = URI(base_url)
-        uri.query = URI.encode_www_form({module: 'account', action: 'tokenbalance', contractaddress: token_info[:address], address: address, tag: 'latest', apikey: etherscan_api_key})
+        uri.query = URI.encode_www_form({
+          module: 'account',
+          action: 'tokenbalance',
+          contractaddress: contract,
+          address: address,
+          tag: 'latest',
+          apikey: etherscan_api_key
+        })
         json = fetch_json(uri)
-        raise OracleError, "Etherscan tokenbalance error: #{json['message']}" unless json['status'] == '1'
+        raise OracleError, "Etherscan token error: #{json['message']}" unless json['status'] == '1'
         raw = BigDecimal(json['result'])
-        raw / (10**token_info[:decimals])
-      when :solana
-        # Minimal Solana RPC call for SPL token balance
-        rpc_uri = URI(CHAIN_METADATA[:solana][:rpc])
-        payload = {
-          jsonrpc: '2.0',
-          id: SecureRandom.random_number(1_000_000),
-          method: 'getTokenAccountBalance',
-          params: [address]
-        }
-        response = post_json(rpc_uri, payload)
-        if response['error']
-          raise OracleError, "Solana RPC error: #{response['error']['message']}"
-        end
-        amount = response['result']['value']['uiAmount']
-        BigDecimal(amount.to_s)
+        raw / (10 ** decimals)
       else
         raise NotImplementedError, "Token balance lookup not implemented for #{chain}"
       end
     end
 
-    # ---------------------------------------------------------------------
-    # Helper methods
-    # ---------------------------------------------------------------------
+    # Batch fetch token balances for an address.
+    def batch_balances(chain, address, token_symbols)
+      results = {}
+      token_symbols.each do |sym|
+        begin
+          results[sym] = token_balance(chain, address, sym)
+        rescue => e
+          @logger.error "Failed to fetch balance for #{sym}: #{e.message}"
+          results[sym] = nil
+        end
+      end
+      results
+    end
+
     private
 
-    def validate_address!(address)
-      raise InvalidAddressError, 'Address cannot be nil or empty' if address.nil? || address.strip.empty?
-      # Very light sanity check – real validation would be chain‑specific.
-      raise InvalidAddressError, "Invalid address format: #{address}" unless address.match?(/^0x[0-9a-fA-F]{40}$/) || address.match?(/^[A-Za-z0-9]{44,}$/)
-    end
-
+    # Perform an HTTP GET request and parse JSON response.
     def fetch_json(uri)
       enforce_rate_limit!
-      attempts = 0
-      begin
-        attempts += 1
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = (uri.scheme == 'https')
-        http.read_timeout = DEFAULT_TIMEOUT_SEC
-        request = Net::HTTP::Get.new(uri)
-        response = http.request(request)
-        case response
-        when Net::HTTPSuccess
-          JSON.parse(response.body)
-        else
-          raise NetworkError, "HTTP #{response.code} #{response.message} for #{uri}"
-        end
-      rescue *network_exceptions => e
-        @logger.warn "Attempt #{attempts} failed for #{uri}: #{e.class} #{e.message}"
-        retry if attempts < MAX_RETRY_ATTEMPTS
-        raise NetworkError, "Failed after #{attempts} attempts: #{e.message}"
-      end
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = (uri.scheme == 'https')
+      request = Net::HTTP::Get.new(uri)
+      http.read_timeout = DEFAULT_TIMEOUT_SEC
+      response = http.request(request)
+      raise NetworkError, "HTTP #{response.code}" unless response.is_a?(Net::HTTPSuccess)
+      JSON.parse(response.body)
+    rescue StandardError => e
+      @logger.warn "Network request failed: #{e.message}"
+      raise NetworkError, e.message
+    ensure
+      record_request_timestamp
     end
 
-    def post_json(uri, payload)
-      enforce_rate_limit!
-      attempts = 0
-      begin
-        attempts += 1
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = (uri.scheme == 'https')
-        http.read_timeout = DEFAULT_TIMEOUT_SEC
-        request = Net::HTTP::Post.new(uri)
-        request['Content-Type'] = 'application/json'
-        request.body = payload.to_json
-        response = http.request(request)
-        case response
-        when Net::HTTPSuccess
-          JSON.parse(response.body)
-        else
-          raise NetworkError, "HTTP #{response.code} #{response.message} for #{uri}"
-        end
-      rescue *network_exceptions => e
-        @logger.warn "POST attempt #{attempts} failed for #{uri}: #{e.class} #{e.message}"
-        retry if attempts < MAX_RETRY_ATTEMPTS
-        raise NetworkError, "POST failed after #{attempts} attempts: #{e.message}"
-      end
-    end
-
-    def network_exceptions
-      [Timeout::Error, Errno::ECONNREFUSED, Errno::ECONNRESET, SocketError, OpenSSL::SSL::SSLError]
-    end
-
-    # Simple token‑bucket style rate limiter – allows MAX_REQUESTS_PER_MIN within a rolling minute.
+    # Simple token bucket style rate limiting (per‑minute).
     def enforce_rate_limit!
       now = Time.now
-      synchronize do
-        @request_timestamps.reject! { |ts| ts < now - 60 }
-        if @request_timestamps.size >= MAX_REQUESTS_PER_MIN
-          raise RateLimitError, "Exceeded #{MAX_REQUESTS_PER_MIN} requests per minute"
-        end
-        @request_timestamps << now
+      @request_timestamps.reject! { |t| now - t > 60 }
+      if @request_timestamps.size >= MAX_REQUESTS_PER_MIN
+        raise RateLimitError, "Exceeded #{MAX_REQUESTS_PER_MIN} requests per minute"
       end
     end
 
-    def cache_key(key)
-      "wallet_service:#{key}"
+    def record_request_timestamp
+      @request_timestamps << Time.now
     end
 
+    # Cache helpers – store values with a timestamp and expire after TTL.
     def fetch_from_cache(key)
-      entry = @cache[cache_key(key)]
+      entry = @cache[key]
       return nil unless entry
-      if Time.now - entry[:timestamp] < DEFAULT_CACHE_TTL_SEC
+      if Time.now - entry[:time] < DEFAULT_CACHE_TTL_SEC
         entry[:value]
       else
-        @cache.delete(cache_key(key))
+        @cache.delete(key)
         nil
       end
     end
 
     def store_in_cache(key, value)
-      @cache[cache_key(key)] = {value: value, timestamp: Time.now}
+      @cache[key] = { value: value, time: Time.now }
+    end
+
+    # Validate that an address looks like a proper 0x‑prefixed hex string.
+    def validate_address!(address)
+      unless address.is_a?(String) && address.match?(/\A0x[0-9a-fA-F]{40}\z/)
+        raise InvalidAddressError, "Invalid address format: #{address}"
+      end
     end
   end
-
-  # Custom error for missing configuration like API keys.
-  class ConfigurationError < WalletServiceError; end
 end
