@@ -194,6 +194,7 @@ namespace MagnumOpus.Backend.Core
         private readonly ILogger<TransactionProcessor> _logger;
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _backgroundTask;
+        private readonly TimeSpan _processingDelay = TimeSpan.FromMilliseconds(150); // simulate work
 
         /// <summary>
         /// Event raised after a transaction has been processed (either confirmed or failed).
@@ -245,45 +246,62 @@ namespace MagnumOpus.Backend.Core
             }
             catch (OperationCanceledException)
             {
-                // Graceful shutdown
+                // Expected during shutdown – just exit gracefully.
+                _logger.LogInformation("Transaction processing loop cancelled.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogCritical(ex, "Unexpected error in processing loop.");
             }
         }
 
         private async Task ProcessTransactionAsync(Transaction tx)
         {
+            // Mark as processing
+            tx.UpdateStatus(TransactionStatus.Processing);
+            _logger.LogDebug("Processing transaction {Id}", tx.Id);
+
             // Basic validation
-            if (!tx.IsValid() || !tx.ValidateNetworkConstraints())
+            if (!tx.IsValid())
             {
-                tx.UpdateStatus(TransactionStatus.Failed, "Validation failed");
-                _logger.LogWarning("Transaction {Id} failed validation.", tx.Id);
+                tx.UpdateStatus(TransactionStatus.Rejected, "Invalid transaction fields");
                 await RaiseProcessedEventAsync(tx);
                 return;
             }
 
-            tx.UpdateStatus(TransactionStatus.Processing);
-            _logger.LogInformation("Processing transaction {Id}.", tx.Id);
-
-            // Simulate work – in a real system this would involve signature verification,
-            // state updates, gas accounting, etc.
-            await Task.Delay(TimeSpan.FromMilliseconds(100), _cts.Token);
-
-            // Example: verify signature if present
-            if (!string.IsNullOrWhiteSpace(tx.Signature))
+            // Simulated signature verification – in a real system we would retrieve the public key.
+            // Here we assume the public key is the same as the sender identifier for demo purposes.
+            if (!tx.VerifySignature(tx.Sender))
             {
-                // In this placeholder we treat the Sender as the public key.
-                bool sigOk = tx.VerifySignature(tx.Sender);
-                if (!sigOk)
-                {
-                    tx.UpdateStatus(TransactionStatus.Failed, "Invalid signature");
-                    _logger.LogWarning("Transaction {Id} has an invalid signature.", tx.Id);
-                    await RaiseProcessedEventAsync(tx);
-                    return;
-                }
+                tx.UpdateStatus(TransactionStatus.Rejected, "Signature verification failed");
+                await RaiseProcessedEventAsync(tx);
+                return;
             }
+
+            // Simulate work (e.g., state transition, gas calculation)
+            await Task.Delay(_processingDelay, _cts.Token);
+
+            // Simulated gas usage based on transaction type
+            tx.GasUsed = tx.Type switch
+            {
+                TransactionType.Transfer => 21000,
+                TransactionType.ContractCall => 50000,
+                TransactionType.TokenMint => 80000,
+                TransactionType.TokenBurn => 60000,
+                TransactionType.LiquiditySwap => 120000,
+                TransactionType.StakingDeposit => 90000,
+                TransactionType.NFTMint => 150000,
+                _ => 30000
+            };
+
+            // Record fee paid (could be different from requested fee after gas calculation)
+            tx.FeePaid = tx.Fee + (decimal)tx.GasUsed * 0.00001m;
 
             // Mark as confirmed
             tx.UpdateStatus(TransactionStatus.Confirmed);
-            _logger.LogInformation("Transaction {Id} confirmed.", tx.Id);
+            _logger.LogInformation("Transaction {Id} confirmed. GasUsed={GasUsed}, FeePaid={FeePaid}",
+                tx.Id, tx.GasUsed, tx.FeePaid);
+
             await RaiseProcessedEventAsync(tx);
         }
 
@@ -293,34 +311,44 @@ namespace MagnumOpus.Backend.Core
             {
                 var handlers = TransactionProcessed.GetInvocationList()
                     .Cast<Func<Transaction, Task>>();
-                foreach (var handler in handlers)
-                {
-                    try
-                    {
-                        await handler(tx);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "TransactionProcessed handler threw an exception for {Id}", tx.Id);
-                    }
-                }
+                var tasks = handlers.Select(h => SafeInvokeHandlerAsync(h, tx));
+                await Task.WhenAll(tasks);
+            }
+        }
+
+        private static async Task SafeInvokeHandlerAsync(Func<Transaction, Task> handler, Transaction tx)
+        {
+            try
+            {
+                await handler(tx);
+            }
+            catch
+            {
+                // Swallow exceptions from user‑provided handlers to avoid crashing the processor.
             }
         }
 
         /// <summary>
-        /// Initiates a graceful shutdown, waiting for the background processing loop to finish.
+        /// Initiates a graceful shutdown, completing any in‑flight work.
         /// </summary>
-        public async Task StopAsync()
-        {
-            _cts.Cancel();
-            _channel.Writer.Complete();
-            await _backgroundTask;
-        }
-
         public async ValueTask DisposeAsync()
         {
-            await StopAsync();
-            _cts.Dispose();
+            // Signal cancellation
+            _cts.Cancel();
+            // Complete the writer side so the reader finishes once the queue drains.
+            _channel.Writer.Complete();
+            try
+            {
+                await _backgroundTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected – ignore.
+            }
+            finally
+            {
+                _cts.Dispose();
+            }
         }
     }
 }
