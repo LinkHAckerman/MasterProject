@@ -63,9 +63,24 @@ COAUTHORS_FILE = ".coauthors.tmp"
 # Prompt-size limits. The file an agent is ASSIGNED gets a big window so it
 # can see (nearly) all of it before rewriting; every other file only gets a
 # short preview for context.
-MAX_CHARS_FOCUS_FILE = 5000
+MAX_CHARS_FOCUS_FILE = 9000
 MAX_CHARS_OTHER_FILE = 350
-MAX_TOTAL_MANIFEST_CHARS = 12000
+MAX_TOTAL_MANIFEST_CHARS = 16000
+
+# Concrete improvement goals, rotated by day, for a file that has grown mature
+# (models otherwise tend to decide "it's already finished" and echo it back).
+# Used for GossipNode.ex, the community agent's pinned file.
+GOSSIP_TASKS = [
+    "add a peer-sampling / membership view with periodic shuffle and failure detection (heartbeats + suspicion timeout)",
+    "add anti-entropy: a digest exchange between peers so missing transactions/blocks are pulled and reconciled",
+    "add message de-duplication with a bounded, time-expiring seen-cache and per-peer rate limiting",
+    "add a Supervisor/DynamicSupervisor structure with sensible restart strategies and graceful shutdown",
+    "add a typed message protocol (@type/@spec definitions) and validation of every incoming message",
+    "add telemetry-style counters (messages sent/received/dropped) and a status/0 introspection call",
+    "add @moduledoc/@doc documentation and doctests for the public API, and a small ExUnit test module in the same file",
+    "add peer scoring and banning of misbehaving peers (invalid transactions, spam)",
+    "add configurable fanout and TTL for rumor spreading, with backoff when peers are unreachable",
+]
 
 # How many files each agent is offered. 1 = strict rotation: the stalest
 # unclaimed file is the agent's assignment. Raise to 2-3 to give agents a
@@ -313,6 +328,15 @@ def build_prompt(agent_label, claimed_files, available_files, manifest_json, rep
         listing = "\n".join(f"  - {f}" for f in get_repo_file_listing())
         readme_section = f"{README_RULES}\nREAL FILE LIST:\n{listing}\n"
 
+    task_section = ""
+    if "GossipNode.ex" in available_files:
+        task = GOSSIP_TASKS[date.today().toordinal() % len(GOSSIP_TASKS)]
+        task_section = (
+            f"\nTODAY'S SPECIFIC GOAL for the assigned file: {task}.\n"
+            "The file is never 'finished' - implement this goal in working, parseable code, "
+            "keep everything already there, and return the COMPLETE file.\n"
+        )
+
     return f"""
 You are {agent_label}, working alongside other AI colleagues on:
 {PROJECT_GOAL}
@@ -331,7 +355,7 @@ Instructions:
    keep its existing structure and improve/extend it - do not discard what is there.
    If it does not exist yet, create it. Your output must be a real improvement:
    add or fix functionality, never hand back an unchanged copy of the file.
-2. Respond with ONLY a strict JSON object: {{"filename": "...", "content": "...complete updated file content..."}}
+{task_section}2. Respond with ONLY a strict JSON object: {{"filename": "...", "content": "...complete updated file content..."}}
 3. No markdown code fences. No commentary. Just the raw JSON object.
 4. Inside the "content" string, use real single-backslash JSON escapes
    (\\n for newline, \\t for tab, \\" for a quote) - do NOT double-escape
