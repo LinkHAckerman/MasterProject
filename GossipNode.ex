@@ -121,7 +121,7 @@ defmodule GossipNode.GossipServer do
 
   @type tx_hash :: binary
   @type tx :: map
-  @type state :: %{pending?: list({tx_hash, tx})}
+  @type state :: %{pending?: list({tx_hash, tx}), messages_sent: non_neg_integer, messages_received: non_neg_integer, messages_dropped: non_neg_integer}
 
   @type new_tx :: {:new_tx, tx_hash, tx}
   @type register_peer :: {:register_peer, pid}
@@ -134,7 +134,7 @@ defmodule GossipNode.GossipServer do
 
   @spec start_link(list) :: {:ok, pid} | {:error, term}
   def start_link(_args) do
-    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
+    GenServer.start_link(__MODULE__, %{messages_sent: 0, messages_received: 0, messages_dropped: 0}, name: __MODULE__)
   end
 
   @spec new_tx(tx_hash, tx) :: :ok
@@ -145,6 +145,11 @@ defmodule GossipNode.GossipServer do
   @spec register_peer(pid) :: :ok
   def register_peer(pid) do
     GenServer.cast(__MODULE__, {:register_peer, pid})
+  end
+
+  @spec status :: map
+  def status do
+    GenServer.call(__MODULE__, :status)
   end
 
   @spec init(state) :: {:ok, state}
@@ -172,6 +177,7 @@ defmodule GossipNode.GossipServer do
     Enum.each(pending, fn {hash, tx} ->
       Enum.each(peers, fn pid ->
         GenServer.cast(pid, {:receive_tx, hash, tx})
+        state = Map.update(state, :messages_sent, 1, &(&1 + 1))
       end)
     end)
     # Clear pending after broadcasting
@@ -193,7 +199,13 @@ defmodule GossipNode.GossipServer do
   @spec handle_info(tx_info, state) :: {:noreply, state} | {:stop, reason, state}
   def handle_info({:tx, hash, tx}, state) do
     GossipNode.Mempool.submit_tx(tx)
+    state = Map.update(state, :messages_received, 1, &(&1 + 1))
     {:noreply, state}
+  end
+
+  @spec handle_call(:status, _from, state) :: {:reply, map, state}
+  def handle_call(:status, _from, state) do
+    {:reply, state, state}
   end
 end
 
