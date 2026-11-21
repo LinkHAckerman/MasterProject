@@ -222,16 +222,20 @@ contract MagnumOpusNFT is
     // ---------------------------------------------------------------------
     // Batch minting functionality
     // ---------------------------------------------------------------------
-    function batchMint(address[] calldata recipients, string[] calldata uris) external onlyRole(MINTER_ROLE) {
+    function batchMint(address[] calldata recipients, string[] calldata uris) external onlyRole(MINTER_ROLE) returns (uint256[] memory) {
         require(recipients.length == uris.length, "MOP: recipients and uris length mismatch");
 
         uint256[] memory tokenIds = new uint256[](recipients.length);
+        uint256 startTokenId = _tokenIdCounter.current();
+
         for (uint256 i = 0; i < recipients.length; i++) {
-            tokenIds[i] = _tokenIdCounter.current();
-            _mint(recipients[i], tokenIds[i]);
-            _setTokenURI(tokenIds[i], uris[i]);
+            uint256 tokenId = startTokenId + i;
+            _mint(recipients[i], tokenId);
+            _setTokenURI(tokenId, uris[i]);
+            tokenIds[i] = tokenId;
         }
 
         emit BatchMint(msg.sender, recipients, tokenIds, uris);
+        return tokenIds;
     }
 }
