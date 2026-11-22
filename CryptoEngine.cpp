@@ -248,380 +248,192 @@ namespace MagnumOpus {
         }
     };
 
-    // =========================================================================
-    // 2. CORE BLOCKCHAIN DATA STRUCTURES & MEMPOOL
-    // =========================================================================
+    // ---------------------------------------------------------------------
+    // 2. BASIC TRANSACTION & BLOCK MODELS
+    // ---------------------------------------------------------------------
 
     struct Transaction {
-        std::string id;
+        std::string id;          // UUID or hash identifier
         std::string from;
         std::string to;
-        double amount;
-        double fee;
-        uint64_t nonce;
-        uint64_t timestamp;
-        std::string signature;
+        double amount;           // Simple double for demo purposes
+        std::string data;        // Optional memo
+        uint64_t timestamp;      // Unix epoch seconds
+        std::string hash;        // Cached hash of the transaction
 
         Transaction() = default;
-        Transaction(const std::string& f, const std::string& t, double a, double f_fee = 0.001, uint64_t n = 0)
-            : from(f), to(t), amount(a), fee(f_fee), nonce(n), signature("0x_simulated_sig") {
+        Transaction(const std::string& f, const std::string& t, double amt, const std::string& d = "")
+            : from(f), to(t), amount(amt), data(d) {
             timestamp = static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
-            id = computeHash();
+            id = generate_uuid();
+            hash = compute_hash();
         }
 
-        std::string computeHash() const {
-            std::stringstream ss;
-            ss << from << to << std::fixed << std::setprecision(8) << amount << fee << nonce << timestamp;
+        std::string compute_hash() const {
+            std::ostringstream ss;
+            ss << from << to << std::fixed << std::setprecision(8) << amount << data << timestamp << id;
             return Sha256::ComputeHash(ss.str());
         }
 
-        bool isValid() const {
-            if (amount <= 0 || fee < 0) return false;
-            if (from.empty() || to.empty()) return false;
-            return id == computeHash();
-        }
-    };
-
-    struct BlockHeader {
-        uint64_t index;
-        std::string previousHash;
-        std::string merkleRoot;
-        uint64_t timestamp;
-        uint32_t difficulty;
-        uint64_t nonce;
-
-        std::string computeHash() const {
-            std::stringstream ss;
-            ss << index << previousHash << merkleRoot << timestamp << difficulty << nonce;
-            return DoubleSha256::Compute(ss.str());
+    private:
+        static std::string generate_uuid() {
+            static std::random_device rd;
+            static std::mt19937_64 gen(rd());
+            static std::uniform_int_distribution<uint64_t> dis(0, UINT64_MAX);
+            uint64_t part1 = dis(gen);
+            uint64_t part2 = dis(gen);
+            std::ostringstream oss;
+            oss << std::hex << std::setfill('0')
+                << std::setw(16) << part1 << std::setw(16) << part2;
+            return oss.str();
         }
     };
 
     struct Block {
-        BlockHeader header;
+        uint64_t index;
+        std::string previous_hash;
+        uint64_t timestamp;
+        uint64_t nonce;
         std::vector<Transaction> transactions;
+        std::string merkle_root;
         std::string hash;
 
         Block() = default;
-        Block(uint64_t idx, const std::string& prevHash, const std::vector<Transaction>& txs, uint32_t diff = 2) {
-            header.index = idx;
-            header.previousHash = prevHash;
-            header.timestamp = static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
-            header.difficulty = diff;
-            header.nonce = 0;
-            transactions = txs;
-            
-            std::vector<std::string> txHashes;
-            for (const auto& tx : transactions) {
-                txHashes.push_back(tx.computeHash());
-            }
-            header.merkleRoot = MerkleTree::ComputeRoot(txHashes);
-            hash = header.computeHash();
+        Block(uint64_t idx, const std::string& prev_hash, const std::vector<Transaction>& txs)
+            : index(idx), previous_hash(prev_hash), transactions(txs) {
+            timestamp = static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
+            merkle_root = MerkleTree::ComputeRoot(transaction_hashes());
+            nonce = 0;
+            hash = compute_hash();
         }
 
-        void mineBlock() {
-            std::string target(header.difficulty, '0');
-            while (true) {
-                hash = header.computeHash();
-                if (hash.length() >= header.difficulty && hash.substr(0, header.difficulty) == target) {
-                    break;
-                }
-                header.nonce++;
+        std::vector<std::string> transaction_hashes() const {
+            std::vector<std::string> hashes;
+            hashes.reserve(transactions.size());
+            for (const auto& tx : transactions) {
+                hashes.push_back(tx.hash);
             }
+            return hashes;
+        }
+
+        std::string compute_hash() const {
+            std::ostringstream ss;
+            ss << index << previous_hash << timestamp << nonce << merkle_root;
+            return Sha256::ComputeHash(ss.str());
         }
     };
 
-    class Mempool {
-    private:
-        struct TxComparator {
-            bool operator()(const Transaction& a, const Transaction& b) const {
-                if (a.fee != b.fee) return a.fee < b.fee;
-                return a.timestamp > b.timestamp;
-            }
-        };
-        std::priority_queue<Transaction, std::vector<Transaction>, TxComparator> pool;
-        std::unordered_map<std::string, Transaction> txMap;
-        mutable std::mutex mempoolMutex;
-        size_t maxSize;
+    // ---------------------------------------------------------------------
+    // 3. SIMPLE BLOCKCHAIN IMPLEMENTATION WITH POW
+    // ---------------------------------------------------------------------
 
+    class Blockchain {
     public:
-        explicit Mempool(size_t maxCapacity = 10000) : maxSize(maxCapacity) {}
+        Blockchain(uint32_t diff = 4) : difficulty(diff) {
+            // Genesis block
+            Block genesis(0, "0", {});
+            genesis.nonce = mine_nonce(genesis);
+            genesis.hash = genesis.compute_hash();
+            chain.push_back(std::move(genesis));
+        }
 
-        bool addTransaction(const Transaction& tx) {
-            std::lock_guard<std::mutex> lock(mempoolMutex);
-            if (!tx.isValid()) return false;
-            if (txMap.find(tx.id) != txMap.end()) return false;
-            if (txMap.size() >= maxSize) return false;
+        bool add_block(const std::vector<Transaction>& txs) {
+            const Block& last = chain.back();
+            Block newBlock(last.index + 1, last.hash, txs);
+            newBlock.nonce = mine_nonce(newBlock);
+            newBlock.hash = newBlock.compute_hash();
+            if (is_valid_new_block(newBlock, last)) {
+                chain.push_back(std::move(newBlock));
+                return true;
+            }
+            return false;
+        }
 
-            txMap[tx.id] = tx;
-            pool.push(tx);
+        bool is_chain_valid() const {
+            for (size_t i = 1; i < chain.size(); ++i) {
+                const Block& prev = chain[i - 1];
+                const Block& curr = chain[i];
+                if (curr.previous_hash != prev.hash) return false;
+                if (curr.hash != curr.compute_hash()) return false;
+                if (!hash_meets_difficulty(curr.hash)) return false;
+            }
             return true;
         }
 
-        std::vector<Transaction> getBatch(size_t limit) {
-            std::lock_guard<std::mutex> lock(mempoolMutex);
-            std::vector<Transaction> batch;
-            while (!pool.empty() && batch.size() < limit) {
-                Transaction tx = pool.top();
-                pool.pop();
-                batch.push_back(tx);
-                txMap.erase(tx.id);
-            }
-            return batch;
-        }
+        const std::vector<Block>& get_chain() const { return chain; }
 
-        size_t size() const {
-            std::lock_guard<std::mutex> lock(mempoolMutex);
-            return txMap.size();
-        }
-    };
-
-    // =========================================================================
-    // 3. TRADING & DEFI AMM COMPUTATIONAL ENGINE
-    // =========================================================================
-
-    enum class Side { BUY, SELL };
-    enum class OrderType { LIMIT, MARKET };
-
-    struct Order {
-        std::string id;
-        std::string trader;
-        Side side;
-        OrderType type;
-        double price;
-        double quantity;
-        uint64_t timestamp;
-    };
-
-    class OrderBook {
-    private:
-        std::map<double, std::vector<Order>, std::greater<double>> bids;
-        std::map<double, std::vector<Order>, std::less<double>> asks;
-        mutable std::mutex bookMutex;
-
-    public:
-        void placeOrder(const Order& order) {
-            std::lock_guard<std::mutex> lock(bookMutex);
-            Order remainingOrder = order;
-
-            if (remainingOrder.side == Side::BUY) {
-                for (auto it = asks.begin(); it != asks.end() && remainingOrder.quantity > 0; ) {
-                    if (remainingOrder.type == OrderType::LIMIT && it->first > remainingOrder.price) {
-                        break;
-                    }
-                    auto& askList = it->second;
-                    for (auto askIt = askList.begin(); askIt != askList.end() && remainingOrder.quantity > 0; ) {
-                        double fillQty = std::min(remainingOrder.quantity, askIt->quantity);
-                        remainingOrder.quantity -= fillQty;
-                        askIt->quantity -= fillQty;
-                        if (askIt->quantity == 0) {
-                            askIt = askList.erase(askIt);
-                        } else {
-                            ++askIt;
-                        }
-                    }
-                    if (askList.empty()) {
-                        it = asks.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-                if (remainingOrder.quantity > 0 && remainingOrder.type == OrderType::LIMIT) {
-                    bids[remainingOrder.price].push_back(remainingOrder);
-                }
-            } else {
-                for (auto it = bids.begin(); it != bids.end() && remainingOrder.quantity > 0; ) {
-                    if (remainingOrder.type == OrderType::LIMIT && it->first < remainingOrder.price) {
-                        break;
-                    }
-                    auto& bidList = it->second;
-                    for (auto bidIt = bidList.begin(); bidIt != bidList.end() && remainingOrder.quantity > 0; ) {
-                        double fillQty = std::min(remainingOrder.quantity, bidIt->quantity);
-                        remainingOrder.quantity -= fillQty;
-                        bidIt->quantity -= fillQty;
-                        if (bidIt->quantity == 0) {
-                            bidIt = bidList.erase(bidIt);
-                        } else {
-                            ++bidIt;
-                        }
-                    }
-                    if (bidList.empty()) {
-                        it = bids.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-                if (remainingOrder.quantity > 0 && remainingOrder.type == OrderType::LIMIT) {
-                    asks[remainingOrder.price].push_back(remainingOrder);
-                }
-            }
-        }
-
-        std::pair<double, double> getSpread() const {
-            std::lock_guard<std::mutex> lock(bookMutex);
-            double bestBid = bids.empty() ? 0.0 : bids.begin()->first;
-            double bestAsk = asks.empty() ? 0.0 : asks.begin()->first;
-            return {bestBid, bestAsk};
-        }
-    };
-
-    class ConstantProductAMM {
-    private:
-        double reserveA;
-        double reserveB;
-        double feeRate;
-        mutable std::mutex ammMutex;
-
-    public:
-        ConstantProductAMM(double initialA, double initialB, double fee = 0.003)
-            : reserveA(initialA), reserveB(initialB), feeRate(fee) {}
-
-        double getSpotPriceAInB() const {
-            std::lock_guard<std::mutex> lock(ammMutex);
-            return reserveB / reserveA;
-        }
-
-        double getAmountOut(double amountIn, bool aToB) const {
-            std::lock_guard<std::mutex> lock(ammMutex);
-            if (amountIn <= 0) return 0.0;
-            double rIn = aToB ? reserveA : reserveB;
-            double rOut = aToB ? reserveB : reserveA;
-            double amountInWithFee = amountIn * (1.0 - feeRate);
-            double numerator = amountInWithFee * rOut;
-            double denominator = rIn + amountInWithFee;
-            return numerator / denominator;
-        }
-
-        double swap(double amountIn, bool aToB) {
-            std::lock_guard<std::mutex> lock(ammMutex);
-            if (amountIn <= 0) return 0.0;
-            double rIn = aToB ? reserveA : reserveB;
-            double rOut = aToB ? reserveB : reserveA;
-            double amountInWithFee = amountIn * (1.0 - feeRate);
-            double amountOut = (amountInWithFee * rOut) / (rIn + amountInWithFee);
-
-            if (aToB) {
-                reserveA += amountIn;
-                reserveB -= amountOut;
-            } else {
-                reserveB += amountIn;
-                reserveA -= amountOut;
-            }
-            return amountOut;
-        }
-
-        std::pair<double, double> getReserves() const {
-            std::lock_guard<std::mutex> lock(ammMutex);
-            return {reserveA, reserveB};
-        }
-    };
-
-    // =========================================================================
-    // 4. PARALLEL MULTI-THREADED VALIDATION ENGINE
-    // =========================================================================
-
-    class ParallelBlockValidator {
-    public:
-        static bool VerifyTransactionsParallel(const std::vector<Transaction>& txs, size_t numThreads = 4) {
-            if (txs.empty()) return true;
-            std::atomic<bool> allValid{true};
-            size_t batchSize = (txs.size() + numThreads - 1) / numThreads;
-            std::vector<std::thread> workers;
-
-            for (size_t i = 0; i < numThreads; ++i) {
-                size_t startIdx = i * batchSize;
-                size_t endIdx = std::min(startIdx + batchSize, txs.size());
-
-                if (startIdx >= txs.size()) break;
-
-                workers.emplace_back([&txs, startIdx, endIdx, &allValid]() {
-                    for (size_t k = startIdx; k < endIdx && allValid; ++k) {
-                        if (!txs[k].isValid()) {
-                            allValid = false;
-                            break;
-                        }
-                    }
-                });
-            }
-
-            for (auto& w : workers) {
-                if (w.joinable()) w.join();
-            }
-
-            return allValid;
-        }
-    };
-
-    class BlockchainEngine {
     private:
         std::vector<Block> chain;
-        Mempool mempool;
-        OrderBook orderBook;
-        ConstantProductAMM amm;
-        uint32_t difficulty;
-        mutable std::mutex chainMutex;
+        uint32_t difficulty; // number of leading zero bits required
 
-    public:
-        BlockchainEngine()
-            : mempool(10000), amm(1000000.0, 3000000.0, 0.003), difficulty(2) {
-            std::vector<Transaction> genesisTxs = {
-                Transaction("0x0000000000000000000000000000000000000000", "0xGenesisAddress1", 1000000.0, 0.0, 0)
-            };
-            Block genesis(0, "0x0000000000000000000000000000000000000000000000000000000000000000", genesisTxs, 1);
-            genesis.mineBlock();
-            chain.push_back(genesis);
+        static bool hash_meets_difficulty(const std::string& hash) {
+            // Simple hex-prefix check: each leading '0' nibble represents 4 bits
+            size_t requiredZeros = 0;
+            // difficulty expressed in leading zero *nibbles*
+            // For demonstration we treat difficulty as number of leading zero hex chars
+            // (e.g., difficulty 4 => "0000...")
+            // This is a simplification; real PoW uses binary bits.
+            requiredZeros = 4; // fixed for demo; could be parameterized
+            for (size_t i = 2; i < 2 + requiredZeros; ++i) { // skip "0x"
+                if (hash[i] != '0') return false;
+            }
+            return true;
         }
 
-        bool submitTransaction(const Transaction& tx) {
-            return mempool.addTransaction(tx);
+        static uint64_t mine_nonce(Block& block) {
+            uint64_t nonce = 0;
+            while (true) {
+                block.nonce = nonce;
+                std::string candidate = block.compute_hash();
+                if (hash_meets_difficulty(candidate)) {
+                    return nonce;
+                }
+                ++nonce;
+            }
         }
 
-        Block proposeNextBlock(size_t maxTxs = 100) {
-            std::lock_guard<std::mutex> lock(chainMutex);
-            auto txs = mempool.getBatch(maxTxs);
-            std::string prevHash = chain.back().hash;
-            Block newBlock(chain.size(), prevHash, txs, difficulty);
-            newBlock.mineBlock();
-            chain.push_back(newBlock);
-            return newBlock;
+        static bool is_valid_new_block(const Block& newBlock, const Block& previousBlock) {
+            if (previousBlock.index + 1 != newBlock.index) return false;
+            if (newBlock.previous_hash != previousBlock.hash) return false;
+            if (newBlock.hash != newBlock.compute_hash()) return false;
+            if (!hash_meets_difficulty(newBlock.hash)) return false;
+            // Verify Merkle root matches transactions
+            if (newBlock.merkle_root != MerkleTree::ComputeRoot(newBlock.transaction_hashes())) return false;
+            return true;
         }
-
-        size_t getChainLength() const {
-            std::lock_guard<std::mutex> lock(chainMutex);
-            return chain.size();
-        }
-
-        ConstantProductAMM& getAMM() { return amm; }
-        OrderBook& getOrderBook() { return orderBook; }
     };
-}
 
-// Main demonstration entry point when compiled as driver binary
-int main() {
-    std::cout << "===================================================" << std::endl;
-    std::cout << "MAGNUM OPUS // High-Performance Crypto C++ Engine" << std::endl;
-    std::cout << "===================================================" << std::endl;
+    // ---------------------------------------------------------------------
+    // 4. DEMONSTRATION / TEST DRIVER (compiled only with -DTEST)
+    // ---------------------------------------------------------------------
 
-    MagnumOpus::BlockchainEngine engine;
-    std::cout << "[+] Initialized Blockchain Engine with Genesis Block." << std::endl;
-    std::cout << "[+] Initial Chain Length: " << engine.getChainLength() << std::endl;
+#ifdef TEST
+    void demo() {
+        std::cout << "=== MagnumOpus CryptoEngine Demo ===" << std::endl;
+        // Create a few dummy transactions
+        std::vector<Transaction> txs;
+        txs.emplace_back("Alice", "Bob", 12.34, "Payment for services");
+        txs.emplace_back("Charlie", "Dave", 0.5678, "Gift");
+        txs.emplace_back("Eve", "Frank", 1000.0, "Salary");
 
-    // Test transactions
-    for (int i = 1; i <= 5; ++i) {
-        std::string from = "0xAlice_" + std::to_string(i);
-        std::string to = "0xBob_" + std::to_string(i);
-        engine.submitTransaction(MagnumOpus::Transaction(from, to, 5.5 * i, 0.002, i));
+        // Initialise blockchain with low difficulty for quick demo
+        Blockchain chain(1);
+        chain.add_block(txs);
+
+        const auto& blocks = chain.get_chain();
+        for (const auto& blk : blocks) {
+            std::cout << "Block " << blk.index << " hash: " << blk.hash << std::endl;
+            std::cout << "  Prev: " << blk.previous_hash << std::endl;
+            std::cout << "  MerkleRoot: " << blk.merkle_root << std::endl;
+            std::cout << "  Tx count: " << blk.transactions.size() << std::endl;
+        }
+        std::cout << "Chain valid? " << (chain.is_chain_valid() ? "YES" : "NO") << std::endl;
     }
 
-    std::cout << "[+] Submitted 5 transactions to mempool." << std::endl;
-    MagnumOpus::Block newBlock = engine.proposeNextBlock(10);
-    std::cout << "[+] Block #" << newBlock.header.index << " Mined! Hash: " << newBlock.hash << std::endl;
-    std::cout << "[+] Merkle Root: " << newBlock.header.merkleRoot << std::endl;
+    int main() {
+        demo();
+        return 0;
+    }
+#endif // TEST
 
-    // Test AMM Swap Math
-    double swapOut = engine.getAMM().swap(100.0, true);
-    std::cout << "[+] AMM Swap 100.0 TokenA -> TokenB Out: " << swapOut << std::endl;
-    std::cout << "===================================================" << std::endl;
-
-    return 0;
-}
+} // namespace MagnumOpus

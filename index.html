@@ -10,392 +10,386 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous"/>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
     <link rel="stylesheet" href="styles.css"/>
-    <style>
-        :root {
-            --bg-primary: #030611;
-            --bg-secondary: #080c1e;
-            --bg-card: rgba(10, 15, 36, 0.75);
-            --border-color: rgba(56, 189, 248, 0.15);
-            --border-glow: rgba(168, 85, 247, 0.25);
-            --accent-cyan: #38bdf8;
-            --accent-purple: #a855f7;
-            --accent-emerald: #10b981;
-            --accent-rose: #f43f5e;
-            --accent-amber: #f59e0b;
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --glow-cyan: 0 0 20px rgba(56, 189, 248, 0.4);
-            --glow-purple: 0 0 20px rgba(168, 85, 247, 0.4);
-            --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
-        body { background-color: var(--bg-primary); color: var(--text-main); min-height: 100vh; overflow-x: hidden; background-image: radial-gradient(circle at 10% 15%, rgba(168, 85, 247, 0.12) 0%, transparent 45%), radial-gradient(circle at 90% 85%, rgba(56, 189, 248, 0.12) 0%, transparent 45%); background-attachment: fixed; }
-        header { padding: 1rem 2rem; display: flex; flex-direction: column; gap: 0.75rem; border-bottom: 1px solid var(--border-color); background: rgba(3, 6, 17, 0.85); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 100; }
-        .header-top { display: flex; justify-content: space-between; align-items: center; width: 100%; }
-        .logo-container { display: flex; align-items: center; gap: 0.75rem; }
-        .logo-icon { width: 34px; height: 34px; background: linear-gradient(135deg, var(--accent-purple), var(--accent-cyan)); border-radius: 8px; box-shadow: var(--glow-purple); display: flex; align-items: center; justify-content: center; font-weight: 900; color: #fff; font-size: 1.1rem; }
-        .logo-text { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; background: linear-gradient(120deg, #fff, var(--accent-cyan)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .version-tag { font-size: 0.75rem; color: var(--accent-purple); margin-left: 0.5rem; padding: 0.15rem 0.45rem; border: 1px solid var(--border-glow); border-radius: 4px; font-family: var(--font-mono); }
-        .nav-metrics-bar { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
-        .network-selector-wrapper { display: flex; align-items: center; gap: 0.5rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.25rem 0.5rem; }
-        .pulse-indicator { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-emerald); box-shadow: 0 0 10px var(--accent-emerald); display: inline-block; animation: pulseGlow 2s infinite; }
-        @keyframes pulseGlow { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.85); } }
-        .styled-select { background: transparent; color: var(--text-main); border: none; font-size: 0.85rem; font-weight: 500; cursor: pointer; outline: none; }
-        .styled-select option { background: var(--bg-secondary); color: var(--text-main); }
-        .metric-pill { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.35rem 0.75rem; display: flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; font-family: var(--font-mono); }
-        .metric-label { color: var(--text-muted); font-size: 0.75rem; }
-        .metric-value { font-weight: 600; color: var(--text-main); }
-        .primary-btn { background: linear-gradient(135deg, var(--accent-purple), #7c3aed); color: #fff; border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; padding: 0.45rem 1.1rem; cursor: pointer; font-weight: 600; font-size: 0.85rem; transition: all 0.2s ease; box-shadow: 0 4px 14px rgba(168,85,247,0.3); }
-        .primary-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(168,85,247,0.45); }
-        .outline-btn { background: rgba(56,189,248,0.08); color: var(--accent-cyan); border: 1px solid var(--accent-cyan); border-radius: 6px; padding: 0.45rem 0.9rem; cursor: pointer; font-size: 0.82rem; font-weight: 600; transition: all 0.2s ease; }
-        .outline-btn:hover { background: rgba(56,189,248,0.2); }
-        main { padding: 1.75rem 2rem 4rem 2rem; display: grid; grid-template-columns: repeat(12, 1fr); gap: 1.5rem; max-width: 1720px; margin: 0 auto; }
-        .col-12 { grid-column: span 12; }
-        .col-8 { grid-column: span 8; }
-        .col-6 { grid-column: span 6; }
-        .col-4 { grid-column: span 4; }
-        @media (max-width: 1180px) { .col-8, .col-6, .col-4 { grid-column: span 12; } }
-        .card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem; backdrop-filter: blur(12px); box-shadow: 0 8px 32px rgba(0,0,0,0.35); position: relative; overflow: hidden; }
-        .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--border-glow), transparent); }
-        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.75rem; }
-        .card-header h2 { font-size: 1.05rem; font-weight: 700; color: var(--accent-cyan); display: flex; align-items: center; gap: 0.5rem; }
-        .card-badge { font-size: 0.7rem; font-family: var(--font-mono); padding: 0.15rem 0.4rem; border-radius: 4px; background: rgba(56,189,248,0.1); color: var(--accent-cyan); border: 1px solid rgba(56,189,248,0.2); }
-        .portfolio-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
-        .metric-item { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04); border-radius: 8px; padding: 0.75rem; }
-        .metric-item .metric-label { font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; }
-        .metric-item .metric-value { font-size: 1.35rem; font-weight: 700; font-family: var(--font-mono); }
-        .trend-up { color: var(--accent-emerald) !important; }
-        .trend-down { color: var(--accent-rose) !important; }
-        .chart-container { position: relative; width: 100%; height: 260px; display: flex; align-items: center; justify-content: center; }
-        .table-container { width: 100%; overflow-x: auto; max-height: 290px; scrollbar-width: thin; }
-        table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem; }
-        th, td { padding: 0.65rem 0.75rem; text-align: left; }
-        th { background: rgba(8, 12, 30, 0.95); color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; position: sticky; top: 0; z-index: 2; }
-        tr { border-bottom: 1px solid rgba(255,255,255,0.03); transition: background 0.15s ease; }
-        tr:hover { background: rgba(255,255,255,0.04); }
-        .status-pill { padding: 0.2rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
-        .status-completed { background: rgba(16,185,129,0.15); color: var(--accent-emerald); border: 1px solid rgba(16,185,129,0.3); }
-        .status-pending { background: rgba(245,158,11,0.15); color: var(--accent-amber); border: 1px solid rgba(245,158,11,0.3); }
-        .status-gossiped { background: rgba(168,85,247,0.15); color: var(--accent-purple); border: 1px solid rgba(168,85,247,0.3); }
-        .nft-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); gap: 1rem; }
-        .nft-item { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; overflow: hidden; transition: transform 0.2s ease, box-shadow 0.2s ease; }
-        .nft-item:hover { transform: translateY(-3px); box-shadow: 0 6px 18px rgba(0,0,0,0.5); border-color: var(--accent-cyan); }
-        .nft-item img { width: 100%; height: 110px; object-fit: cover; display: block; }
-        .nft-info { padding: 0.5rem; display: flex; flex-direction: column; gap: 0.2rem; }
-        .nft-name { font-size: 0.78rem; font-weight: 600; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .nft-price { font-size: 0.72rem; color: var(--accent-emerald); font-family: var(--font-mono); font-weight: 600; }
-        .swap-input-group { background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 0.75rem; margin-bottom: 0.75rem; }
-        .swap-input-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; }
-        .swap-input-row span { font-size: 0.75rem; color: var(--text-muted); }
-        .swap-input { background: transparent; border: none; font-size: 1.25rem; font-weight: 700; color: #fff; width: 60%; outline: none; font-family: var(--font-mono); }
-        .token-badge { background: rgba(56,189,248,0.12); border: 1px solid rgba(56,189,248,0.25); border-radius: 20px; padding: 0.25rem 0.65rem; font-size: 0.8rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; }
-        .swap-arrow-divider { text-align: center; margin: -0.25rem 0 0.5rem; cursor: pointer; color: var(--accent-cyan); font-size: 1.1rem; }
-        .telemetry-feed { font-family: var(--font-mono); font-size: 0.75rem; max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.4); border-radius: 6px; padding: 0.65rem; border: 1px solid rgba(255,255,255,0.05); }
-        .telemetry-entry { margin-bottom: 0.35rem; display: flex; gap: 0.5rem; }
-        .telemetry-time { color: var(--text-muted); }
-        .telemetry-src { color: var(--accent-amber); }
-        .telemetry-payload { color: var(--text-main); word-break: break-all; }
-        .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; visibility: hidden; opacity: 0; transition: opacity 0.2s ease; z-index: 1000; backdrop-filter: blur(8px); }
-        .modal.active { visibility: visible; opacity: 1; }
-        .modal-content { background: #0c1228; border: 1px solid var(--border-color); box-shadow: var(--glow-cyan); padding: 1.5rem; border-radius: 12px; width: 92%; max-width: 440px; position: relative; }
-        .close-modal { background: none; border: none; color: var(--text-muted); font-size: 1.3rem; position: absolute; right: 1rem; top: 1rem; cursor: pointer; }
-        .close-modal:hover { color: #fff; }
-        .wallet-options { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 1.25rem; }
-        .wallet-opt-btn { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; color: #fff; cursor: pointer; font-weight: 500; font-size: 0.9rem; transition: all 0.2s ease; }
-        .wallet-opt-btn:hover { background: rgba(56,189,248,0.12); border-color: var(--accent-cyan); }
-        .toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; display: flex; flex-direction: column; gap: 0.5rem; z-index: 1050; pointer-events: none; }
-        .toast { background: rgba(12, 18, 40, 0.95); border: 1px solid var(--accent-cyan); box-shadow: var(--glow-cyan); padding: 0.75rem 1.25rem; border-radius: 8px; font-size: 0.85rem; font-family: var(--font-mono); color: #fff; transform: translateY(20px); opacity: 0; animation: toastSlideIn 0.3s forwards ease; }
-        @keyframes toastSlideIn { to { transform: translateY(0); opacity: 1; } }
-    </style>
-    <script defer src="app.js"></script>
 </head>
 <body>
-    <header id="main-header">
+    <!-- Background Glow Canvas & Particle FX Container -->
+    <div class="bg-decorations">
+        <div class="glow-sphere glow-1"></div>
+        <div class="glow-sphere glow-2"></div>
+        <div class="glow-sphere glow-3"></div>
+    </div>
+
+    <!-- Top Sticky Header -->
+    <header>
         <div class="header-top">
             <div class="logo-container">
-                <div class="logo-icon" aria-hidden="true">Ω</div>
-                <div>
-                    <span class="logo-text">MAGNUM OPUS</span>
-                    <span class="version-tag">v4.8.0-PRO</span>
-                </div>
+                <div class="logo-icon">M</div>
+                <span class="logo-text">MAGNUM OPUS</span>
+                <span class="version-tag">v4.2.0-ULTRA</span>
             </div>
+            
             <div class="nav-metrics-bar">
                 <div class="network-selector-wrapper">
-                    <span class="pulse-indicator active" id="network-status-dot"></span>
-                    <select id="network-select" class="styled-select" aria-label="Network Selector">
-                        <option value="ethereum">Ethereum Mainnet</option>
-                        <option value="polygon">Polygon zkEVM</option>
-                        <option value="solana">Solana Mainnet</option>
-                        <option value="binance">Binance Smart Chain</option>
-                        <option value="avalanche">Avalanche C-Chain</option>
+                    <span class="pulse-indicator" id="net-pulse"></span>
+                    <select class="styled-select" id="network-select">
+                        <option value="ethereum">Ethereum Mainnet (0x1)</option>
+                        <option value="solana">Solana Mainnet (Sol-1)</option>
+                        <option value="magnum">Magnum Engine L2 (Opus-99)</option>
+                        <option value="arbitrum">Arbitrum One (0xa4b1)</option>
+                        <option value="polygon">Polygon POS (0x89)</option>
                     </select>
                 </div>
+
                 <div class="metric-pill">
-                    <span class="metric-label">ETH:</span>
-                    <span class="metric-value" id="eth-price">$2,345.67</span>
+                    <span class="metric-label">GAS:</span>
+                    <span class="metric-value" id="gas-price-val">12 Gwei</span>
                 </div>
                 <div class="metric-pill">
-                    <span class="metric-label">Gas:</span>
-                    <span class="metric-value" id="gas-fee">12 Gwei</span>
+                    <span class="metric-label">BLOCK:</span>
+                    <span class="metric-value" id="block-height-val">#19,842,104</span>
                 </div>
                 <div class="metric-pill">
-                    <span class="metric-label">Node TPS:</span>
-                    <span class="metric-value" id="node-tps">3,420 tps</span>
+                    <span class="metric-label">P2P NODES:</span>
+                    <span class="metric-value" id="peer-count-val">32 Active</span>
                 </div>
-                <button class="primary-btn" id="connect-wallet-btn">Connect Wallet</button>
+
+                <button class="primary-btn" id="connect-wallet-btn">
+                    <span id="wallet-btn-text">Connect Wallet</span>
+                </button>
             </div>
         </div>
     </header>
 
-    <main id="dashboard">
-        <!-- 1. Portfolio Overview -->
-        <section class="card col-8" id="portfolio-overview">
-            <div class="card-header">
-                <h2><span>❖</span> Multi-Chain Portfolio Nexus</h2>
-                <span class="card-badge">LIVE ORACLE FEED</span>
+    <!-- Main Dashboard Container -->
+    <main>
+        <!-- Stat Summary Ribbon -->
+        <div class="col-12 grid-stats">
+            <div class="stat-card">
+                <span class="stat-label">Total Net Worth</span>
+                <span class="stat-value" id="net-worth-val">$142,850.42</span>
+                <span class="stat-trend trend-up">+12.4% (24h)</span>
             </div>
-            <div class="portfolio-metrics">
-                <div class="metric-item">
-                    <span class="metric-label">Total Net Worth</span>
-                    <span class="metric-value" id="total-value">$124,352.88</span>
-                </div>
-                <div class="metric-item">
-                    <span class="metric-label">24h Delta</span>
-                    <span class="metric-value trend-up" id="daily-change">+$4,192.40 (+3.48%)</span>
-                </div>
-                <div class="metric-item">
-                    <span class="metric-label">Total Staked (DeFi)</span>
-                    <span class="metric-value" id="staked-value">$58,100.00</span>
-                </div>
-                <div class="metric-item">
-                    <span class="metric-label">Unclaimed Yield</span>
-                    <span class="metric-value trend-up" id="unclaimed-yield">$1,245.19</span>
-                </div>
+            <div class="stat-card">
+                <span class="stat-label">Magnum Opus TVL</span>
+                <span class="stat-value" id="tvl-val">$1.428 Billion</span>
+                <span class="stat-trend trend-up">+4.8% (7d)</span>
             </div>
-            <div class="chart-container">
-                <canvas id="asset-allocation-chart"></canvas>
+            <div class="stat-card">
+                <span class="stat-label">24h Cross-Chain Volume</span>
+                <span class="stat-value" id="vol-val">$384.12 Million</span>
+                <span class="stat-trend trend-up">+18.9%</span>
             </div>
-        </section>
+            <div class="stat-card">
+                <span class="stat-label">Gossip Mempool Speed</span>
+                <span class="stat-value" id="mempool-speed-val">14,250 TPS</span>
+                <span class="stat-trend trend-up">Latency &lt; 8ms</span>
+            </div>
+        </div>
 
-        <!-- 2. DEX Swap & Atomic Bridge -->
-        <section class="card col-4" id="dex-swap-card">
-            <div class="card-header">
-                <h2><span>⇄</span> Instant Swap &amp; Liquidity</h2>
-                <span class="card-badge">OPTIMAL ROUTE</span>
-            </div>
-            <div class="swap-input-group">
-                <div class="swap-input-row">
-                    <span>Pay</span>
-                    <span>Balance: <strong id="user-pay-bal">14.852 ETH</strong></span>
-                </div>
-                <div class="swap-input-row">
-                    <input type="number" class="swap-input" id="swap-pay-amount" placeholder="0.0" value="1.50" step="any"/>
-                    <div class="token-badge">ETH</div>
-                </div>
-            </div>
-            <div class="swap-arrow-divider" id="swap-reverse-btn" title="Invert Direction">⇅</div>
-            <div class="swap-input-group">
-                <div class="swap-input-row">
-                    <span>Receive (Est.)</span>
-                    <span>Slippage: <strong>0.15%</strong></span>
-                </div>
-                <div class="swap-input-row">
-                    <input type="text" class="swap-input" id="swap-receive-amount" placeholder="0.0" value="3,518.50" readonly/>
-                    <div class="token-badge">USDC</div>
-                </div>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:var(--text-muted); margin-bottom:1rem; font-family:var(--font-mono);">
-                <span>Rate</span>
-                <span>1 ETH = 2,345.67 USDC</span>
-            </div>
-            <button class="primary-btn" style="width:100%;" id="execute-swap-btn">Execute Quantum Swap</button>
-        </section>
-
-        <!-- 3. Recent Multi-Chain Transactions -->
-        <section class="card col-8" id="recent-transactions">
-            <div class="card-header">
-                <h2><span>☷</span> Unified Transaction Ledger</h2>
-                <button class="outline-btn" id="refresh-txs-btn">Refresh Ledger</button>
-            </div>
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>TX Hash</th>
-                            <th>Type</th>
-                            <th>Asset</th>
-                            <th>Gas Used</th>
-                            <th>Age</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody id="transactions-table">
-                        <tr>
-                            <td><code>0x8f3b...e4a1</code></td>
-                            <td>DeFi Deposit</td>
-                            <td>2.50 ETH</td>
-                            <td>21,432</td>
-                            <td>1m ago</td>
-                            <td><span class="status-pill status-completed">Completed</span></td>
-                        </tr>
-                        <tr>
-                            <td><code>0x3c99...17ab</code></td>
-                            <td>Cross-Bridge</td>
-                            <td>5,000 USDC</td>
-                            <td>68,190</td>
-                            <td>4m ago</td>
-                            <td><span class="status-pill status-gossiped">Relaying</span></td>
-                        </tr>
-                        <tr>
-                            <td><code>0x712a...98ce</code></td>
-                            <td>NFT Mint</td>
-                            <td>1 MAGNUM #442</td>
-                            <td>114,800</td>
-                            <td>12m ago</td>
-                            <td><span class="status-pill status-completed">Completed</span></td>
-                        </tr>
-                        <tr>
-                            <td><code>0x19a0...33bd</code></td>
-                            <td>Swap (AMM)</td>
-                            <td>1.2 ETH → USDC</td>
-                            <td>45,000</td>
-                            <td>25m ago</td>
-                            <td><span class="status-pill status-completed">Completed</span></td>
-                        </tr>
-                        <tr>
-                            <td><code>0xaa44...81f5</code></td>
-                            <td>Contract Call</td>
-                            <td>Vault.harvest()</td>
-                            <td>52,110</td>
-                            <td>42m ago</td>
-                            <td><span class="status-pill status-pending">Confirming</span></td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
-
-        <!-- 4. Distributed P2P Mempool Gossip Stream (Elixir & Go Backend Engine) -->
-        <section class="card col-4" id="gossip-node-panel">
-            <div class="card-header">
-                <h2><span>📡</span> P2P Gossip Mempool Node</h2>
-                <span class="card-badge" id="peer-count-badge">7 PEERS CONNECTED</span>
-            </div>
-            <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:0.75rem; line-height:1.4;">
-                Active Elixir OTP Gossip node stream receiving synchronized transaction broadcasts from the relay mesh.
-            </div>
-            <div class="telemetry-feed" id="telemetry-stream">
-                <div class="telemetry-entry">
-                    <span class="telemetry-time">[14:28:01]</span>
-                    <span class="telemetry-src">[GOSSIP_RX]</span>
-                    <span class="telemetry-payload">Peer 0xFA4B announced block #19482910</span>
-                </div>
-                <div class="telemetry-entry">
-                    <span class="telemetry-time">[14:28:03]</span>
-                    <span class="telemetry-src">[MEMPOOL]</span>
-                    <span class="telemetry-payload">Tx 0x8a91 verified by C++ CryptoEngine in 1.4ms</span>
-                </div>
-                <div class="telemetry-entry">
-                    <span class="telemetry-time">[14:28:05]</span>
-                    <span class="telemetry-src">[DISCOVERY]</span>
-                    <span class="telemetry-payload">Handshake OK: 10.0.14.88:4001 (latency: 18ms)</span>
-                </div>
-                <div class="telemetry-entry">
-                    <span class="telemetry-time">[14:28:08]</span>
-                    <span class="telemetry-src">[ORACLE]</span>
-                    <span class="telemetry-payload">Ruby WalletService published rates to ETS ring</span>
-                </div>
-            </div>
-            <div style="margin-top:0.75rem; display:flex; gap:0.5rem;">
-                <button class="outline-btn" style="flex:1;" id="broadcast-test-tx">Simulate Gossip TX</button>
-                <button class="outline-btn" style="flex:1;" id="clear-telemetry">Clear Stream</button>
-            </div>
-        </section>
-
-        <!-- 5. NFT Gallery & Metaverse Assets -->
-        <section class="card col-8" id="nft-gallery">
-            <div class="card-header">
-                <h2><span>🖼</span> NFT Vault &amp; Digital Collectibles</h2>
-                <span class="card-badge">ERC-721 / ERC-1155</span>
-            </div>
-            <div class="nft-grid">
-                <div class="nft-item">
-                    <img src="https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=300&auto=format&fit=crop&q=60" alt="Magnum Genesis #001" loading="lazy"/>
-                    <div class="nft-info">
-                        <span class="nft-name">Genesis Prism #001</span>
-                        <span class="nft-price">4.20 ETH</span>
+        <!-- Left Column: Primary Analytics & DEX Swap Engine -->
+        <div class="col-8">
+            <!-- Real-Time Interactive Chart Card -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>
+                        <span>📊 Real-Time Multi-Asset &amp; Yield Analytics</span>
+                    </h2>
+                    <div class="card-actions">
+                        <span class="card-badge">LIVE FEED</span>
+                        <button class="outline-btn sm" id="timeframe-1h">1H</button>
+                        <button class="outline-btn sm active" id="timeframe-24h">24H</button>
+                        <button class="outline-btn sm" id="timeframe-7d">7D</button>
                     </div>
                 </div>
-                <div class="nft-item">
-                    <img src="https://images.unsplash.com/photo-1634017839464-5c339ebe3cb4?w=300&auto=format&fit=crop&q=60" alt="Cyber Ronin #1184" loading="lazy"/>
-                    <div class="nft-info">
-                        <span class="nft-name">Cyber Ronin #1184</span>
-                        <span class="nft-price">2.85 ETH</span>
+                <div class="portfolio-metrics">
+                    <div class="metric-item">
+                        <span class="metric-label">OPUS Token Price</span>
+                        <span class="metric-value trend-up" id="opus-price-display">$42.50</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Solana Anchor Pool APY</span>
+                        <span class="metric-value trend-up">28.4%</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">C++ Engine Hash Rate</span>
+                        <span class="metric-value" id="hashrate-display">1.84 GH/s</span>
                     </div>
                 </div>
-                <div class="nft-item">
-                    <img src="https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?w=300&auto=format&fit=crop&q=60" alt="Nebula Core #89" loading="lazy"/>
-                    <div class="nft-info">
-                        <span class="nft-name">Nebula Core #89</span>
-                        <span class="nft-price">1.95 ETH</span>
-                    </div>
-                </div>
-                <div class="nft-item">
-                    <img src="https://images.unsplash.com/photo-1639762681485-074b7f938ba0?w=300&auto=format&fit=crop&q=60" alt="Quantum Key #777" loading="lazy"/>
-                    <div class="nft-info">
-                        <span class="nft-name">Quantum Key #777</span>
-                        <span class="nft-price">0.75 ETH</span>
-                    </div>
+                <div class="chart-container">
+                    <canvas id="main-chart-canvas" width="800" height="260"></canvas>
                 </div>
             </div>
-        </section>
 
-        <!-- 6. Smart Contract Terminal & On-Chain Dispatcher -->
-        <section class="card col-4" id="contract-terminal-panel">
-            <div class="card-header">
-                <h2><span>⚙</span> Smart Contract Controller</h2>
-                <span class="card-badge">Solidity &amp; Rust Anchor</span>
+            <!-- DEX Swap & Liquidity Routing Engine -->
+            <div class="card margin-top">
+                <div class="card-header">
+                    <h2>⚡ Instant DEX &amp; Multi-Chain Liquidity Swap</h2>
+                    <span class="card-badge">ZERO SLIPPAGE ROUTER</span>
+                </div>
+                <div class="swap-interface">
+                    <div class="swap-box">
+                        <div class="swap-box-header">
+                            <span>You Pay</span>
+                            <span class="balance-hint" id="pay-balance-hint">Balance: 14.852 ETH</span>
+                        </div>
+                        <div class="swap-input-row">
+                            <input type="number" class="swap-input" id="swap-pay-amount" placeholder="0.0" value="1.0"/>
+                            <select class="token-select" id="swap-pay-token">
+                                <option value="ETH">ETH</option>
+                                <option value="BTC">BTC</option>
+                                <option value="SOL">SOL</option>
+                                <option value="USDT">USDT</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="swap-divider">
+                        <button class="swap-icon-btn" id="switch-tokens-btn">⇅</button>
+                    </div>
+
+                    <div class="swap-box">
+                        <div class="swap-box-header">
+                            <span>You Receive (Estimated)</span>
+                            <span class="balance-hint" id="receive-balance-hint">Balance: 10,000.0 OPUS</span>
+                        </div>
+                        <div class="swap-input-row">
+                            <input type="number" class="swap-input" id="swap-receive-amount" placeholder="0.0" value="68.42" readonly/>
+                            <select class="token-select" id="swap-receive-token">
+                                <option value="OPUS">OPUS</option>
+                                <option value="USDT">USDT</option>
+                                <option value="ETH">ETH</option>
+                                <option value="SOL">SOL</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="routing-info">
+                        <div class="info-row">
+                            <span>Optimal Route:</span>
+                            <span class="highlight-text">Magnum C++ Computational Router &gt; Uniswap V3 &gt; Anchor Vault</span>
+                        </div>
+                        <div class="info-row">
+                            <span>Network Fee Savings:</span>
+                            <span class="trend-up">~45% vs Standard DEX</span>
+                        </div>
+                    </div>
+
+                    <button class="primary-btn execute-btn" id="execute-swap-btn">Execute Smart Swap</button>
+                </div>
             </div>
-            <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:0.75rem;">
-                Direct interaction with <code>SmartContract.sol</code> and Solana <code>OnChainProgram.rs</code>.
+
+            <!-- Recent Cross-Chain Transactions & Mempool Table -->
+            <div class="card margin-top">
+                <div class="card-header">
+                    <h2>📑 Real-Time Mempool &amp; Transaction Ledger</h2>
+                    <div class="table-filters">
+                        <button class="outline-btn sm active" id="filter-all-tx">All</button>
+                        <button class="outline-btn sm" id="filter-gossip-tx">P2P Gossiped</button>
+                        <button class="outline-btn sm" id="filter-solana-tx">Solana On-Chain</button>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table id="tx-table">
+                        <thead>
+                            <tr>
+                                <th>Tx Hash</th>
+                                <th>Type</th>
+                                <th>Chain</th>
+                                <th>Amount</th>
+                                <th>Status</th>
+                                <th>Latency</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tx-table-body">
+                            <tr>
+                                <td><span class="hash-text">0x7a9f...4b12</span></td>
+                                <td>DEX Swap</td>
+                                <td>Ethereum</td>
+                                <td>2.50 ETH</td>
+                                <td><span class="status-pill status-completed">Confirmed</span></td>
+                                <td>1.2s</td>
+                            </tr>
+                            <tr>
+                                <td><span class="hash-text">0x3c2b...9e88</span></td>
+                                <td>P2P Gossip Broadcast</td>
+                                <td>Magnum L2</td>
+                                <td>1,500 OPUS</td>
+                                <td><span class="status-pill status-gossiped">Gossiped</span></td>
+                                <td>4ms</td>
+                            </tr>
+                            <tr>
+                                <td><span class="hash-text">5Kz8v...mQ1p</span></td>
+                                <td>Anchor Vault Stake</td>
+                                <td>Solana</td>
+                                <td>25.0 SOL</td>
+                                <td><span class="status-pill status-completed">Confirmed</span></td>
+                                <td>400ms</td>
+                            </tr>
+                            <tr>
+                                <td><span class="hash-text">0x8f11...0a34</span></td>
+                                <td>Cross-Chain Bridge</td>
+                                <td>Arbitrum -&gt; Sol</td>
+                                <td>5,000 USDT</td>
+                                <td><span class="status-pill status-pending">Pending</span></td>
+                                <td>Processing</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
-            <div style="display:flex; flex-direction:column; gap:0.5rem;">
-                <button class="outline-btn" id="btn-mint-token" style="text-align:left;">✦ Mint MagnumOpus Tokens (Batch)</button>
-                <button class="outline-btn" id="btn-create-snapshot" style="text-align:left;">✦ Snapshot Governance Balances</button>
-                <button class="outline-btn" id="btn-invoke-solana" style="text-align:left;">✦ Anchor Program: State Transition</button>
-                <button class="outline-btn" id="btn-crypto-verify" style="text-align:left;">✦ Trigger C++ SIMD Block Verification</button>
+        </div>
+
+        <!-- Right Column: Microservices, Cross-Chain Bridge, Gossip Telemetry & NFTs -->
+        <div class="col-4">
+            <!-- Wallet & Multi-Chain Balances Card -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>💳 Wallet Balances</h2>
+                    <span class="card-badge" id="wallet-status-badge">CONNECTED</span>
+                </div>
+                <div class="balance-list">
+                    <div class="balance-item">
+                        <div class="asset-info">
+                            <div class="asset-icon eth-icon">Ξ</div>
+                            <div>
+                                <span class="asset-symbol">Ethereum</span>
+                                <span class="asset-name">ETH</span>
+                            </div>
+                        </div>
+                        <div class="asset-value-box">
+                            <span class="asset-balance" id="eth-balance-val">14.852</span>
+                            <span class="asset-usd">$43,813.40</span>
+                        </div>
+                    </div>
+                    <div class="balance-item">
+                        <div class="asset-info">
+                            <div class="asset-icon opus-icon">M</div>
+                            <div>
+                                <span class="asset-symbol">Magnum Opus</span>
+                                <span class="asset-name">OPUS</span>
+                            </div>
+                        </div>
+                        <div class="asset-value-box">
+                            <span class="asset-balance" id="opus-balance-val">10,000.00</span>
+                            <span class="asset-usd">$425,000.00</span>
+                        </div>
+                    </div>
+                    <div class="balance-item">
+                        <div class="asset-info">
+                            <div class="asset-icon sol-icon">◎</div>
+                            <div>
+                                <span class="asset-symbol">Solana</span>
+                                <span class="asset-name">SOL</span>
+                            </div>
+                        </div>
+                        <div class="asset-value-box">
+                            <span class="asset-balance" id="sol-balance-val">12.50</span>
+                            <span class="asset-usd">$1,875.00</span>
+                        </div>
+                    </div>
+                </div>
             </div>
-        </section>
+
+            <!-- Cross-Chain Microservice Bridge (Go + C# Powered) -->
+            <div class="card margin-top">
+                <div class="card-header">
+                    <h2>🌉 Cross-Chain Bridge</h2>
+                    <span class="card-badge">GO RELAYER ACTIVE</span>
+                </div>
+                <div class="bridge-form">
+                    <div class="form-group">
+                        <label class="form-label">From Source Network</label>
+                        <select class="styled-select full-width" id="bridge-source-net">
+                            <option value="eth">Ethereum Mainnet</option>
+                            <option value="arb">Arbitrum One</option>
+                            <option value="poly">Polygon POS</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">To Destination Network</label>
+                        <select class="styled-select full-width" id="bridge-target-net">
+                            <option value="sol">Solana On-Chain Program</option>
+                            <option value="magnum">Magnum L2 Engine</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Transfer Amount</label>
+                        <input type="number" class="swap-input full-width" id="bridge-amount-input" placeholder="0.00" value="250.00"/>
+                    </div>
+                    <button class="primary-btn execute-btn" id="bridge-submit-btn">Initiate Bridge Transfer</button>
+                </div>
+            </div>
+
+            <!-- Elixir OTP Peer-to-Peer Gossip Telemetry -->
+            <div class="card margin-top">
+                <div class="card-header">
+                    <h2>📡 Elixir OTP Gossip Terminal</h2>
+                    <span class="card-badge">GossipNode.ex</span>
+                </div>
+                <div class="terminal-box">
+                    <div class="terminal-logs" id="terminal-logs">
+                        <p class="log-entry"><span class="log-time">[14:20:01]</span> <span class="log-info">[OTP Supervisor]</span> GossipNode.Application initialized.</p>
+                        <p class="log-entry"><span class="log-time">[14:20:02]</span> <span class="log-success">[GenServer]</span> Mempool state registered in ETS table.</p>
+                        <p class="log-entry"><span class="log-time">[14:20:05]</span> <span class="log-warn">[Gossip]</span> Peer 192.168.1.42 broadcasted 14 new transactions.</p>
+                    </div>
+                    <div class="terminal-input-row">
+                        <input type="text" class="terminal-input" id="terminal-cmd-input" placeholder="Type command (e.g., status, mempool, peers)..."/>
+                        <button class="outline-btn sm" id="terminal-send-btn">Send</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- NFT Marketplace Vault Showcase -->
+            <div class="card margin-top">
+                <div class="card-header">
+                    <h2>🖼️ Opus NFT Prime Vault</h2>
+                    <button class="outline-btn sm" id="view-all-nfts-btn">View All</button>
+                </div>
+                <div class="nft-grid">
+                    <div class="nft-item">
+                        <div class="nft-image-placeholder nft-1"></div>
+                        <div class="nft-info">
+                            <span class="nft-title">Genesis Opus #001</span>
+                            <span class="nft-price">Floor: 4.5 ETH</span>
+                        </div>
+                    </div>
+                    <div class="nft-item">
+                        <div class="nft-image-placeholder nft-2"></div>
+                        <div class="nft-info">
+                            <span class="nft-title">Cyber Core #042</span>
+                            <span class="nft-price">Floor: 12.0 SOL</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </main>
 
-    <!-- Wallet Connection Modal -->
-    <div class="modal" id="wallet-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <!-- Modal: Wallet Connect -->
+    <div class="modal-overlay" id="wallet-modal" style="display: none;">
         <div class="modal-content">
-            <button class="close-modal" id="close-wallet-modal" aria-label="Close Modal">&times;</button>
-            <h3 id="modal-title" style="font-size:1.15rem; font-weight:700; margin-bottom:0.5rem; color:var(--text-main);">Connect Your Wallet</h3>
-            <p style="font-size:0.8rem; color:var(--text-muted);">Choose your preferred Web3 provider to interact with Magnum Opus DeFi protocols and cross-chain nodes.</p>
-            <div class="wallet-options">
-                <button class="wallet-opt-btn" data-provider="metamask">
-                    <span>MetaMask (EVM)</span>
-                    <span style="font-family:var(--font-mono); font-size:0.75rem; color:var(--accent-cyan);">v11.x</span>
+            <div class="modal-header">
+                <h3>Connect Wallet</h3>
+                <button class="close-btn" id="close-modal-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <button class="wallet-option-btn" id="connect-metamask">
+                    <span>MetaMask (Web3)</span>
+                    <span class="badge">ETH / L2</span>
                 </button>
-                <button class="wallet-opt-btn" data-provider="phantom">
+                <button class="wallet-option-btn" id="connect-phantom">
                     <span>Phantom (Solana)</span>
-                    <span style="font-family:var(--font-mono); font-size:0.75rem; color:var(--accent-purple);">SVM</span>
+                    <span class="badge">SOL</span>
                 </button>
-                <button class="wallet-opt-btn" data-provider="walletconnect">
-                    <span>WalletConnect v2.0</span>
-                    <span style="font-family:var(--font-mono); font-size:0.75rem; color:var(--accent-emerald);">Universal</span>
-                </button>
-                <button class="wallet-opt-btn" data-provider="coinbase">
-                    <span>Coinbase Smart Wallet</span>
-                    <span style="font-family:var(--font-mono); font-size:0.75rem; color:var(--accent-amber);">Passkey</span>
+                <button class="wallet-option-btn" id="connect-magnum-vault">
+                    <span>Magnum Native Core</span>
+                    <span class="badge">C++ / Go</span>
                 </button>
             </div>
         </div>
     </div>
 
-    <!-- Global Toast Notifications Container -->
-    <div class="toast-container" id="toast-container" aria-live="polite"></div>
+    <!-- Scripts -->
+    <script src="app.js"></script>
 </body>
 </html>

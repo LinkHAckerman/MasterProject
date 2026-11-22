@@ -184,9 +184,9 @@ namespace MagnumOpus.Backend.Core
     }
 
     // ============================================================================
-    // TransactionProcessor – handles queuing, validation and async processing of
-    // Transaction objects. Utilises System.Threading.Channels for high‑throughput
-    // back‑pressure aware pipelines.
+    // TransactionProcessor  handles queuing, validation and async processing of
+    // Transaction objects. Utilises System.Threading.Channels for highthroughput
+    // backpressure aware pipelines.
     // ============================================================================
     public class TransactionProcessor : IAsyncDisposable
     {
@@ -240,115 +240,68 @@ namespace MagnumOpus.Backend.Core
                     {
                         _logger.LogError(ex, "Error processing transaction {Id}", tx.Id);
                         tx.UpdateStatus(TransactionStatus.Failed, ex.Message);
-                        await RaiseProcessedEventAsync(tx);
+                        await NotifyTransactionProcessedAsync(tx);
                     }
                 }
             }
             catch (OperationCanceledException)
             {
-                // Expected during shutdown – just exit gracefully.
                 _logger.LogInformation("Transaction processing loop cancelled.");
             }
             catch (Exception ex)
             {
-                _logger.LogCritical(ex, "Unexpected error in processing loop.");
+                _logger.LogCritical(ex, "Unexpected error in transaction processing loop.");
             }
         }
 
         private async Task ProcessTransactionAsync(Transaction tx)
         {
-            // Mark as processing
             tx.UpdateStatus(TransactionStatus.Processing);
-            _logger.LogDebug("Processing transaction {Id}", tx.Id);
+            _logger.LogInformation("Processing transaction {Id}", tx.Id);
 
-            // Basic validation
-            if (!tx.IsValid())
-            {
-                tx.UpdateStatus(TransactionStatus.Rejected, "Invalid transaction fields");
-                await RaiseProcessedEventAsync(tx);
-                return;
-            }
-
-            // Simulated signature verification – in a real system we would retrieve the public key.
-            // Here we assume the public key is the same as the sender identifier for demo purposes.
-            if (!tx.VerifySignature(tx.Sender))
-            {
-                tx.UpdateStatus(TransactionStatus.Rejected, "Signature verification failed");
-                await RaiseProcessedEventAsync(tx);
-                return;
-            }
-
-            // Simulate work (e.g., state transition, gas calculation)
+            // Simulate processing delay
             await Task.Delay(_processingDelay, _cts.Token);
 
-            // Simulated gas usage based on transaction type
-            tx.GasUsed = tx.Type switch
+            // Validate transaction
+            if (!tx.IsValid())
             {
-                TransactionType.Transfer => 21000,
-                TransactionType.ContractCall => 50000,
-                TransactionType.TokenMint => 80000,
-                TransactionType.TokenBurn => 60000,
-                TransactionType.LiquiditySwap => 120000,
-                TransactionType.StakingDeposit => 90000,
-                TransactionType.NFTMint => 150000,
-                _ => 30000
-            };
+                tx.UpdateStatus(TransactionStatus.Rejected, "Invalid transaction data.");
+                await NotifyTransactionProcessedAsync(tx);
+                return;
+            }
 
-            // Record fee paid (could be different from requested fee after gas calculation)
-            tx.FeePaid = tx.Fee + (decimal)tx.GasUsed * 0.00001m;
+            // Validate network constraints
+            if (!tx.ValidateNetworkConstraints())
+            {
+                tx.UpdateStatus(TransactionStatus.Rejected, "Transaction exceeds network constraints.");
+                await NotifyTransactionProcessedAsync(tx);
+                return;
+            }
 
-            // Mark as confirmed
+            // Simulate successful processing
             tx.UpdateStatus(TransactionStatus.Confirmed);
-            _logger.LogInformation("Transaction {Id} confirmed. GasUsed={GasUsed}, FeePaid={FeePaid}",
-                tx.Id, tx.GasUsed, tx.FeePaid);
+            tx.ReceiptId = Guid.NewGuid().ToString();
+            tx.FeePaid = tx.Fee;
+            tx.GasUsed = 21000; // Simulated gas used
 
-            await RaiseProcessedEventAsync(tx);
+            _logger.LogInformation("Transaction {Id} processed successfully.", tx.Id);
+            await NotifyTransactionProcessedAsync(tx);
         }
 
-        private async Task RaiseProcessedEventAsync(Transaction tx)
+        private async Task NotifyTransactionProcessedAsync(Transaction tx)
         {
             if (TransactionProcessed != null)
             {
-                var handlers = TransactionProcessed.GetInvocationList()
-                    .Cast<Func<Transaction, Task>>();
-                var tasks = handlers.Select(h => SafeInvokeHandlerAsync(h, tx));
-                await Task.WhenAll(tasks);
+                await TransactionProcessed(tx);
             }
         }
 
-        private static async Task SafeInvokeHandlerAsync(Func<Transaction, Task> handler, Transaction tx)
-        {
-            try
-            {
-                await handler(tx);
-            }
-            catch
-            {
-                // Swallow exceptions from user‑provided handlers to avoid crashing the processor.
-            }
-        }
-
-        /// <summary>
-        /// Initiates a graceful shutdown, completing any in‑flight work.
-        /// </summary>
         public async ValueTask DisposeAsync()
         {
-            // Signal cancellation
             _cts.Cancel();
-            // Complete the writer side so the reader finishes once the queue drains.
+            await _backgroundTask;
             _channel.Writer.Complete();
-            try
-            {
-                await _backgroundTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected – ignore.
-            }
-            finally
-            {
-                _cts.Dispose();
-            }
+            _cts.Dispose();
         }
     }
 }
