@@ -11,6 +11,9 @@ BLOCKING checks (the specific failing file is reverted - see below):
   .go   -> gofmt -l        (parses syntax; doesn't need a go.mod)
   .cpp  -> g++ -fsyntax-only
   .rb   -> ruby -c          (syntax check only, no gem dependencies needed)
+  *_test.go / *_test.rb -> after the syntax check, the tests are really run
+           (a failing test file is reverted; if the environment simply can't
+           run them, e.g. missing modules, that's only a warning)
   .ex   -> elixir parse check (Code.string_to_quoted!; skipped if Elixir
            isn't installed)
 
@@ -95,6 +98,56 @@ def validate_elixir(path):
     return run(["elixir", "-e", f'Code.string_to_quoted!(File.read!("{path}"))'])
 
 
+def _run_in(cmd, cwd, timeout=120):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+        return r.returncode, (r.stdout + r.stderr).strip()
+    except FileNotFoundError:
+        return None, f"tool not installed: {cmd[0]}"
+    except subprocess.TimeoutExpired:
+        return -1, "timed out"
+
+
+def run_go_tests(path):
+    """Runs `go test` on a *_test.go file against its source in a scratch
+    module. Returns (code, output): code 0 = pass, None = could not run (not
+    blocking: e.g. the source needs external modules), anything else = the
+    tests really fail against code that does build."""
+    import shutil, tempfile
+    from agent_common import TEST_SOURCES
+    src = TEST_SOURCES.get(os.path.basename(path))
+    if not src or not os.path.exists(src):
+        return None, f"source file {src} not found"
+    tmp = tempfile.mkdtemp()
+    try:
+        shutil.copy(src, tmp)
+        shutil.copy(path, tmp)
+        code, out = _run_in(["go", "mod", "init", "scratch"], tmp, 30)
+        if code != 0:
+            return None, out
+        code, out = _run_in(["go", "build", "./..."], tmp)
+        if code != 0:
+            return None, "source does not build on its own (skipping test run): " + out[:300]
+        return _run_in(["go", "test", "./...", "-count=1", "-timeout", "60s"], tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_ruby_tests(path):
+    """Runs a minitest file. A LoadError (missing gem etc.) means the
+    environment can't run it - not blocking; real test failures are."""
+    code, out = _run_in(["ruby", path], ".")
+    if code not in (0, None) and ("LoadError" in out or "cannot load such file" in out):
+        return None, "could not load dependencies (skipping test run): " + out[:300]
+    return code, out
+
+
+TEST_RUNNERS = {
+    "server_test.go": run_go_tests,
+    "wallet_service_test.rb": run_ruby_tests,
+}
+
+
 def validate_rust_advisory(path):
     return run(["rustc", "--edition", "2021", "--crate-type", "lib",
                 "--emit=metadata", "-o", "/dev/null", path])
@@ -169,6 +222,17 @@ def main():
             else:
                 print(f"[FAIL] {path}:\n{output}")
                 failing_paths.append(path)
+
+            # Syntax passed -> actually run the tests, for test files.
+            if path not in failing_paths and os.path.basename(path) in TEST_RUNNERS:
+                tcode, tout = TEST_RUNNERS[os.path.basename(path)](path)
+                if tcode == 0:
+                    print(f"[OK]   {path} (tests pass)")
+                elif tcode is None:
+                    print(f"[WARN] {path}: tests not run - {tout}")
+                else:
+                    print(f"[FAIL] {path} (tests fail):\n{tout[:1500]}")
+                    failing_paths.append(path)
 
         elif ext in ADVISORY_VALIDATORS:
             code, output = ADVISORY_VALIDATORS[ext](path)
