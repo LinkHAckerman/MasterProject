@@ -49,8 +49,16 @@ ALL_PROJECT_FILES = [
     "SmartContract.sol", "server.go", "schema.sql",
     "OnChainProgram.rs", "WalletService.rb",
     "GossipNode.ex",
+    "server_test.go", "wallet_service_test.rb",
     "README.md"
 ]
+
+# Test files and the source file they exercise. A test-writing agent gets the
+# source file in full (not just a short preview) so its tests match real code.
+TEST_SOURCES = {
+    "server_test.go": "server.go",
+    "wallet_service_test.rb": "WalletService.rb",
+}
 
 # Optional per-agent settings, supplied through environment variables in the
 # workflow step of that agent:
@@ -238,15 +246,28 @@ def get_available_files(claimed_files):
     _warn_if_shallow_clone()
 
     # A pinned file takes priority for this agent, if nobody claimed it yet.
-    pinned = os.environ.get("AGENT_PINNED_FILE", "").strip()
-    if pinned in ALL_PROJECT_FILES and pinned not in claimed_files:
-        _current_assignment = [pinned]
-        print(f"Assigned file(s) by pin: {_current_assignment}")
-        return list(_current_assignment)
+    # AGENT_PINNED_FILE may be a comma-separated list; the starting point
+    # rotates daily so each file in the list gets its turn.
+    pins = [p.strip() for p in os.environ.get("AGENT_PINNED_FILE", "").split(",") if p.strip()]
+    pins = [p for p in pins if p in ALL_PROJECT_FILES]
+    if pins:
+        start = date.today().toordinal() % len(pins)
+        for p in pins[start:] + pins[:start]:
+            if p not in claimed_files:
+                _current_assignment = [p]
+                print(f"Assigned file(s) by pin: {_current_assignment}")
+                return list(_current_assignment)
 
     candidates = [f for f in ALL_PROJECT_FILES if f not in claimed_files]
     if not candidates:
         candidates = list(ALL_PROJECT_FILES)
+
+    # Reviewer role: only review files that already exist, and leave the
+    # README to the normal agents.
+    if os.environ.get("AGENT_ROLE", "").strip() == "reviewer":
+        reviewable = [f for f in candidates if os.path.exists(f) and f != "README.md"]
+        if reviewable:
+            candidates = reviewable
 
     if "README.md" in candidates and not readme_is_due():
         filtered = [f for f in candidates if f != "README.md"]
@@ -304,6 +325,9 @@ def build_manifest():
     window; the rest get a short preview. Total size is capped so the prompt
     stays within free-tier token limits."""
     focus = set(_current_assignment)
+    for f in list(focus):
+        if f in TEST_SOURCES:
+            focus.add(TEST_SOURCES[f])
     repo_manifest = {}
     for file_name in ALL_PROJECT_FILES:
         if not os.path.exists(file_name):
@@ -320,6 +344,54 @@ def build_manifest():
         manifest_json = manifest_json[:MAX_TOTAL_MANIFEST_CHARS] + "\n... [manifest truncated for length] ..."
 
     return repo_manifest, manifest_json
+
+
+def _recent_history(path, max_chars=4000):
+    """Last few committed changes to `path`, for the reviewer to learn from."""
+    try:
+        out = subprocess.run(
+            ["git", "log", "-3", "-p", "--date=short", "--format=--- %h %ad %s", "--", path],
+            capture_output=True, text=True, timeout=30
+        ).stdout
+    except Exception:
+        return ""
+    return out[:max_chars]
+
+
+def _role_instructions(available_files):
+    """Extra prompt text for special roles (AGENT_ROLE env var)."""
+    role = os.environ.get("AGENT_ROLE", "").strip()
+    target = available_files[0] if available_files else ""
+
+    if role == "reviewer":
+        history = _recent_history(target)
+        return (
+            "\nROLE: you are the project's CODE REVIEWER and FIXER for the assigned file. "
+            "Read it critically and fix real defects: syntax or logic errors, undefined "
+            "variables/functions/columns, wrong imports, unhandled error cases, insecure "
+            "patterns, inconsistent names or interfaces compared with the other files in the "
+            "snapshot, and dead or duplicated code. Keep all working functionality. "
+            "You must change at least one real thing; prefer correctness over adding features.\n"
+            + (f"Recent changes to this file (newest first), for context:\n{history}\n" if history else "")
+        )
+
+    if role == "tester" and target in TEST_SOURCES:
+        src = TEST_SOURCES[target]
+        if target.endswith(".go"):
+            how = ("Use package main and only the Go standard library (testing, net/http/httptest, "
+                   "encoding/json). Do not start real servers on fixed ports.")
+        else:
+            how = ("Use Ruby's built-in minitest (require 'minitest/autorun') and "
+                   f"require_relative '{src[:-3]}'. No gems, no network.")
+        return (
+            f"\nROLE: you are the project's TEST WRITER. The assigned file '{target}' holds "
+            f"automated tests for '{src}' (shown in full in the snapshot). {how} "
+            "Test only functions, methods and routes that really exist in the source, with "
+            "deterministic assertions. If tests already exist, keep the passing ones, fix "
+            "any that would fail, and add new cases (edge cases, invalid input, error paths). "
+            "Tests that fail against the current source are reverted by CI, so be accurate.\n"
+        )
+    return ""
 
 
 def build_prompt(agent_label, claimed_files, available_files, manifest_json, repo_manifest):
@@ -339,6 +411,8 @@ def build_prompt(agent_label, claimed_files, available_files, manifest_json, rep
             "every `def`/`do` block must be closed with `end`.\n"
         )
 
+    role_section = _role_instructions(available_files)
+
     return f"""
 You are {agent_label}, working alongside other AI colleagues on:
 {PROJECT_GOAL}
@@ -357,7 +431,7 @@ Instructions:
    keep its existing structure and improve/extend it - do not discard what is there.
    If it does not exist yet, create it. Your output must be a real improvement:
    add or fix functionality, never hand back an unchanged copy of the file.
-{task_section}2. Respond with ONLY a strict JSON object: {{"filename": "...", "content": "...complete updated file content..."}}
+{task_section}{role_section}2. Respond with ONLY a strict JSON object: {{"filename": "...", "content": "...complete updated file content..."}}
 3. No markdown code fences. No commentary. Just the raw JSON object.
 4. Inside the "content" string, use real single-backslash JSON escapes
    (\\n for newline, \\t for tab, \\" for a quote) - do NOT double-escape
