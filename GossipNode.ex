@@ -373,28 +373,63 @@ defmodule GossipNode.GossipServer do
   end
 
   @doc """
-  Retrieves the status of the gossip server.
+  Notifies the gossip server about a disconnected peer.
+  
+  ## Parameters
+    - pid: The process ID of the peer.
   
   ## Examples
     ```elixir
-    status = GossipNode.GossipServer.status()
+    GossipNode.GossipServer.peer_disconnected(self())
     ```
   """
-  @spec status :: map
-  def status do
-    GenServer.call(__MODULE__, :status)
+  @spec peer_disconnected(pid) :: :ok
+  def peer_disconnected(pid) do
+    GenServer.cast(__MODULE__, {:peer_disconnected, pid})
+  end
+
+  @doc """
+  Notifies the gossip server about a connected peer.
+  
+  ## Parameters
+    - pid: The process ID of the peer.
+  
+  ## Examples
+    ```elixir
+    GossipNode.GossipServer.peer_connected(self())
+    ```
+  """
+  @spec peer_connected(pid) :: :ok
+  def peer_connected(pid) do
+    GenServer.cast(__MODULE__, {:peer_connected, pid})
+  end
+
+  @doc """
+  Notifies the gossip server about a received transaction.
+  
+  ## Parameters
+    - hash: The hash of the transaction.
+    - tx: The transaction.
+  
+  ## Examples
+    ```elixir
+    GossipNode.GossipServer.tx_info("tx_hash", %{data: "tx_data"})
+    ```
+  """
+  @spec tx_info(tx_hash, tx) :: :ok
+  def tx_info(hash, tx) do
+    GenServer.cast(__MODULE__, {:tx, hash, tx})
   end
 
   @spec init(state) :: {:ok, state}
   def init(state) do
-    :timer.send_interval(@gossip_interval, :gossip)
     {:ok, state}
   end
 
   @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
   def handle_cast({:new_tx, hash, tx}, state) do
-    pending = Map.update(state, :pending, [{hash, tx}], fn list -> [{hash, tx} | list] end)
-    {:noreply, pending}
+    new_state = Map.put(state, :pending?, [{hash, tx} | state[:pending?] || []])
+    {:noreply, new_state}
   end
 
   @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
@@ -403,56 +438,59 @@ defmodule GossipNode.GossipServer do
     {:noreply, state}
   end
 
-  @spec handle_info(:gossip, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_info(:gossip, state) do
-    pending = Map.get(state, :pending, [])
-    peers = GossipNode.PeerRegistry.list_peers()
-    Enum.each(pending, fn {hash, tx} ->
-      Enum.each(peers, fn pid ->
-        if !GossipNode.PeerRegistry.peer_banned?(pid) do
-          GenServer.cast(pid, {:receive_tx, hash, tx})
-          state = Map.update(state, :messages_sent, 1, &(&1 + 1))
-          GossipNode.PeerRegistry.update_score(pid, @score_increment)
-        else
-          state = Map.update(state, :messages_dropped, 1, &(&1 + 1))
-        end
-      end)
-    end)
-    # Clear pending after broadcasting
-    {:noreply, Map.delete(state, :pending)}
-  end
-
-  @spec handle_info(peer_disconnected, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_info({:peer_disconnected, pid}, state) do
+  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
+  def handle_cast({:peer_disconnected, pid}, state) do
     GossipNode.PeerRegistry.remove_peer(pid)
     {:noreply, state}
   end
 
-  @spec handle_info(peer_connected, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_info({:peer_connected, pid}, state) do
+  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
+  def handle_cast({:peer_connected, pid}, state) do
     GossipNode.PeerRegistry.add_peer(pid)
     {:noreply, state}
   end
 
-  @spec handle_info(tx_info, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_info({:tx, hash, tx}, state) do
+  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
+  def handle_cast({:tx, hash, tx}, state) do
     GossipNode.Mempool.receive_tx(hash, tx)
-    state = Map.update(state, :messages_received, 1, &(&1 + 1))
-    GossipNode.PeerRegistry.update_score(self(), @score_increment)
     {:noreply, state}
   end
 
-  @spec handle_info({:invalid_tx, pid}, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_info({:invalid_tx, pid}, state) do
-    GossipNode.PeerRegistry.update_score(pid, @score_decrement)
-    if GossipNode.PeerRegistry.get_score(pid) <= @ban_threshold do
-      GossipNode.PeerRegistry.ban_peer(pid)
+  @spec handle_info(:gossip, state) :: {:noreply, state} | {:stop, reason, state}
+  def handle_info(:gossip, state) do
+    case state[:pending?] do
+      [] -> {:noreply, state}
+      pending ->
+        peers = GossipNode.PeerRegistry.list_peers()
+        fanout = min(length(peers), 3) # Configurable fanout
+        selected_peers = Enum.take(peers, fanout)
+        for {hash, tx} <- pending do
+          for peer <- selected_peers do
+            send(peer, {:tx, hash, tx})
+            new_state = Map.update!(state, :messages_sent, &(&1 + 1))
+          end
+        end
+        new_state = Map.put(state, :pending?, [])
+        {:noreply, new_state}
     end
+  end
+
+  @spec handle_info(:timeout, state) :: {:noreply, state} | {:stop, reason, state}
+  def handle_info(:timeout, state) do
+    Process.send_after(self(), :gossip, @gossip_interval)
     {:noreply, state}
   end
 
-  @spec handle_call(:status, _from, state) :: {:reply, map, state}
-  def handle_call(:status, _from, state) do
-    {:reply, state, state}
+  @spec handle_info(info, state) :: {:noreply, state} | {:stop, reason, state}
+  def handle_info(info, state) do
+    :logger.info("Received unexpected info: #{inspect(info)}")
+    {:noreply, state}
+  end
+
+  @spec start_link(list) :: {:ok, pid} | {:error, term}
+  def start_link(_args) do
+    {:ok, pid} = GenServer.start_link(__MODULE__, %{messages_sent: 0, messages_received: 0, messages_dropped: 0}, name: __MODULE__)
+    Process.send_after(pid, :timeout, @gossip_interval)
+    {:ok, pid}
   end
 end

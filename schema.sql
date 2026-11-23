@@ -189,6 +189,16 @@ BEFORE UPDATE ON transactions
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
+-- Partition transactions by month for performance
+CREATE TABLE IF NOT EXISTS transactions_2024_01 PARTITION OF transactions FOR VALUES FROM ('2024-01-01') TO ('2024-02-01');
+CREATE TABLE IF NOT EXISTS transactions_2024_02 PARTITION OF transactions FOR VALUES FROM ('2024-02-01') TO ('2024-03-01');
+-- Additional partitions can be created automatically via a scheduled job.
+
+-- Indexes for fast lookup
+CREATE INDEX IF NOT EXISTS idx_transactions_wallet_id ON transactions(wallet_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_tx_hash ON transactions(tx_hash);
+CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
+
 -- ============================================================================
 -- 5. NFTs & Marketplace
 -- ============================================================================
@@ -224,8 +234,7 @@ CREATE TABLE IF NOT EXISTS nfts (
     attributes JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    metadata JSONB DEFAULT '{}'::jsonb,
-    CONSTRAINT unique_nft_token UNIQUE (collection_id, token_id)
+    metadata JSONB DEFAULT '{}'::jsonb
 );
 
 DROP TRIGGER IF EXISTS trg_nfts_updated_at ON nfts;
@@ -234,84 +243,29 @@ BEFORE UPDATE ON nfts
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
-CREATE TABLE IF NOT EXISTS nft_listings (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    nft_id VARCHAR(255) NOT NULL REFERENCES nfts(id) ON DELETE CASCADE,
-    seller_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    auction_type auction_type NOT NULL DEFAULT 'fixed_price',
-    price DECIMAL(38, 18) NOT NULL,
-    ending_price DECIMAL(38, 18),
-    currency VARCHAR(20) NOT NULL DEFAULT 'ETH',
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    starts_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-DROP TRIGGER IF EXISTS trg_nft_listings_updated_at ON nft_listings;
-CREATE TRIGGER trg_nft_listings_updated_at
-BEFORE UPDATE ON nft_listings
-FOR EACH ROW
-EXECUTE FUNCTION set_updated_at();
-
-CREATE TABLE IF NOT EXISTS nft_bids (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    listing_id UUID NOT NULL REFERENCES nft_listings(id) ON DELETE CASCADE,
-    bidder_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    amount DECIMAL(38, 18) NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+CREATE INDEX IF NOT EXISTS idx_nfts_collection_id ON nfts(collection_id);
+CREATE INDEX IF NOT EXISTS idx_nfts_owner_id ON nfts(owner_id);
+CREATE INDEX IF NOT EXISTS idx_nfts_rarity ON nfts(rarity);
 
 -- ============================================================================
--- 6. DeFi & Liquidity Pools / Orderbook
+-- 6. Order Book & Trading Engine
 -- ============================================================================
-
-CREATE TABLE IF NOT EXISTS tokens (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    chain_family chain_family NOT NULL,
-    contract_address VARCHAR(255) NOT NULL,
-    symbol VARCHAR(20) NOT NULL,
-    name VARCHAR(255) NOT NULL,
-    decimals INT NOT NULL DEFAULT 18,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT unique_token_address UNIQUE (chain_family, contract_address)
-);
-
-CREATE TABLE IF NOT EXISTS liquidity_pools (
-    id VARCHAR(255) PRIMARY KEY DEFAULT generate_pool_id(),
-    name VARCHAR(255) NOT NULL,
-    token_a_id UUID NOT NULL REFERENCES tokens(id),
-    token_b_id UUID NOT NULL REFERENCES tokens(id),
-    reserve_a DECIMAL(38, 18) NOT NULL DEFAULT 0,
-    reserve_b DECIMAL(38, 18) NOT NULL DEFAULT 0,
-    total_lp_tokens DECIMAL(38, 18) NOT NULL DEFAULT 0,
-    fee_bps INT NOT NULL DEFAULT 30,
-    status pool_status NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-DROP TRIGGER IF EXISTS trg_liquidity_pools_updated_at ON liquidity_pools;
-CREATE TRIGGER trg_liquidity_pools_updated_at
-BEFORE UPDATE ON liquidity_pools
-FOR EACH ROW
-EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE IF NOT EXISTS orders (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    pool_id VARCHAR(255) REFERENCES liquidity_pools(id),
+    wallet_id VARCHAR(255) NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
     side order_side NOT NULL,
     type order_type NOT NULL,
     status order_status NOT NULL DEFAULT 'open',
-    price DECIMAL(38, 18) NOT NULL,
-    amount DECIMAL(38, 18) NOT NULL,
-    filled_amount DECIMAL(38, 18) NOT NULL DEFAULT 0,
+    base_asset VARCHAR(20) NOT NULL,
+    quote_asset VARCHAR(20) NOT NULL,
+    price NUMERIC(38,18),
+    amount NUMERIC(38,18) NOT NULL,
+    filled_amount NUMERIC(38,18) NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'::jsonb
 );
 
 DROP TRIGGER IF EXISTS trg_orders_updated_at ON orders;
@@ -320,136 +274,245 @@ BEFORE UPDATE ON orders
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
--- ============================================================================
--- 7. Lending & Borrowing Protocols
--- ============================================================================
+CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_orders_wallet_id ON orders(wallet_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 
-CREATE TABLE IF NOT EXISTS lending_markets (
+CREATE TABLE IF NOT EXISTS order_fills (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    token_id UUID NOT NULL REFERENCES tokens(id),
-    total_supplied DECIMAL(38, 18) NOT NULL DEFAULT 0,
-    total_borrowed DECIMAL(38, 18) NOT NULL DEFAULT 0,
-    supply_rate_bps INT NOT NULL DEFAULT 500,
-    borrow_rate_bps INT NOT NULL DEFAULT 800,
-    collateral_factor DECIMAL(5, 4) NOT NULL DEFAULT 0.75,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    fill_price NUMERIC(38,18) NOT NULL,
+    fill_amount NUMERIC(38,18) NOT NULL,
+    fee NUMERIC(38,18) NOT NULL DEFAULT 0,
+    filled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'::jsonb
 );
 
-CREATE TABLE IF NOT EXISTS lending_positions (
+CREATE INDEX IF NOT EXISTS idx_order_fills_order_id ON order_fills(order_id);
+
+-- ============================================================================
+-- 7. Lending & Positions
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS positions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    market_id UUID NOT NULL REFERENCES lending_markets(id),
-    supplied_amount DECIMAL(38, 18) NOT NULL DEFAULT 0,
-    borrowed_amount DECIMAL(38, 18) NOT NULL DEFAULT 0,
-    health_factor DECIMAL(10, 4) NOT NULL DEFAULT 1.0,
+    wallet_id VARCHAR(255) NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+    asset VARCHAR(20) NOT NULL,
+    amount NUMERIC(38,18) NOT NULL,
+    collateral NUMERIC(38,18) NOT NULL,
     status position_status NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    closed_at TIMESTAMPTZ,
+    metadata JSONB DEFAULT '{}'::jsonb
 );
 
+CREATE INDEX IF NOT EXISTS idx_positions_user_id ON positions(user_id);
+CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
+
 -- ============================================================================
--- 8. Cross-Chain Bridge System
+-- 8. Liquidity Pools
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS bridge_transfers (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    sender_wallet_id VARCHAR(255) NOT NULL REFERENCES wallets(id),
-    source_chain chain_family NOT NULL,
-    target_chain chain_family NOT NULL,
-    recipient_address VARCHAR(255) NOT NULL,
-    amount DECIMAL(38, 18) NOT NULL,
-    token_symbol VARCHAR(20) NOT NULL,
-    status bridge_status NOT NULL DEFAULT 'initiated',
-    deposit_tx_hash VARCHAR(255),
-    release_tx_hash VARCHAR(255),
+CREATE TABLE IF NOT EXISTS liquidity_pools (
+    id VARCHAR(255) PRIMARY KEY DEFAULT generate_pool_id(),
+    name VARCHAR(255) NOT NULL,
+    status pool_status NOT NULL DEFAULT 'active',
+    chain_family chain_family NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'::jsonb
 );
 
+DROP TRIGGER IF EXISTS trg_liquidity_pools_updated_at ON liquidity_pools;
+CREATE TRIGGER trg_liquidity_pools_updated_at
+BEFORE UPDATE ON liquidity_pools
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS pool_reserves (
+    pool_id VARCHAR(255) NOT NULL REFERENCES liquidity_pools(id) ON DELETE CASCADE,
+    asset VARCHAR(20) NOT NULL,
+    reserve_amount NUMERIC(38,18) NOT NULL,
+    PRIMARY KEY (pool_id, asset)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pool_reserves_asset ON pool_reserves(asset);
+
 -- ============================================================================
--- 9. Governance & DAO System
+-- 9. Governance Proposals
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS proposals (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    creator_id UUID NOT NULL REFERENCES users(id),
+    creator_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
-    description TEXT NOT NULL,
+    description TEXT,
     status proposal_status NOT NULL DEFAULT 'draft',
-    votes_for DECIMAL(38, 18) NOT NULL DEFAULT 0,
-    votes_against DECIMAL(38, 18) NOT NULL DEFAULT 0,
-    votes_abstain DECIMAL(38, 18) NOT NULL DEFAULT 0,
-    start_time TIMESTAMPTZ NOT NULL,
-    end_time TIMESTAMPTZ NOT NULL,
-    execution_hash VARCHAR(255),
+    start_time TIMESTAMPTZ,
+    end_time TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'::jsonb
 );
+
+DROP TRIGGER IF EXISTS trg_proposals_updated_at ON proposals;
+CREATE TRIGGER trg_proposals_updated_at
+BEFORE UPDATE ON proposals
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE IF NOT EXISTS proposal_votes (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     proposal_id UUID NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
-    voter_id UUID NOT NULL REFERENCES users(id),
-    vote vote_power NOT NULL,
-    weight DECIMAL(38, 18) NOT NULL,
+    voter_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    vote_power vote_power NOT NULL,
+    voted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (proposal_id, voter_user_id)
+);
+
+-- ============================================================================
+-- 10. Cross‑Chain Bridge Transfers
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS bridge_transfers (
+    id VARCHAR(255) PRIMARY KEY DEFAULT generate_tx_id(),
+    source_chain chain_family NOT NULL,
+    destination_chain chain_family NOT NULL,
+    asset VARCHAR(20) NOT NULL,
+    amount NUMERIC(38,18) NOT NULL,
+    status bridge_status NOT NULL DEFAULT 'initiated',
+    tx_hash VARCHAR(255),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT unique_voter_proposal UNIQUE (proposal_id, voter_id)
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'::jsonb
 );
 
+DROP TRIGGER IF EXISTS trg_bridge_transfers_updated_at ON bridge_transfers;
+CREATE TRIGGER trg_bridge_transfers_updated_at
+BEFORE UPDATE ON bridge_transfers
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_bridge_transfers_status ON bridge_transfers(status);
+
 -- ============================================================================
--- 10. Oracle & Audit Logging
+-- 11. Audit Log (append‑only)
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS oracle_prices (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    symbol VARCHAR(20) NOT NULL,
-    price_usd DECIMAL(38, 18) NOT NULL,
-    source VARCHAR(100) NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS audit_log (
+    id BIGSERIAL PRIMARY KEY,
+    table_name VARCHAR(255) NOT NULL,
+    operation VARCHAR(10) NOT NULL CHECK (operation IN ('INSERT','UPDATE','DELETE')),
+    changed_data JSONB NOT NULL,
+    performed_by UUID REFERENCES users(id),
+    performed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS audit_logs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    action VARCHAR(255) NOT NULL,
-    ip_address VARCHAR(45),
-    details JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+-- Generic trigger to capture changes for any table that opts‑in via the
+-- "audit_enabled" comment. Example usage:
+-- COMMENT ON TABLE users IS 'audit_enabled';
+
+CREATE OR REPLACE FUNCTION audit_trigger_func()
+RETURNS TRIGGER AS $$
+DECLARE
+    changed JSONB;
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        changed := to_jsonb(NEW);
+    ELSIF TG_OP = 'UPDATE' THEN
+        changed := jsonb_build_object('old', to_jsonb(OLD), 'new', to_jsonb(NEW));
+    ELSIF TG_OP = 'DELETE' THEN
+        changed := to_jsonb(OLD);
+    END IF;
+    INSERT INTO audit_log(table_name, operation, changed_data, performed_by)
+    VALUES (TG_TABLE_NAME, TG_OP, changed, current_setting('app.current_user_id', true)::uuid);
+    RETURN NULL; -- AFTER trigger, result ignored
+END;
+$$ LANGUAGE plpgsql;
+
+-- Enable auditing on core tables
+COMMENT ON TABLE users IS 'audit_enabled';
+COMMENT ON TABLE wallets IS 'audit_enabled';
+COMMENT ON TABLE transactions IS 'audit_enabled';
+COMMENT ON TABLE nfts IS 'audit_enabled';
+COMMENT ON TABLE orders IS 'audit_enabled';
+COMMENT ON TABLE proposals IS 'audit_enabled';
+
+-- Attach audit triggers (AFTER) to tables with the comment
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN SELECT c.oid, c.relname FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind = 'r' AND obj_description(c.oid, 'pg_class') = 'audit_enabled'
+    LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS audit_trigger ON %I', r.relname);
+        EXECUTE format('CREATE TRIGGER audit_trigger AFTER INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION audit_trigger_func()', r.relname);
+    END LOOP;
+END $$;
 
 -- ============================================================================
--- 11. Performance Indexes
+-- 12. Views & Helper Functions
 -- ============================================================================
 
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
-CREATE INDEX IF NOT EXISTS idx_wallets_user ON wallets(user_id);
-CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
-CREATE INDEX IF NOT EXISTS idx_tx_wallet ON transactions(wallet_id);
-CREATE INDEX IF NOT EXISTS idx_tx_hash ON transactions(tx_hash);
-CREATE INDEX IF NOT EXISTS idx_tx_status ON transactions(status);
-CREATE INDEX IF NOT EXISTS idx_nfts_owner ON nfts(owner_id);
-CREATE INDEX IF NOT EXISTS idx_nfts_collection ON nfts(collection_id);
-CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id);
-CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-CREATE INDEX IF NOT EXISTS idx_bridge_status ON bridge_transfers(status);
-CREATE INDEX IF NOT EXISTS idx_oracle_symbol ON oracle_prices(symbol, updated_at DESC);
-
--- ============================================================================
--- 12. Analytical Views
--- ============================================================================
-
-CREATE OR REPLACE VIEW view_user_portfolio AS
-SELECT 
+-- View: aggregate wallet balances per user (assumes balance stored in metadata JSONB as {"balance": "123.45"})
+CREATE OR REPLACE VIEW user_wallet_balances AS
+SELECT
     u.id AS user_id,
     u.email,
-    COUNT(DISTINCT w.id) AS total_wallets,
-    COUNT(DISTINCT t.id) AS total_transactions,
-    COUNT(DISTINCT n.id) AS total_nfts
+    SUM((w.metadata->>'balance')::numeric) AS total_balance
 FROM users u
-LEFT JOIN wallets w ON u.id = w.user_id
-LEFT JOIN transactions t ON w.id = t.wallet_id
-LEFT JOIN nfts n ON u.id = n.owner_id
+JOIN wallets w ON w.user_id = u.id
 GROUP BY u.id, u.email;
+
+-- Materialized view: top 10 NFTs by number of transfers (requires a transfer log table – placeholder for future implementation)
+-- CREATE MATERIALIZED VIEW top_nfts_by_volume AS
+-- SELECT n.id, n.name, COUNT(t.id) AS transfer_count
+-- FROM nfts n
+-- JOIN nft_transfers t ON t.nft_id = n.id
+-- GROUP BY n.id, n.name
+-- ORDER BY transfer_count DESC
+-- LIMIT 10;
+
+-- Helper function to calculate a user's total on‑chain asset value across all wallets.
+CREATE OR REPLACE FUNCTION calculate_user_total_value(p_user_id UUID)
+RETURNS NUMERIC AS $$
+DECLARE
+    total NUMERIC := 0;
+    rec RECORD;
+BEGIN
+    FOR rec IN SELECT (metadata->>'balance')::numeric AS bal FROM wallets WHERE user_id = p_user_id LOOP
+        total := total + COALESCE(rec.bal, 0);
+    END LOOP;
+    RETURN total;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- ============================================================================
+-- 13. Sample Data (development only)
+-- ============================================================================
+
+INSERT INTO users (email, password_hash, full_name, is_verified)
+VALUES ('alice@example.com', crypt('password123', gen_salt('bf')), 'Alice Wonderland', TRUE)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO users (email, password_hash, full_name, is_verified)
+VALUES ('bob@example.com', crypt('securepass', gen_salt('bf')), 'Bob Builder', TRUE)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO wallets (user_id, chain_family, address, is_default, metadata)
+SELECT id, 'evm', '0x' || substr(md5(random()::text), 1, 40), TRUE, jsonb_build_object('balance', '1000')
+FROM users WHERE email = 'alice@example.com'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO nft_collections (id, name, symbol)
+VALUES ('COLL-001', 'Magnum Opus Art', 'MOA')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO nfts (collection_id, token_id, owner_id, rarity, name, metadata)
+SELECT 'COLL-001', '1', id, 'legendary', 'Genesis Opus', jsonb_build_object('attributes', jsonb_build_array(jsonb_build_object('trait_type','Power','value','Infinity')))
+FROM users WHERE email = 'alice@example.com'
+ON CONFLICT DO NOTHING;
+
+-- End of schema.sql
