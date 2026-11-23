@@ -60,6 +60,18 @@ jobs:
           AGENT_COAUTHOR: "RSRatPoison <352177804+RSRatPoison@users.noreply.github.com>"
         run: python ai_agent_mistral.py
 
+      # Community agent 2 (AnselmOrban): writes and maintains automated tests.
+      # Runs early so its pinned test files are claimed before the rotation.
+      # A test file only gets committed if it parses AND its tests pass.
+      - name: Execute Mistral Agent (community key - AnselmOrban, tests)
+        continue-on-error: true
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY_3 }}
+          AGENT_ROLE: tester
+          AGENT_PINNED_FILE: "server_test.go,wallet_service_test.rb"
+          AGENT_COAUTHOR: "AnselmOrban <353948585+AnselmOrban@users.noreply.github.com>"
+        run: python ai_agent_mistral.py
+
       - name: Execute Gemini Agent
         continue-on-error: true
         env:
@@ -91,6 +103,16 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: python ai_agent_cloudflare.py
 
+      # Community agent 3 (AnselmOrban): code reviewer / fixer. Runs last so it
+      # reviews files nobody else touched today. Existing code files only.
+      - name: Execute OpenRouter Agent (community key - AnselmOrban, reviewer)
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY_2 }}
+          AGENT_ROLE: reviewer
+          AGENT_COAUTHOR: "AnselmOrban <353948585+AnselmOrban@users.noreply.github.com>"
+        run: python ai_agent_openrouter.py
+
       - name: Validate Today's Generated Files
         run: python validate_files.py
 
@@ -106,7 +128,7 @@ jobs:
           git diff --cached --name-only > "$RUNNER_TEMP/changed.txt"
 
           MSG_FILE="$RUNNER_TEMP/commit_msg.txt"
-          echo "Autonomous multi-language architecture evolution (6 agents)" > "$MSG_FILE"
+          echo "Autonomous multi-language architecture evolution (8 agents)" > "$MSG_FILE"
 
           # Credit a co-author only if the file they worked on is in this commit.
           if [ -f "$RUNNER_TEMP/coauthors.tmp" ]; then
