@@ -50,10 +50,10 @@
     --spacing-xs: 0.25rem;
     --spacing-sm: 0.5rem;
     --spacing-md: 1rem;
-    --spacing-lg: 1.5rem;
-    --spacing-xl: 2rem;
-    --spacing-2xl: 3rem;
-    --spacing-3xl: 4.5rem;
+    --spacing-lg: 2rem;
+    --spacing-xl: 3rem;
+    --spacing-2xl: 4rem;
+    --spacing-3xl: 6rem;
 
     /* Border Radius */
     --radius-xs: 0.2rem;
@@ -166,7 +166,7 @@ body {
 .text-lg { font-size: var(--font-size-lg); }
 .text-xl { font-size: var(--font-size-xl); }
 .text-2xl { font-size: var(--font-size-2xl); }
-.text-3xl { font-size: var(--font-size-2xl); }
+.text-3xl { font-size: var(--font-size-xl); }
 .text-4xl { font-size: var(--font-size-4xl); }
 .text-5xl { font-size: var(--font-size-5xl); }
 
@@ -185,7 +185,7 @@ body {
     font-size: var(--font-size-base);
     font-weight: 500;
     cursor: pointer;
-    transition: background-color var(--transition-fast), color var(--transition-fast);
+    transition: background-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .button:hover {
@@ -206,6 +206,7 @@ body {
 
 .button-primary:hover {
     box-shadow: var(--glow-cyan-sm);
+    background: linear-gradient(135deg, var(--accent-gradient-end), var(--accent-gradient-start));
 }
 
 .button-secondary {
@@ -348,9 +349,15 @@ body {
     pointer-events: none;
     transition: opacity var(--transition-normal);
 }
+
 .modal.active {
     opacity: 1;
     pointer-events: auto;
+}
+
+@keyframes slide-up {
+    0% { transform: translateY(100%); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
 }
 
 .toast {
@@ -363,73 +370,22 @@ body {
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-md);
     z-index: var(--z-toast);
-    animation: slide-up 0.3s ease-out forwards;
+    animation: slide-up 0.3s var(--animation-ease);
 }
 
-@keyframes slide-up {
-    from { transform: translateY(20px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
+/* Focus States */
+.button:focus-visible,
+.input:focus-visible,
+textarea:focus-visible {
+    outline: 2px solid var(--border-active);
+    outline-offset: 2px;
 }
 
-/* Form Elements */
-input, textarea, select {
-    background: var(--bg-input);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    color: var(--text-main);
-    padding: var(--spacing-sm);
-    font-size: var(--font-size-base);
-    width: 100%;
-    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
-}
-
-input:focus, textarea:focus, select:focus {
-    outline: none;
-    border-color: var(--accent-cyan);
-    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
-}
-
-/* Dropdown */
-.dropdown {
-    position: relative;
-    display: inline-block;
-}
-.dropdown-content {
-    display: none;
-    position: absolute;
-    background-color: var(--bg-dropdown);
-    min-width: 160px;
-    box-shadow: var(--shadow-md);
-    border-radius: var(--radius-sm);
-    z-index: var(--z-dropdown);
-    margin-top: var(--spacing-xs);
-}
-.dropdown:hover .dropdown-content {
-    display: block;
-}
-
-/* Tooltip */
-.tooltip {
-    position: relative;
-    cursor: help;
-}
-.tooltip::after {
-    content: attr(data-tip);
-    position: absolute;
-    bottom: 125%;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--bg-secondary);
-    color: var(--text-main);
-    padding: var(--spacing-xs) var(--spacing-sm);
-    border-radius: var(--radius-xs);
-    white-space: nowrap;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity var(--transition-fast);
-    font-size: var(--font-size-xs);
-    z-index: var(--z-tooltip);
-}
-.tooltip:hover::after {
-    opacity: 1;
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        transition-duration: 0s !important;
+        animation-duration: 0s !important;
+        animation-iteration-count: 1 !important;
+    }
 }
