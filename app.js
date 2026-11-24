@@ -218,126 +218,244 @@
                 osc.stop(now + 0.2);
             } else if (type === 'error') {
                 osc.type = 'square';
-                osc.frequency.setValueAtTime(180, now);
-                osc.frequency.exponentialRampToValueAtTime(120, now + 0.1);
-                gain.gain.setValueAtTime(0.07, now);
-                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+                osc.frequency.setValueAtTime(200, now);
+                gain.gain.setValueAtTime(0.12, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
                 osc.start(now);
-                osc.stop(now + 0.2);
+                osc.stop(now + 0.4);
             }
         }
     };
 
-    // Utility: Simple fetch wrapper with JSON handling
-    async function fetchJSON(url, options = {}) {
-        const response = await fetch(url, Object.assign({ headers: { 'Accept': 'application/json' } }, options));
-        if (!response.ok) {
-            throw new Error(`Network error: ${response.status} ${response.statusText}`);
-        }
-        return await response.json();
+    // Utility Functions -----------------------------------------------------
+    const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 });
+    function formatNumber(num) {
+        if (typeof num !== 'number') return num;
+        return fmt.format(num);
     }
 
-    // Update market data from a public API (placeholder)
-    async function updateMarketData() {
-        try {
-            // Example using CoinGecko public endpoint
-            const data = await fetchJSON('https://api.coingecko.com/api/v3/simple/price?ids=ethereum,usd-coin,bitcoin,solana&vs_currencies=usd');
-            const ethPrice = data.ethereum.usd;
-            const btcPrice = data.bitcoin.usd;
-            const solPrice = data.solana.usd;
-            const usdtPrice = data['usd-coin'].usd;
-
-            // Update state.market and token prices
-            state.market.price = ethPrice;
-            state.market.change24h = ((ethPrice - state.market.price) / state.market.price * 100).toFixed(2);
-            state.wallet.tokens.find(t => t.symbol === 'ETH').price = ethPrice;
-            state.wallet.tokens.find(t => t.symbol === 'BTC').price = btcPrice;
-            state.wallet.tokens.find(t => t.symbol === 'SOL').price = solPrice;
-            state.wallet.tokens.find(t => t.symbol === 'USDT').price = usdtPrice;
-
-            renderMarket();
-        } catch (err) {
-            console.error('Failed to update market data', err);
-            SoundEngine.play('error');
-        }
+    function debounce(fn, delay) {
+        let timer;
+        return function (...args) {
+            clearTimeout(timer);
+            timer = setTimeout(() => fn.apply(this, args), delay);
+        };
     }
 
-    // Render market summary UI (placeholder implementation)
-    function renderMarket() {
-        const marketEl = document.getElementById('market-summary');
-        if (!marketEl) return;
-        marketEl.innerHTML = `
-            <div class="pair">${state.market.selectedPair}</div>
-            <div class="price">$${state.market.price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-            <div class="change ${state.market.change24h >= 0 ? 'up' : 'down'}">${state.market.change24h}%</div>
+    // DOM Rendering ----------------------------------------------------------
+    function renderWallet() {
+        const walletEl = document.getElementById('wallet-summary');
+        if (!walletEl) return;
+        const { address, balanceEth, balanceUsdt, balanceBtc, balanceSol, balanceOpus, networkName } = state.wallet;
+        walletEl.innerHTML = `
+            <div class="wallet-address">${address ? address : 'Not Connected'}</div>
+            <div class="network-name">${networkName}</div>
+            <div class="balances">
+                <span>ETH: ${formatNumber(balanceEth)}</span>
+                <span>USDT: ${formatNumber(balanceUsdt)}</span>
+                <span>BTC: ${formatNumber(balanceBtc)}</span>
+                <span>SOL: ${formatNumber(balanceSol)}</span>
+                <span>OPUS: ${formatNumber(balanceOpus)}</span>
+            </div>
         `;
     }
 
-    // Render wallet balances UI (placeholder implementation)
-    function renderWallet() {
-        const walletEl = document.getElementById('wallet-balance');
-        if (!walletEl) return;
-        const rows = state.wallet.tokens.map(tok => {
-            const usdValue = (tok.balance * tok.price).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-            return `<div class="token-row">
-                <span class="token-icon">${tok.icon}</span>
-                <span class="token-symbol">${tok.symbol}</span>
-                <span class="token-balance">${tok.balance}</span>
-                <span class="token-usd">$${usdValue}</span>
-            </div>`;
-        }).join('');
-        walletEl.innerHTML = rows;
+    function renderMarket() {
+        const marketEl = document.getElementById('market-summary');
+        if (!marketEl) return;
+        const { selectedPair, price, change24h, volume24h, high24h, low24h } = state.market;
+        marketEl.innerHTML = `
+            <div class="pair">${selectedPair}</div>
+            <div class="price">$${formatNumber(price)}</div>
+            <div class="change ${change24h >= 0 ? 'up' : 'down'}">${change24h.toFixed(2)}%</div>
+            <div class="details">
+                <span>24h Vol: ${formatNumber(volume24h)}</span>
+                <span>High: $${formatNumber(high24h)}</span>
+                <span>Low: $${formatNumber(low24h)}</span>
+            </div>
+        `;
     }
 
-    // Render recent transactions UI (placeholder implementation)
+    function renderSwap() {
+        const fromInput = document.getElementById('swap-from-amount');
+        const toInput = document.getElementById('swap-to-amount');
+        if (!fromInput || !toInput) return;
+        fromInput.value = state.swap.fromAmount;
+        toInput.value = state.swap.toAmount;
+    }
+
     function renderTransactions() {
-        const txEl = document.getElementById('tx-history');
-        if (!txEl) return;
-        const rows = state.transactions.map(tx => {
-            const date = new Date(tx.timestamp).toLocaleString();
-            return `<div class="tx-row ${tx.status.toLowerCase()}">
-                <span class="tx-hash">${tx.displayHash}</span>
-                <span class="tx-type">${tx.type}</span>
-                <span class="tx-amount">${tx.amount}</span>
-                <span class="tx-status">${tx.status}</span>
-                <span class="tx-time">${date}</span>
-            </div>`;
-        }).join('');
-        txEl.innerHTML = rows;
+        const txList = document.getElementById('tx-list');
+        if (!txList) return;
+        txList.innerHTML = state.transactions.map(tx => `
+            <li class="tx-item ${tx.status.toLowerCase()}">
+                <span class="hash">${tx.displayHash}</span>
+                <span class="type">${tx.type}</span>
+                <span class="desc">${tx.description}</span>
+                <span class="amount">${tx.amount}</span>
+                <span class="status">${tx.status}</span>
+                <span class="time">${new Date(tx.timestamp).toLocaleString()}</span>
+            </li>
+        `).join('');
     }
 
-    // Initialize the application UI and start periodic refreshes
-    function initApp() {
-        // Attach basic UI event listeners
-        document.addEventListener('click', function (e) {
-            if (e.target.matches('.btn')) {
-                SoundEngine.play('click');
-            }
+    // Core Interaction Logic -------------------------------------------------
+    async function fetchMarketData() {
+        // Mock fetch – in a real app replace with actual API call
+        return new Promise(resolve => {
+            setTimeout(() => {
+                const mock = {
+                    price: (3400 + Math.random() * 200).toFixed(2),
+                    change24h: (Math.random() * 10 - 5).toFixed(2),
+                    volume24h: Math.floor(1e9 + Math.random() * 5e8),
+                    high24h: (3500 + Math.random() * 100).toFixed(2),
+                    low24h: (3300 - Math.random() * 100).toFixed(2)
+                };
+                resolve(mock);
+            }, 500);
         });
+    }
 
-        // Initial render
+    async function updateMarket() {
+        const data = await fetchMarketData();
+        state.market.price = parseFloat(data.price);
+        state.market.change24h = parseFloat(data.change24h);
+        state.market.volume24h = data.volume24h;
+        state.market.high24h = parseFloat(data.high24h);
+        state.market.low24h = parseFloat(data.low24h);
+        renderMarket();
+    }
+
+    function calculateSwap() {
+        const fromToken = state.swap.fromToken;
+        const toToken = state.swap.toToken;
+        const fromAmt = parseFloat(state.swap.fromAmount);
+        if (isNaN(fromAmt) || fromAmt <= 0) {
+            state.swap.toAmount = '';
+            renderSwap();
+            return;
+        }
+        // Simple price based conversion using market.price for ETH/USDT pair
+        let rate = 1;
+        if (fromToken === 'ETH' && toToken === 'USDT') {
+            rate = state.market.price; // ETH price in USDT
+        } else if (fromToken === 'USDT' && toToken === 'ETH') {
+            rate = 1 / state.market.price;
+        } else {
+            // For other pairs, mock a 1:1 rate for demo purposes
+            rate = 1;
+        }
+        const toAmt = (fromAmt * rate * (1 - state.swap.slippage / 100)).toFixed(6);
+        state.swap.toAmount = toAmt;
+        renderSwap();
+    }
+
+    const debouncedCalc = debounce(calculateSwap, 300);
+
+    // Event Listeners --------------------------------------------------------
+    function bindUI() {
+        const connectBtn = document.getElementById('btn-connect');
+        if (connectBtn) {
+            connectBtn.addEventListener('click', () => {
+                // Mock wallet connection
+                state.wallet.connected = true;
+                state.wallet.address = '0xDEMO' + Math.floor(Math.random() * 10000).toString(16).padStart(4, '0');
+                SoundEngine.play('success');
+                renderWallet();
+            });
+        }
+
+        const fromInput = document.getElementById('swap-from-amount');
+        const toSelect = document.getElementById('swap-to-token');
+        const fromSelect = document.getElementById('swap-from-token');
+        const swapBtn = document.getElementById('btn-swap');
+
+        if (fromInput) {
+            fromInput.addEventListener('input', e => {
+                state.swap.fromAmount = e.target.value;
+                debouncedCalc();
+                SoundEngine.play('click');
+            });
+        }
+        if (fromSelect) {
+            fromSelect.addEventListener('change', e => {
+                state.swap.fromToken = e.target.value;
+                calculateSwap();
+                SoundEngine.play('click');
+            });
+        }
+        if (toSelect) {
+            toSelect.addEventListener('change', e => {
+                state.swap.toToken = e.target.value;
+                calculateSwap();
+                SoundEngine.play('click');
+            });
+        }
+        if (swapBtn) {
+            swapBtn.addEventListener('click', () => {
+                // Mock swap execution
+                if (!state.wallet.connected) {
+                    alert('Connect wallet first');
+                    SoundEngine.play('error');
+                    return;
+                }
+                if (!state.swap.fromAmount || !state.swap.toAmount) {
+                    alert('Enter amount');
+                    SoundEngine.play('error');
+                    return;
+                }
+                // Update balances (very naive)
+                const fromTok = state.wallet.tokens.find(t => t.symbol === state.swap.fromToken);
+                const toTok = state.wallet.tokens.find(t => t.symbol === state.swap.toToken);
+                const fromAmtNum = parseFloat(state.swap.fromAmount);
+                const toAmtNum = parseFloat(state.swap.toAmount);
+                if (fromTok && fromTok.balance >= fromAmtNum) {
+                    fromTok.balance -= fromAmtNum;
+                    toTok.balance += toAmtNum;
+                    // Add transaction record
+                    const tx = {
+                        hash: '0x' + Math.random().toString(16).substr(2, 64),
+                        displayHash: '',
+                        type: 'Swap',
+                        description: `Swapped ${fromAmtNum} ${fromTok.symbol} for ${toAmtNum} ${toTok.symbol}`,
+                        amount: `-${fromAmtNum} ${fromTok.symbol}`,
+                        status: 'Pending',
+                        timestamp: Date.now(),
+                        blockNumber: null
+                    };
+                    tx.displayHash = tx.hash.slice(0, 6) + '...' + tx.hash.slice(-4);
+                    state.transactions.unshift(tx);
+                    renderTransactions();
+                    renderWallet();
+                    SoundEngine.play('swap');
+                    // Simulate confirmation after 2 seconds
+                    setTimeout(() => {
+                        tx.status = 'Confirmed';
+                        tx.blockNumber = Math.floor(19000000 + Math.random() * 100000);
+                        renderTransactions();
+                        SoundEngine.play('success');
+                    }, 2000);
+                } else {
+                    alert('Insufficient balance');
+                    SoundEngine.play('error');
+                }
+            });
+        }
+    }
+
+    // Auto‑Refresh Loop ------------------------------------------------------
+    function startAutoRefresh() {
+        setInterval(updateMarket, state.settings.autoRefreshInterval);
+    }
+
+    // Initialization ----------------------------------------------------------
+    document.addEventListener('DOMContentLoaded', () => {
         renderWallet();
         renderMarket();
+        renderSwap();
         renderTransactions();
-
-        // Periodic market refresh based on settings
-        setInterval(updateMarketData, state.settings.autoRefreshInterval);
-    }
-
-    // Expose some debug helpers
-    window.MagnumOpus = {
-        state,
-        updateMarketData,
-        renderWallet,
-        renderTransactions,
-        SoundEngine
-    };
-
-    // Kick off the app once DOM is ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initApp);
-    } else {
-        initApp();
-    }
+        bindUI();
+        startAutoRefresh();
+    });
 
 })();

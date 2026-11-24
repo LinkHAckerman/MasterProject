@@ -184,9 +184,9 @@ namespace MagnumOpus.Backend.Core
     }
 
     // ============================================================================
-    // TransactionProcessor  handles queuing, validation and async processing of
-    // Transaction objects. Utilises System.Threading.Channels for highthroughput
-    // backpressure aware pipelines.
+    // TransactionProcessor – handles queuing, validation and async processing of
+    // Transaction objects. Utilises System.Threading.Channels for high-throughput
+    // back-pressure aware pipelines.
     // ============================================================================
     public class TransactionProcessor : IAsyncDisposable
     {
@@ -195,6 +195,8 @@ namespace MagnumOpus.Backend.Core
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _backgroundTask;
         private readonly TimeSpan _processingDelay = TimeSpan.FromMilliseconds(150); // simulate work
+        private readonly ConcurrentDictionary<string, Transaction> _processedTransactions = new();
+        private bool _disposed = false;
 
         /// <summary>
         /// Event raised after a transaction has been processed (either confirmed or failed).
@@ -212,6 +214,7 @@ namespace MagnumOpus.Backend.Core
             };
             _channel = Channel.CreateBounded<Transaction>(options);
             _backgroundTask = Task.Run(ProcessLoopAsync);
+            _logger.LogInformation("TransactionProcessor started with capacity {Capacity}.", boundedCapacity);
         }
 
         /// <summary>
@@ -221,10 +224,51 @@ namespace MagnumOpus.Backend.Core
         public async ValueTask EnqueueAsync(Transaction tx)
         {
             if (tx == null) throw new ArgumentNullException(nameof(tx));
+            if (_disposed) throw new ObjectDisposedException(nameof(TransactionProcessor));
+            
             tx.UpdateStatus(TransactionStatus.Queued);
             await _channel.Writer.WriteAsync(tx, _cts.Token);
             _logger.LogInformation("Transaction {Id} queued for processing.", tx.Id);
         }
+
+        /// <summary>
+        /// Try to enqueue a transaction without blocking. Returns false if the channel is full.
+        /// </summary>
+        public bool TryEnqueue(Transaction tx)
+        {
+            if (tx == null) throw new ArgumentNullException(nameof(tx));
+            if (_disposed) return false;
+
+            tx.UpdateStatus(TransactionStatus.Queued);
+            var result = _channel.Writer.TryWrite(tx);
+            if (result)
+            {
+                _logger.LogInformation("Transaction {Id} queued for processing.", tx.Id);
+            }
+            else
+            {
+                _logger.LogWarning("Failed to queue transaction {Id}: channel full.", tx.Id);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Get a previously processed transaction by ID.
+        /// </summary>
+        public bool TryGetProcessedTransaction(string id, out Transaction? tx)
+        {
+            return _processedTransactions.TryGetValue(id, out tx);
+        }
+
+        /// <summary>
+        /// Get count of currently queued transactions.
+        /// </summary>
+        public int QueuedCount => _channel.Reader.Count;
+
+        /// <summary>
+        /// Get count of processed transactions in memory.
+        /// </summary>
+        public int ProcessedCount => _processedTransactions.Count;
 
         private async Task ProcessLoopAsync()
         {
@@ -256,6 +300,7 @@ namespace MagnumOpus.Backend.Core
 
         private async Task ProcessTransactionAsync(Transaction tx)
         {
+            // Mark as processing
             tx.UpdateStatus(TransactionStatus.Processing);
             _logger.LogInformation("Processing transaction {Id}", tx.Id);
 
@@ -278,30 +323,110 @@ namespace MagnumOpus.Backend.Core
                 return;
             }
 
-            // Simulate successful processing
-            tx.UpdateStatus(TransactionStatus.Confirmed);
-            tx.ReceiptId = Guid.NewGuid().ToString();
-            tx.FeePaid = tx.Fee;
-            tx.GasUsed = 21000; // Simulated gas used
+            // Simulated signature verification
+            if (!tx.VerifySignature(tx.Sender))
+            {
+                tx.UpdateStatus(TransactionStatus.Rejected, "Signature verification failed");
+                await NotifyTransactionProcessedAsync(tx);
+                return;
+            }
 
-            _logger.LogInformation("Transaction {Id} processed successfully.", tx.Id);
+            // Simulate gas usage based on transaction type
+            tx.GasUsed = tx.Type switch
+            {
+                TransactionType.Transfer => 21000,
+                TransactionType.ContractCall => 50000,
+                TransactionType.TokenMint => 80000,
+                TransactionType.TokenBurn => 60000,
+                TransactionType.LiquiditySwap => 120000,
+                TransactionType.StakingDeposit => 45000,
+                TransactionType.NFTMint => 95000,
+                _ => 21000
+            };
+
+            // Calculate fee paid based on gas used
+            tx.FeePaid = (decimal)tx.GasUsed * 0.00001m;
+
+            // Simulate block inclusion
+            tx.BlockIndex = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            tx.ReceiptId = GenerateReceiptId(tx);
+
+            // Mark as confirmed
+            tx.UpdateStatus(TransactionStatus.Confirmed);
+            _logger.LogInformation("Transaction {Id} confirmed. Gas used: {GasUsed}, Fee paid: {FeePaid}, Block: {BlockIndex}",
+                tx.Id, tx.GasUsed, tx.FeePaid, tx.BlockIndex);
+
             await NotifyTransactionProcessedAsync(tx);
+        }
+
+        private string GenerateReceiptId(Transaction tx)
+        {
+            using var sha256 = SHA256.Create();
+            var receiptData = $"{tx.Id}:{tx.BlockIndex}:{tx.GasUsed}:{tx.FeePaid}:{DateTime.UtcNow.Ticks}";
+            var bytes = Encoding.UTF8.GetBytes(receiptData);
+            var hash = sha256.ComputeHash(bytes);
+            return "0x" + Convert.ToHexString(hash).ToLowerInvariant()[..64];
         }
 
         private async Task NotifyTransactionProcessedAsync(Transaction tx)
         {
+            // Store processed transaction for lookup
+            _processedTransactions.TryAdd(tx.Id, tx);
+
+            // Raise event if subscribers exist
             if (TransactionProcessed != null)
             {
-                await TransactionProcessed(tx);
+                var tasks = TransactionProcessed.GetInvocationList()
+                    .Cast<Func<Transaction, Task>>()
+                    .Select(handler => SafeInvokeHandler(handler, tx));
+                await Task.WhenAll(tasks);
             }
         }
 
+        private async Task SafeInvokeHandler(Func<Transaction, Task> handler, Transaction tx)
+        {
+            try
+            {
+                await handler(tx);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in TransactionProcessed event handler for transaction {Id}", tx.Id);
+            }
+        }
+
+        /// <summary>
+        /// Gracefully shuts down the processor, waiting for queued transactions to complete.
+        /// </summary>
         public async ValueTask DisposeAsync()
         {
+            if (_disposed) return;
+            _disposed = true;
+
+            _logger.LogInformation("Shutting down TransactionProcessor...");
+
+            // Stop accepting new transactions
+            _channel.Writer.TryComplete();
+
+            // Signal cancellation
             _cts.Cancel();
-            await _backgroundTask;
-            _channel.Writer.Complete();
+
+            // Wait for background task to complete
+            try
+            {
+                await _backgroundTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during TransactionProcessor shutdown.");
+            }
+
             _cts.Dispose();
+            _logger.LogInformation("TransactionProcessor stopped. Processed {Count} transactions.", _processedTransactions.Count);
         }
     }
 }

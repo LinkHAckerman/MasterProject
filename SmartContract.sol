@@ -226,13 +226,10 @@ contract MagnumOpusNFT is
         require(recipients.length == uris.length, "MOP: recipients and uris length mismatch");
 
         uint256[] memory tokenIds = new uint256[](recipients.length);
-        uint256 startTokenId = _tokenIdCounter.current();
-
         for (uint256 i = 0; i < recipients.length; i++) {
-            uint256 tokenId = startTokenId + i;
-            _mint(recipients[i], tokenId);
-            _setTokenURI(tokenId, uris[i]);
-            tokenIds[i] = tokenId;
+            tokenIds[i] = _tokenIdCounter.current();
+            _mint(recipients[i], tokenIds[i]);
+            _setTokenURI(tokenIds[i], uris[i]);
         }
 
         emit BatchMint(msg.sender, recipients, tokenIds, uris);

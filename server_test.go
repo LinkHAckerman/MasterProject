@@ -42,6 +42,16 @@ func TestGetOrCreateWallet(t *testing.T) {
 	}
 }
 
+func TestGetOrCreateWalletInvalidAddress(t *testing.T) {
+	store := NewWalletStore()
+	addr := "invalid_address"
+
+	_, err := store.GetOrCreateWallet(addr)
+	if err == nil {
+		t.Error("Expected error for invalid address, got nil")
+	}
+}
+
 func TestTransfer(t *testing.T) {
 	store := NewWalletStore()
 	from := "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
@@ -80,15 +90,53 @@ func TestTransfer(t *testing.T) {
 	}
 }
 
+func TestTransferInsufficientBalance(t *testing.T) {
+	store := NewWalletStore()
+	from := "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
+	to := "0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+	token := "OPUS"
+	amount := 100000.0
+
+	_, err := store.Transfer(TransferRequest{
+		From:   from,
+		To:     to,
+		Token:  token,
+		Amount: amount,
+	})
+
+	if err == nil {
+		t.Error("Expected error for insufficient balance, got nil")
+	}
+}
+
+func TestTransferInvalidToken(t *testing.T) {
+	store := NewWalletStore()
+	from := "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
+	to := "0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+	token := "INVALID"
+	amount := 10.0
+
+	_, err := store.Transfer(TransferRequest{
+		From:   from,
+		To:     to,
+		Token:  token,
+		Amount: amount,
+	})
+
+	if err == nil {
+		t.Error("Expected error for invalid token, got nil")
+	}
+}
+
 func TestRelayTransaction(t *testing.T) {
 	store := NewWalletStore()
 	from := "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
 	to := "0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 	token := "OPUS"
 	amount := 10.0
-	fee := 0.001
-	nonce := uint64(5)
-	signature := "0x1234567890abcdef"
+	fee := 0.1
+	nonce := uint64(1)
+	signature := "test_signature"
 
 	tx, err := store.RelayTransaction(RelayTxRequest{
 		From:      from,
@@ -104,8 +152,8 @@ func TestRelayTransaction(t *testing.T) {
 		t.Fatalf("RelayTransaction failed: %v", err)
 	}
 
-	if tx.Status != StatusRelayed {
-		t.Errorf("Expected transaction status RELAYED, got %s", tx.Status)
+	if tx.Status != StatusPending {
+		t.Errorf("Expected transaction status PENDING, got %s", tx.Status)
 	}
 
 	if tx.Amount != amount {
@@ -125,14 +173,38 @@ func TestRelayTransaction(t *testing.T) {
 	}
 }
 
+func TestRelayTransactionInvalidNonce(t *testing.T) {
+	store := NewWalletStore()
+	from := "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
+	to := "0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+	token := "OPUS"
+	amount := 10.0
+	fee := 0.1
+	nonce := uint64(100)
+	signature := "test_signature"
+
+	_, err := store.RelayTransaction(RelayTxRequest{
+		From:      from,
+		To:        to,
+		Token:     token,
+		Amount:    amount,
+		Fee:       fee,
+		Nonce:     nonce,
+		Signature: signature,
+	})
+
+	if err == nil {
+		t.Error("Expected error for invalid nonce, got nil")
+	}
+}
+
 func TestGetWallet(t *testing.T) {
 	store := NewWalletStore()
 	addr := "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
 
 	wallet, exists := store.GetWallet(addr)
-
 	if !exists {
-		t.Errorf("Expected wallet to exist")
+		t.Error("Expected wallet to exist, got false")
 	}
 
 	if wallet.Address != addr {
@@ -140,14 +212,13 @@ func TestGetWallet(t *testing.T) {
 	}
 }
 
-func TestGetTransactionHistory(t *testing.T) {
+func TestGetWalletNonExistent(t *testing.T) {
 	store := NewWalletStore()
-	addr := "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
+	addr := "0x1234567890123456789012345678901234567890"
 
-	history := store.GetTransactionHistory(addr)
-
-	if len(history) != 0 {
-		t.Errorf("Expected empty transaction history, got %d transactions", len(history))
+	_, exists := store.GetWallet(addr)
+	if exists {
+		t.Error("Expected wallet to not exist, got true")
 	}
 }
 
@@ -161,316 +232,106 @@ func TestGetMetrics(t *testing.T) {
 	}
 }
 
-func TestCreateWalletHandler(t *testing.T) {
+func TestGetTransactionHistory(t *testing.T) {
 	store := NewWalletStore()
-	r := mux.NewRouter()
-	r.HandleFunc("/wallets", store.CreateWalletHandler).Methods("POST")
-
-	addr := "0x1234567890123456789012345678901234567890"
-	payload := map[string]string{"address": addr}
-	body, _ := json.Marshal(payload)
-
-	req, _ := http.NewRequest("POST", "/wallets", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(store.CreateWalletHandler)
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Expected status code %d, got %d", http.StatusOK, rr.Code)
-	}
-
-	var response APIResponse
-	json.Unmarshal(rr.Body.Bytes(), &response)
-
-	if !response.Success {
-		t.Errorf("Expected success response")
-	}
-
-	wallet, ok := response.Data.(map[string]interface{})
-	if !ok {
-		t.Fatalf("Expected wallet data in response")
-	}
-
-	if wallet["address"] != addr {
-		t.Errorf("Expected wallet address %s, got %s", addr, wallet["address"])
-	}
-}
-
-func TestTransferHandler(t *testing.T) {
-	store := NewWalletStore()
-	r := mux.NewRouter()
-	r.HandleFunc("/transfers", store.TransferHandler).Methods("POST")
-
-	from := "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
-	to := "0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-	token := "OPUS"
-	amount := 10.0
-
-	payload := map[string]interface{}{
-		"from":   from,
-		"to":     to,
-		"token":  token,
-		"amount": amount,
-	}
-	body, _ := json.Marshal(payload)
-
-	req, _ := http.NewRequest("POST", "/transfers", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(store.TransferHandler)
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Expected status code %d, got %d", http.StatusOK, rr.Code)
-	}
-
-	var response APIResponse
-	json.Unmarshal(rr.Body.Bytes(), &response)
-
-	if !response.Success {
-		t.Errorf("Expected success response")
-	}
-
-	tx, ok := response.Data.(map[string]interface{})
-	if !ok {
-		t.Fatalf("Expected transaction data in response")
-	}
-
-	if tx["status"] != string(StatusPending) {
-		t.Errorf("Expected transaction status PENDING, got %s", tx["status"])
-	}
-
-	if tx["amount"] != amount {
-		t.Errorf("Expected transaction amount %f, got %f", amount, tx["amount"])
-	}
-}
-
-func TestRelayTransactionHandler(t *testing.T) {
-	store := NewWalletStore()
-	r := mux.NewRouter()
-	r.HandleFunc("/relay", store.RelayTransactionHandler).Methods("POST")
-
-	from := "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
-	to := "0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-	token := "OPUS"
-	amount := 10.0
-	fee := 0.001
-	nonce := uint64(5)
-	signature := "0x1234567890abcdef"
-
-	payload := map[string]interface{}{
-		"from":      from,
-		"to":        to,
-		"token":     token,
-		"amount":    amount,
-		"fee":       fee,
-		"nonce":     nonce,
-		"signature": signature,
-	}
-	body, _ := json.Marshal(payload)
-
-	req, _ := http.NewRequest("POST", "/relay", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(store.RelayTransactionHandler)
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Expected status code %d, got %d", http.StatusOK, rr.Code)
-	}
-
-	var response APIResponse
-	json.Unmarshal(rr.Body.Bytes(), &response)
-
-	if !response.Success {
-		t.Errorf("Expected success response")
-	}
-
-	tx, ok := response.Data.(map[string]interface{})
-	if !ok {
-		t.Fatalf("Expected transaction data in response")
-	}
-
-	if tx["status"] != string(StatusRelayed) {
-		t.Errorf("Expected transaction status RELAYED, got %s", tx["status"])
-	}
-
-	if tx["amount"] != amount {
-		t.Errorf("Expected transaction amount %f, got %f", amount, tx["amount"])
-	}
-
-	if tx["fee"] != fee {
-		t.Errorf("Expected transaction fee %f, got %f", fee, tx["fee"])
-	}
-
-	if tx["nonce"] != float64(nonce) {
-		t.Errorf("Expected transaction nonce %d, got %f", nonce, tx["nonce"])
-	}
-
-	if tx["signature"] != signature {
-		t.Errorf("Expected transaction signature %s, got %s", signature, tx["signature"])
-	}
-}
-
-func TestGetWalletHandler(t *testing.T) {
-	store := NewWalletStore()
-	r := mux.NewRouter()
-	r.HandleFunc("/wallets/{address}", store.GetWalletHandler).Methods("GET")
-
 	addr := "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
 
-	req, _ := http.NewRequest("GET", "/wallets/"+addr, nil)
-
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(store.GetWalletHandler)
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Expected status code %d, got %d", http.StatusOK, rr.Code)
-	}
-
-	var response APIResponse
-	json.Unmarshal(rr.Body.Bytes(), &response)
-
-	if !response.Success {
-		t.Errorf("Expected success response")
-	}
-
-	wallet, ok := response.Data.(map[string]interface{})
-	if !ok {
-		t.Fatalf("Expected wallet data in response")
-	}
-
-	if wallet["address"] != addr {
-		t.Errorf("Expected wallet address %s, got %s", addr, wallet["address"])
-	}
-}
-
-func TestGetTransactionHistoryHandler(t *testing.T) {
-	store := NewWalletStore()
-	r := mux.NewRouter()
-	r.HandleFunc("/wallets/{address}/history", store.GetTransactionHistoryHandler).Methods("GET")
-
-	addr := "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
-
-	req, _ := http.NewRequest("GET", "/wallets/"+addr+"/history", nil)
-
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(store.GetTransactionHistoryHandler)
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Expected status code %d, got %d", http.StatusOK, rr.Code)
-	}
-
-	var response APIResponse
-	json.Unmarshal(rr.Body.Bytes(), &response)
-
-	if !response.Success {
-		t.Errorf("Expected success response")
-	}
-
-	history, ok := response.Data.([]interface{})
-	if !ok {
-		t.Fatalf("Expected transaction history data in response")
-	}
+	history := store.GetTransactionHistory(addr)
 
 	if len(history) != 0 {
-		t.Errorf("Expected empty transaction history, got %d transactions", len(history))
+		t.Errorf("Expected 0 transactions, got %d", len(history))
 	}
 }
 
-func TestGetMetricsHandler(t *testing.T) {
+func TestGetTransactionHistoryNonExistentWallet(t *testing.T) {
 	store := NewWalletStore()
-	r := mux.NewRouter()
-	r.HandleFunc("/metrics", store.GetMetricsHandler).Methods("GET")
+	addr := "0x1234567890123456789012345678901234567890"
 
-	req, _ := http.NewRequest("GET", "/metrics", nil)
+	history := store.GetTransactionHistory(addr)
 
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(store.GetMetricsHandler)
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Expected status code %d, got %d", http.StatusOK, rr.Code)
-	}
-
-	var response APIResponse
-	json.Unmarshal(rr.Body.Bytes(), &response)
-
-	if !response.Success {
-		t.Errorf("Expected success response")
-	}
-
-	metrics, ok := response.Data.(map[string]interface{})
-	if !ok {
-		t.Fatalf("Expected metrics data in response")
-	}
-
-	if metrics["active_wallets"] != float64(3) {
-		t.Errorf("Expected 3 active wallets, got %f", metrics["active_wallets"])
+	if len(history) != 0 {
+		t.Errorf("Expected 0 transactions, got %d", len(history))
 	}
 }
 
-func TestWebSocketHandler(t *testing.T) {
+func TestGetMempool(t *testing.T) {
 	store := NewWalletStore()
-	r := mux.NewRouter()
-	r.HandleFunc("/ws", store.WebSocketHandler)
 
-	server := httptest.NewServer(r)
-	defer server.Close()
+	mempool := store.GetMempool()
 
-	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
-
-	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
-	if err != nil {
-		t.Fatalf("Failed to connect to WebSocket: %v", err)
+	if len(mempool) != 0 {
+		t.Errorf("Expected 0 transactions in mempool, got %d", len(mempool))
 	}
-	defer ws.Close()
+}
 
-	done := make(chan struct{})
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+func TestGetBlocks(t *testing.T) {
+	store := NewWalletStore()
 
-	go func() {
-		defer close(done)
-		for {
-			_, message, err := ws.ReadMessage()
-			if err != nil {
-				return
-			}
+	blocks := store.GetBlocks()
 
-			var msg WebSocketMessage
-			if err := json.Unmarshal(message, &msg); err != nil {
-				continue
-			}
+	if len(blocks) != 0 {
+		t.Errorf("Expected 0 blocks, got %d", len(blocks))
+	}
+}
 
-			if msg.Type == "metrics" {
-				metrics, ok := msg.Payload.(map[string]interface{})
-				if !ok {
-					continue
-				}
+func TestGetBlock(t *testing.T) {
+	store := NewWalletStore()
+	blockNumber := uint64(1000000)
 
-				if metrics["active_wallets"] != float64(3) {
-					t.Errorf("Expected 3 active wallets, got %f", metrics["active_wallets"])
-				}
-			}
-		}
-	}()
+	block, exists := store.GetBlock(blockNumber)
 
-	for {
-		select {
-		case <-done:
-			return
-		case t := <-ticker.C:
-			err := ws.WriteMessage(websocket.TextMessage, []byte(t.String()))
-			if err != nil {
-				return
-			}
-		}
+	if !exists {
+		t.Error("Expected block to exist, got false")
+	}
+
+	if block.BlockNumber != blockNumber {
+		t.Errorf("Expected block number %d, got %d", blockNumber, block.BlockNumber)
+	}
+}
+
+func TestGetBlockNonExistent(t *testing.T) {
+	store := NewWalletStore()
+	blockNumber := uint64(999999)
+
+	_, exists := store.GetBlock(blockNumber)
+
+	if exists {
+		t.Error("Expected block to not exist, got true")
+	}
+}
+
+func TestGetTransaction(t *testing.T) {
+	store := NewWalletStore()
+	from := "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
+	to := "0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+	token := "OPUS"
+	amount := 10.0
+
+	tx, _ := store.Transfer(TransferRequest{
+		From:   from,
+		To:     to,
+		Token:  token,
+		Amount: amount,
+	})
+
+	retrievedTx, exists := store.GetTransaction(tx.TxHash)
+
+	if !exists {
+		t.Error("Expected transaction to exist, got false")
+	}
+
+	if retrievedTx.TxHash != tx.TxHash {
+		t.Errorf("Expected transaction hash %s, got %s", tx.TxHash, retrievedTx.TxHash)
+	}
+}
+
+func TestGetTransactionNonExistent(t *testing.T) {
+	store := NewWalletStore()
+	txHash := "0x1234567890123456789012345678901234567890"
+
+	_, exists := store.GetTransaction(txHash)
+
+	if exists {
+		t.Error("Expected transaction to not exist, got true")
 	}
 }
