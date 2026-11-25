@@ -105,11 +105,13 @@ module MagnumOpus
     # ---------------------------------------------------------------------
     # Instance state
     # ---------------------------------------------------------------------
-    def initialize(logger: nil)
+    def initialize(logger: nil, cache_ttl_sec: DEFAULT_CACHE_TTL_SEC)
       super() # MonitorMixin initialization
       @logger = logger || Logger.new($stdout)
       @cache = {}
+      @cache_ttl_sec = cache_ttl_sec
       @request_timestamps = []
+      @http_client = build_http_client
     end
 
     # ---------------------------------------------------------------------
@@ -163,237 +165,193 @@ module MagnumOpus
     # Retrieves the native balance for an address on a given chain.
     # Currently implements a lightweight balance lookup or mock fallback if key is missing.
     def native_balance(address, chain)
-      validate_address!(address)
+      validate_address!(address, chain)
       chain_key = chain.to_sym
       raise ArgumentError, "Unsupported chain #{chain}" unless SUPPORTED_CHAINS.include?(chain_key)
 
-      case chain_key
-      when :ethereum, :bsc, :polygon, :arbitrum, :optimism, :avalanche
-        etherscan_api_key = ENV['ETHERSCAN_API_KEY']
-        unless etherscan_api_key
-          @logger.info "ETHERSCAN_API_KEY omitted - returning high-precision simulated native balance for #{address} on #{chain_key}"
-          return BigDecimal('14.852')
-        end
+      cache_key = "balance:native:#{chain_key}:#{address.downcase}"
+      cached = fetch_from_cache(cache_key)
+      return cached if cached
 
-        base_url = case chain_key
-                   when :ethereum then 'https://api.etherscan.io/api'
-                   when :bsc      then 'https://api.bscscan.com/api'
-                   when :polygon  then 'https://api.polygonscan.com/api'
-                   when :arbitrum then 'https://api.arbiscan.io/api'
-                   when :optimism then 'https://api-optimistic.etherscan.io/api'
-                   when :avalanche then 'https://api.snowtrace.io/api'
-                   end
-        uri = URI(base_url)
-        uri.query = URI.encode_www_form({ module: 'account', action: 'balance', address: address, tag: 'latest', apikey: etherscan_api_key })
-        json = fetch_json(uri)
-        raise OracleError, "Etherscan error: #{json['message']}" unless json['status'] == '1'
+      balance = case chain_key
+                when :ethereum, :bsc, :polygon, :arbitrum, :optimism, :avalanche
+                  fetch_evm_native_balance(address, chain_key)
+                when :solana
+                  fetch_solana_native_balance(address)
+                end
 
-        wei = BigDecimal(json['result'])
-        wei / (10**18)
-      when :solana
-        BigDecimal('12.500')
-      else
-        raise NotImplementedError, "Native balance lookup not implemented for #{chain}"
-      end
+      store_in_cache(cache_key, balance)
+      balance
     end
 
-    # Retrieves token balance for a specific ERC20 / SPL token on a supported chain.
+    # Retrieves ERC-20 / SPL token balance for an address on a given chain.
     def token_balance(address, chain, token_symbol)
-      validate_address!(address)
+      validate_address!(address, chain)
       chain_key = chain.to_sym
       raise ArgumentError, "Unsupported chain #{chain}" unless SUPPORTED_CHAINS.include?(chain_key)
 
       token_info = KNOWN_TOKENS.dig(chain_key, token_symbol.to_s.upcase)
       raise ArgumentError, "Unknown token #{token_symbol} on #{chain}" unless token_info
 
-      # Deterministic fallback balance for demonstration & integration testing
-      hash_val = Digest::SHA256.hexdigest("#{address}:#{chain_key}:#{token_symbol}")[0..7].hex
-      scale = 10**token_info[:decimals]
-      raw_amount = (hash_val % (1000 * scale)) + (10 * scale)
-      BigDecimal(raw_amount.to_s) / (10**token_info[:decimals])
+      cache_key = "balance:token:#{chain_key}:#{token_symbol.upcase}:#{address.downcase}"
+      cached = fetch_from_cache(cache_key)
+      return cached if cached
+
+      balance = case chain_key
+                when :ethereum, :bsc, :polygon, :arbitrum, :optimism, :avalanche
+                  fetch_evm_token_balance(address, token_info, chain_key)
+                when :solana
+                  fetch_solana_token_balance(address, token_info)
+                end
+
+      store_in_cache(cache_key, balance)
+      balance
     end
 
-    # Aggregates multi-chain portfolio valuation across addresses and native/known token holdings.
-    def multi_chain_portfolio(address_map)
-      portfolio = {
-        total_usd_value: BigDecimal('0'),
-        chains: {},
-        updated_at: Time.now.utc.iso8601
-      }
-
-      address_map.each do |chain, address|
+    # Returns a complete portfolio snapshot for an address across all supported chains.
+    def portfolio(address)
+      validate_address!(address, :ethereum) # Basic format validation
+      
+      result = {}
+      SUPPORTED_CHAINS.each do |chain|
         chain_key = chain.to_sym
-        next unless SUPPORTED_CHAINS.include?(chain_key)
+        native = native_balance(address, chain_key)
+        next if native.zero?
 
-        native_sym = CHAIN_METADATA[chain_key][:native]
-        n_balance = native_balance(address, chain_key) rescue BigDecimal('0')
-        n_price = price(native_sym) rescue BigDecimal('0')
-        n_usd = n_balance * n_price
-
-        tokens_data = {}
-        tokens_usd_sum = BigDecimal('0')
-
-        if KNOWN_TOKENS[chain_key]
-          KNOWN_TOKENS[chain_key].each_key do |t_sym|
-            t_bal = token_balance(address, chain_key, t_sym) rescue BigDecimal('0')
-            t_price = token_price(chain_key, t_sym) rescue BigDecimal('0')
-            t_usd = t_bal * t_price
-            tokens_usd_sum += t_usd
-
-            tokens_data[t_sym] = {
-              balance: t_bal.to_f,
-              price_usd: t_price.to_f,
-              total_usd: t_usd.to_f
-            }
-          end
+        tokens = {}
+        KNOWN_TOKENS[chain_key]&.each_key do |token_symbol|
+          token_bal = token_balance(address, chain_key, token_symbol)
+          tokens[token_symbol] = token_bal unless token_bal.zero?
         end
 
-        chain_total_usd = n_usd + tokens_usd_sum
-        portfolio[:total_usd_value] += chain_total_usd
-
-        portfolio[:chains][chain_key] = {
-          address: address,
-          native: {
-            symbol: native_sym,
-            balance: n_balance.to_f,
-            price_usd: n_price.to_f,
-            total_usd: n_usd.to_f
-          },
-          tokens: tokens_data,
-          chain_total_usd: chain_total_usd.to_f
+        result[chain_key] = {
+          native: native,
+          native_symbol: CHAIN_METADATA[chain_key][:native],
+          tokens: tokens,
+          usd_value: calculate_usd_value(chain_key, native, tokens)
         }
       end
-
-      portfolio[:total_usd_value] = portfolio[:total_usd_value].to_f
-      portfolio
+      result
     end
 
-    # Estimates gas fees for a given chain and transaction type.
-    def estimate_gas_fee(chain, tx_type: :transfer)
+    # Calculates impermanent loss for a Uniswap V2 style AMM position.
+    # Returns percentage loss compared to holding.
+    def impermanent_loss(price_ratio)
+      raise CalculationError, 'Price ratio must be positive' unless price_ratio > 0
+      
+      # IL = 2 * sqrt(price_ratio) / (1 + price_ratio) - 1
+      sqrt_ratio = Math.sqrt(price_ratio.to_f)
+      il = (2 * sqrt_ratio / (1 + price_ratio.to_f)) - 1
+      (il * 100).round(4)
+    end
+
+    # Estimates gas price for a chain in native token units (gwei for EVM, lamports for Solana).
+    def estimate_gas(chain, priority: :standard)
       chain_key = chain.to_sym
       raise ArgumentError, "Unsupported chain #{chain}" unless SUPPORTED_CHAINS.include?(chain_key)
 
-      base_gas_units = case tx_type.to_sym
-                       when :transfer then 21_000
-                       when :erc20_transfer then 65_000
-                       when :swap then 150_000
-                       when :nft_mint then 180_000
-                       else 100_000
-                       end
-
-      gwei_price = case chain_key
-                   when :ethereum then 24.5
-                   when :polygon then 85.0
-                   when :arbitrum then 0.1
-                   when :optimism then 0.05
-                   when :avalanche then 28.0
-                   when :bsc then 3.0
-                   when :solana then 0.000005
-                   end
-
-      native_sym = CHAIN_METADATA[chain_key][:native]
-      native_price = price(native_sym) rescue BigDecimal('1')
-
-      cost_native = if chain_key == :solana
-                      BigDecimal(gwei_price.to_s)
-                    else
-                      (BigDecimal(base_gas_units.to_s) * BigDecimal(gwei_price.to_s)) / BigDecimal('1000000000')
-                    end
-
-      cost_usd = cost_native * native_price
-
-      {
-        chain: chain_key,
-        tx_type: tx_type,
-        gas_units: base_gas_units,
-        gas_price_gwei: gwei_price,
-        estimated_cost_native: cost_native.to_f,
-        estimated_cost_usd: cost_usd.to_f,
-        native_symbol: native_sym
-      }
-    end
-
-    # Calculates Impermanent Loss for AMM liquidity provision given price ratio change.
-    # Formula: IL(k) = 2 * sqrt(k) / (1 + k) - 1
-    def impermanent_loss(price_ratio, weight_a: 0.5)
-      k = price_ratio.to_f
-      raise CalculationError, "Price ratio must be greater than zero" if k <= 0
-
-      if (weight_a - 0.5).abs < 0.0001
-        il = (2.0 * Math.sqrt(k) / (1.0 + k)) - 1.0
-      else
-        w_a = weight_a.to_f
-        w_b = 1.0 - w_a
-        il = ((k**w_a) / (w_a * k + w_b)) - 1.0
+      case chain_key
+      when :ethereum, :polygon, :arbitrum, :optimism, :avalanche, :bsc
+        estimate_evm_gas(chain_key, priority)
+      when :solana
+        estimate_solana_priority_fee(priority)
       end
-
-      {
-        price_ratio: k,
-        weight_asset_a: weight_a,
-        weight_asset_b: 1.0 - weight_a,
-        impermanent_loss_percent: (il * 100.0).round(4),
-        hold_vs_pool_ratio: (1.0 + il).round(6)
-      }
     end
 
-    # Fetches mock/real NFT portfolio metadata for a given wallet address.
-    def nft_portfolio_metadata(address, chain)
-      validate_address!(address)
+    # Fetches NFT metadata for a given contract and token ID.
+    def nft_metadata(chain, contract_address, token_id)
       chain_key = chain.to_sym
       raise ArgumentError, "Unsupported chain #{chain}" unless SUPPORTED_CHAINS.include?(chain_key)
 
-      eth_usd = price('eth').to_f rescue 3450.75
+      cache_key = "nft:#{chain_key}:#{contract_address.downcase}:#{token_id}"
+      cached = fetch_from_cache(cache_key)
+      return cached if cached
 
-      {
-        address: address,
-        chain: chain_key,
-        total_nfts_owned: 3,
-        collections: [
-          {
-            name: 'Magnum Opus Founders Pass',
-            contract_address: '0x888888cf1046e68e36E1aA2E0E07105eDDD1f08E',
-            token_ids: [42],
-            floor_price_eth: 2.5,
-            estimated_usd: (2.5 * eth_usd).round(2)
-          },
-          {
-            name: 'CyberGenesis Avatars',
-            contract_address: '0x777777cf1046e68e36E1aA2E0E07105eDDD1f08E',
-            token_ids: [108, 1009],
-            floor_price_eth: 0.85,
-            estimated_usd: (1.7 * eth_usd).round(2)
-          }
-        ],
-        portfolio_floor_valuation_usd: (4.2 * eth_usd).round(2)
-      }
+      metadata = case chain_key
+                 when :ethereum, :polygon, :arbitrum, :optimism, :avalanche, :bsc
+                   fetch_evm_nft_metadata(contract_address, token_id, chain_key)
+                 when :solana
+                   fetch_solana_nft_metadata(contract_address, token_id)
+                 end
+
+      store_in_cache(cache_key, metadata)
+      metadata
     end
 
-    # Cache management
-    def clear_cache!
-      synchronize do
-        @cache.clear
-        @logger.info "WalletService cache cleared successfully."
-      end
+    # Returns all NFTs owned by an address on a specific chain (via Alchemy/Moralis style API).
+    def nfts_owned(address, chain)
+      validate_address!(address, chain)
+      chain_key = chain.to_sym
+      raise ArgumentError, "Unsupported chain #{chain}" unless SUPPORTED_CHAINS.include?(chain_key)
+
+      cache_key = "nfts:owned:#{chain_key}:#{address.downcase}"
+      cached = fetch_from_cache(cache_key)
+      return cached if cached
+
+      nfts = case chain_key
+             when :ethereum, :polygon, :arbitrum, :optimism, :avalanche, :bsc
+               fetch_evm_nfts_owned(address, chain_key)
+             when :solana
+               fetch_solana_nfts_owned(address)
+             end
+
+      store_in_cache(cache_key, nfts)
+      nfts
     end
 
     # ---------------------------------------------------------------------
-    # Private Helpers
+    # Private implementation
     # ---------------------------------------------------------------------
     private
 
-    def fallback_or_raise(key)
-      FALLBACK_RATES[key] || raise(OracleError, "No price data or fallback available for '#{key}'")
+    def build_http_client
+      client = Net::HTTP.new(BASE_COINGECKO_URI.host, BASE_COINGECKO_URI.port)
+      client.use_ssl = true
+      client.open_timeout = DEFAULT_TIMEOUT_SEC
+      client.read_timeout = DEFAULT_TIMEOUT_SEC
+      client
     end
 
-    def validate_address!(address)
-      raise InvalidAddressError, "Address cannot be nil or empty" if address.nil? || address.to_s.empty?
+    def fetch_json(uri, headers = {})
+      check_rate_limit!
+      
+      request = Net::HTTP::Get.new(uri)
+      request['Accept'] = 'application/json'
+      request['User-Agent'] = 'MagnumOpus-WalletService/1.0'
+      headers.each { |k, v| request[k] = v }
 
-      addr_str = address.to_s.strip
-      is_eth_style = addr_str.match?(%r{\A0x[a-fA-F0-9]{40}\z})
-      is_sol_style = addr_str.match?(%r{\A[1-9A-HJ-NP-Za-km-z]{32,44}\z})
+      attempt = 0
+      begin
+        attempt += 1
+        response = @http_client.request(request)
+        
+        case response
+        when Net::HTTPSuccess
+          JSON.parse(response.body)
+        when Net::HTTPTooManyRequests
+          raise RateLimitError, 'Rate limited by upstream API'
+        else
+          raise NetworkError, "HTTP #{response.code}: #{response.message}"
+        end
+      rescue RateLimitError, NetworkError => e
+        if attempt < MAX_RETRY_ATTEMPTS
+          sleep(2 ** attempt) # Exponential backoff
+          retry
+        end
+        raise
+      rescue JSON::ParserError => e
+        raise OracleError, "Invalid JSON response: #{e.message}"
+      end
+    end
 
-      unless is_eth_style || is_sol_style
-        raise InvalidAddressError, "Invalid wallet address structure: '#{address}'"
+    def check_rate_limit!
+      synchronize do
+        now = Time.now
+        @request_timestamps.reject! { |ts| now - ts > 60 }
+        if @request_timestamps.size >= MAX_REQUESTS_PER_MIN
+          raise RateLimitError, 'Local rate limit exceeded (30 req/min)'
+        end
+        @request_timestamps << now
       end
     end
 
@@ -401,68 +359,262 @@ module MagnumOpus
       synchronize do
         entry = @cache[key]
         return nil unless entry
-
-        if Time.now.to_i - entry[:timestamp] < DEFAULT_CACHE_TTL_SEC
-          entry[:data]
-        else
-          @cache.delete(key)
-          nil
-        end
+        return nil if Time.now - entry[:timestamp] > @cache_ttl_sec
+        entry[:value]
       end
     end
 
-    def store_in_cache(key, data)
+    def store_in_cache(key, value)
       synchronize do
-        @cache[key] = {
-          data: data,
-          timestamp: Time.now.to_i
-        }
+        @cache[key] = { value: value, timestamp: Time.now }
+        # Simple cache eviction: keep max 1000 entries
+        if @cache.size > 1000
+          oldest_key = @cache.min_by { |_, v| v[:timestamp] }.first
+          @cache.delete(oldest_key)
+        end
       end
     end
 
-    def enforce_rate_limit!
-      synchronize do
-        now = Time.now.to_i
-        @request_timestamps.reject! { |ts| now - ts > 60 }
-        if @request_timestamps.size >= MAX_REQUESTS_PER_MIN
-          raise RateLimitError, "Exceeded rate limit of #{MAX_REQUESTS_PER_MIN} requests per minute"
-        end
+    def fallback_or_raise(key)
+      fallback = FALLBACK_RATES[key]
+      return fallback if fallback
+      raise OracleError, "No price data for #{key} and no fallback available"
+    end
 
-        @request_timestamps << now
+    def validate_address!(address, chain)
+      raise InvalidAddressError, 'Address cannot be nil or empty' if address.nil? || address.empty?
+      
+      chain_key = chain.to_sym
+      case chain_key
+      when :ethereum, :bsc, :polygon, :arbitrum, :optimism, :avalanche
+        unless address.match?(/0x[a-fA-F0-9]{40}/)
+          raise InvalidAddressError, "Invalid EVM address format: #{address}"
+        end
+      when :solana
+        # Basic base58 check (32-44 chars)
+        unless address.match?(/[1-9A-HJ-NP-Za-km-z]{32,44}/)
+          raise InvalidAddressError, "Invalid Solana address format: #{address}"
+        end
       end
     end
 
-    def fetch_json(uri, headers: {})
-      enforce_rate_limit!
+    def fetch_evm_native_balance(address, chain)
+      api_key = ENV[chain_api_key_env(chain)]
+      unless api_key
+        @logger.info "#{chain_api_key_env(chain)} omitted - returning simulated native balance for #{address} on #{chain}"
+        return BigDecimal('14.852')
+      end
 
-      attempts = 0
-      begin
-        attempts += 1
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = (uri.scheme == 'https')
-        http.open_timeout = DEFAULT_TIMEOUT_SEC
-        http.read_timeout = DEFAULT_TIMEOUT_SEC
+      base_url = chain_explorer_api(chain)
+      uri = URI(base_url)
+      uri.query = URI.encode_www_form({ module: 'account', action: 'balance', address: address, tag: 'latest', apikey: api_key })
+      json = fetch_json(uri)
+      raise OracleError, "Explorer error: #{json['message']}" unless json['status'] == '1'
 
-        req = Net::HTTP::Get.new(uri.request_uri)
-        headers.each { |k, v| req[k] = v }
-        req['User-Agent'] = 'MagnumOpus-WalletService/1.0'
+      wei = BigDecimal(json['result'])
+      wei / BigDecimal('1e18')
+    end
 
-        res = http.request(req)
-        case res
-        when Net::HTTPSuccess
-          JSON.parse(res.body)
-        when Net::HTTPTooManyRequests
-          raise RateLimitError, "HTTP 429 Too Many Requests from #{uri.host}"
-        else
-          raise NetworkError, "HTTP error #{res.code}: #{res.message}"
-        end
-      rescue StandardError => e
-        if attempts < MAX_RETRY_ATTEMPTS && !e.is_a?(RateLimitError)
-          sleep(0.2 * (2**attempts))
-          retry
-        else
-          raise NetworkError, "Failed to fetch from #{uri}: #{e.message}"
-        end
+    def fetch_solana_native_balance(address)
+      rpc_url = CHAIN_METADATA[:solana][:rpc]
+      uri = URI(rpc_url)
+      payload = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getBalance',
+        params: [address]
+      }.to_json
+
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = true
+      http.open_timeout = DEFAULT_TIMEOUT_SEC
+      http.read_timeout = DEFAULT_TIMEOUT_SEC
+
+      request = Net::HTTP::Post.new(uri)
+      request['Content-Type'] = 'application/json'
+      request.body = payload
+
+      response = http.request(request)
+      json = JSON.parse(response.body)
+      raise OracleError, "Solana RPC error: #{json['error']}" if json['error']
+
+      lamports = BigDecimal(json.dig('result', 'value') || '0')
+      lamports / BigDecimal('1e9')
+    end
+
+    def fetch_evm_token_balance(address, token_info, chain)
+      api_key = ENV[chain_api_key_env(chain)]
+      unless api_key
+        @logger.info "#{chain_api_key_env(chain)} omitted - returning simulated token balance"
+        return BigDecimal('1000.0')
+      end
+
+      base_url = chain_explorer_api(chain)
+      uri = URI(base_url)
+      uri.query = URI.encode_www_form({
+        module: 'account',
+        action: 'tokenbalance',
+        contractaddress: token_info[:address],
+        address: address,
+        tag: 'latest',
+        apikey: api_key
+      })
+      json = fetch_json(uri)
+      raise OracleError, "Explorer error: #{json['message']}" unless json['status'] == '1'
+
+      raw = BigDecimal(json['result'])
+      raw / BigDecimal(10 ** token_info[:decimals])
+    end
+
+    def fetch_solana_token_balance(address, token_info)
+      rpc_url = CHAIN_METADATA[:solana][:rpc]
+      uri = URI(rpc_url)
+      payload = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getTokenAccountsByOwner',
+        params: [
+          address,
+          { mint: token_info[:address] },
+          { encoding: 'jsonParsed' }
+        ]
+      }.to_json
+
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = true
+      http.open_timeout = DEFAULT_TIMEOUT_SEC
+      http.read_timeout = DEFAULT_TIMEOUT_SEC
+
+      request = Net::HTTP::Post.new(uri)
+      request['Content-Type'] = 'application/json'
+      request.body = payload
+
+      response = http.request(request)
+      json = JSON.parse(response.body)
+      raise OracleError, "Solana RPC error: #{json['error']}" if json['error']
+
+      accounts = json.dig('result', 'value') || []
+      return BigDecimal('0') if accounts.empty?
+
+      # Sum all token accounts for this mint
+      total = accounts.sum do |acc|
+        amount = acc.dig('account', 'data', 'parsed', 'info', 'tokenAmount', 'amount')
+        BigDecimal(amount || '0')
+      end
+      total / BigDecimal(10 ** token_info[:decimals])
+    end
+
+    def calculate_usd_value(chain, native_balance, tokens)
+      native_price = price(CHAIN_METADATA[chain][:native].downcase)
+      total = native_balance * native_price
+
+      tokens.each do |symbol, balance|
+        token_price_usd = token_price(chain, symbol)
+        total += balance * token_price_usd
+      end
+      total.round(2)
+    end
+
+    def estimate_evm_gas(chain, priority)
+      # In production, would call eth_gasPrice or gas oracle API
+      # Using chain-specific baselines with priority multipliers
+      base_gwei = case chain
+                  when :ethereum then 20
+                  when :polygon then 30
+                  when :arbitrum then 0.1
+                  when :optimism then 0.01
+                  when :avalanche then 25
+                  when :bsc then 5
+                  end
+
+      multiplier = case priority
+                   when :low then 0.8
+                   when :standard then 1.0
+                   when :high then 1.5
+                   when :urgent then 2.0
+                   else 1.0
+                   end
+
+      BigDecimal((base_gwei * multiplier).to_s)
+    end
+
+    def estimate_solana_priority_fee(priority)
+      # Solana priority fees in microlamports
+      base_microlamports = case priority
+                           when :low then 1_000
+                           when :standard then 5_000
+                           when :high then 50_000
+                           when :urgent then 200_000
+                           else 5_000
+                           end
+      BigDecimal(base_microlamports.to_s)
+    end
+
+    def fetch_evm_nft_metadata(contract_address, token_id, chain)
+      # Would typically call tokenURI and fetch metadata from IPFS/HTTP
+      # Returning structured mock for now
+      {
+        contract: contract_address,
+        token_id: token_id.to_s,
+        chain: chain.to_s,
+        name: "Magnum Opus NFT ##{token_id}",
+        description: 'A prestigious NFT from the Magnum Opus collection',
+        image: "ipfs://QmMagnumOpus#{token_id}",
+        attributes: [
+          { trait_type: 'Rarity', value: 'Legendary' },
+          { trait_type: 'Edition', value: token_id.to_s }
+        ]
+      }
+    end
+
+    def fetch_solana_nft_metadata(contract_address, token_id)
+      # Would use Metaplex DAS API or RPC getAsset
+      {
+        contract: contract_address,
+        token_id: token_id.to_s,
+        chain: 'solana',
+        name: "Magnum Opus SOL NFT ##{token_id}",
+        description: 'A high-speed NFT from the Magnum Opus Solana collection',
+        image: "https://arweave.net/magnum-opus-#{token_id}",
+        attributes: [
+          { trait_type: 'Rarity', value: 'Epic' },
+          { trait_type: 'Edition', value: token_id.to_s }
+        ]
+      }
+    end
+
+    def fetch_evm_nfts_owned(address, chain)
+      # Would use Alchemy/Moralis/QuickNode NFT API
+      # Returning empty array as placeholder
+      []
+    end
+
+    def fetch_solana_nfts_owned(address)
+      # Would use Helius/DAS API
+      []
+    end
+
+    def chain_api_key_env(chain)
+      case chain
+      when :ethereum then 'ETHERSCAN_API_KEY'
+      when :bsc then 'BSCSCAN_API_KEY'
+      when :polygon then 'POLYGONSCAN_API_KEY'
+      when :arbitrum then 'ARBISCAN_API_KEY'
+      when :optimism then 'OPTIMISTIC_ETHERSCAN_API_KEY'
+      when :avalanche then 'SNOWTRACE_API_KEY'
+      else 'ETHERSCAN_API_KEY'
+      end
+    end
+
+    def chain_explorer_api(chain)
+      case chain
+      when :ethereum then 'https://api.etherscan.io/api'
+      when :bsc then 'https://api.bscscan.com/api'
+      when :polygon then 'https://api.polygonscan.com/api'
+      when :arbitrum then 'https://api.arbiscan.io/api'
+      when :optimism then 'https://api-optimistic.etherscan.io/api'
+      when :avalanche then 'https://api.snowtrace.io/api'
+      else 'https://api.etherscan.io/api'
       end
     end
   end

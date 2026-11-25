@@ -201,6 +201,7 @@ namespace MagnumOpus {
                     current.push_back(current.back());
                 }
                 std::vector<std::string> nextLevel;
+                nextLevel.reserve(current.size() / 2);
                 for (size_t i = 0; i < current.size(); i += 2) {
                     nextLevel.push_back(Sha256::ComputeHash(current[i] + current[i + 1]));
                 }
@@ -224,6 +225,7 @@ namespace MagnumOpus {
                 proof.push_back(current[pairIdx]);
                 
                 std::vector<std::string> nextLevel;
+                nextLevel.reserve(current.size() / 2);
                 for (size_t i = 0; i < current.size(); i += 2) {
                     nextLevel.push_back(Sha256::ComputeHash(current[i] + current[i + 1]));
                 }
@@ -248,192 +250,515 @@ namespace MagnumOpus {
         }
     };
 
-    // ---------------------------------------------------------------------
-    // 2. BASIC TRANSACTION & BLOCK MODELS
-    // ---------------------------------------------------------------------
+    // High-performance Bloom Filter for fast event log topic filtering
+    class BloomFilter {
+    private:
+        std::vector<bool> bitset_;
+        size_t numHashFunctions_;
+
+        uint64_t HashN(const std::string& item, size_t seed) const {
+            uint64_t hash = 14695981039346656037ULL ^ seed;
+            for (char c : item) {
+                hash ^= static_cast<uint8_t>(c);
+                hash *= 1099511628211ULL;
+            }
+            return hash;
+        }
+
+    public:
+        BloomFilter(size_t size = 10000, size_t numHashes = 4)
+            : bitset_(size, false), numHashFunctions_(numHashes) {}
+
+        void Add(const std::string& item) {
+            for (size_t i = 0; i < numHashFunctions_; ++i) {
+                uint64_t hash = HashN(item, i * 0x9e3779b97f4a7c15ULL);
+                bitset_[hash % bitset_.size()] = true;
+            }
+        }
+
+        bool Contains(const std::string& item) const {
+            for (size_t i = 0; i < numHashFunctions_; ++i) {
+                uint64_t hash = HashN(item, i * 0x9e3779b97f4a7c15ULL);
+                if (!bitset_[hash % bitset_.size()]) return false;
+            }
+            return true;
+        }
+    };
+
+    // Sparse Merkle Tree for account state / key-value proof verification
+    class SparseMerkleTree {
+    private:
+        std::unordered_map<std::string, std::string> store_;
+        std::string defaultHash_;
+
+    public:
+        SparseMerkleTree() {
+            defaultHash_ = Sha256::ComputeHash("EMPTY_NODE");
+        }
+
+        void Update(const std::string& key, const std::string& value) {
+            std::string leafHash = Sha256::ComputeHash(key + ":" + value);
+            store_[key] = leafHash;
+        }
+
+        std::string GetRoot() const {
+            if (store_.empty()) return defaultHash_;
+            std::vector<std::string> hashes;
+            hashes.reserve(store_.size());
+            for (const auto& pair : store_) {
+                hashes.push_back(pair.second);
+            }
+            std::sort(hashes.begin(), hashes.end());
+            return MerkleTree::ComputeRoot(hashes);
+        }
+    };
+
+    // =========================================================================
+    // 2. BLOCK VERIFICATION & HEADER PROCESSING ENGINE
+    // =========================================================================
 
     struct Transaction {
-        std::string id;          // UUID or hash identifier
-        std::string from;
-        std::string to;
-        double amount;           // Simple double for demo purposes
-        std::string data;        // Optional memo
-        uint64_t timestamp;      // Unix epoch seconds
-        std::string hash;        // Cached hash of the transaction
+        std::string hash;
+        std::string sender;
+        std::string recipient;
+        double amount;
+        double fee;
+        uint64_t nonce;
+        std::string signature;
+        std::string payload;
+        uint64_t timestamp;
 
-        Transaction() = default;
-        Transaction(const std::string& f, const std::string& t, double amt, const std::string& d = "")
-            : from(f), to(t), amount(amt), data(d) {
-            timestamp = static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
-            id = generate_uuid();
-            hash = compute_hash();
+        std::string ComputeHash() const {
+            std::stringstream ss;
+            ss << sender << ":" << recipient << ":" << amount << ":"
+               << fee << ":" << nonce << ":" << payload << ":" << timestamp;
+            return Keccak256::ComputeHash(ss.str());
         }
+    };
 
-        std::string compute_hash() const {
-            std::ostringstream ss;
-            ss << from << to << std::fixed << std::setprecision(8) << amount << data << timestamp << id;
-            return Sha256::ComputeHash(ss.str());
-        }
-
-    private:
-        static std::string generate_uuid() {
-            static std::random_device rd;
-            static std::mt19937_64 gen(rd());
-            static std::uniform_int_distribution<uint64_t> dis(0, UINT64_MAX);
-            uint64_t part1 = dis(gen);
-            uint64_t part2 = dis(gen);
-            std::ostringstream oss;
-            oss << std::hex << std::setfill('0')
-                << std::setw(16) << part1 << std::setw(16) << part2;
-            return oss.str();
-        }
+    struct BlockHeader {
+        uint32_t version;
+        std::string previousBlockHash;
+        std::string merkleRoot;
+        uint64_t timestamp;
+        uint32_t targetBits;
+        uint64_t nonce;
     };
 
     struct Block {
-        uint64_t index;
-        std::string previous_hash;
-        uint64_t timestamp;
-        uint64_t nonce;
+        BlockHeader header;
         std::vector<Transaction> transactions;
-        std::string merkle_root;
         std::string hash;
-
-        Block() = default;
-        Block(uint64_t idx, const std::string& prev_hash, const std::vector<Transaction>& txs)
-            : index(idx), previous_hash(prev_hash), transactions(txs) {
-            timestamp = static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
-            merkle_root = MerkleTree::ComputeRoot(transaction_hashes());
-            nonce = 0;
-            hash = compute_hash();
-        }
-
-        std::vector<std::string> transaction_hashes() const {
-            std::vector<std::string> hashes;
-            hashes.reserve(transactions.size());
-            for (const auto& tx : transactions) {
-                hashes.push_back(tx.hash);
-            }
-            return hashes;
-        }
-
-        std::string compute_hash() const {
-            std::ostringstream ss;
-            ss << index << previous_hash << timestamp << nonce << merkle_root;
-            return Sha256::ComputeHash(ss.str());
-        }
     };
 
-    // ---------------------------------------------------------------------
-    // 3. SIMPLE BLOCKCHAIN IMPLEMENTATION WITH POW
-    // ---------------------------------------------------------------------
-
-    class Blockchain {
+    class BlockValidator {
     public:
-        Blockchain(uint32_t diff = 4) : difficulty(diff) {
-            // Genesis block
-            Block genesis(0, "0", {});
-            genesis.nonce = mine_nonce(genesis);
-            genesis.hash = genesis.compute_hash();
-            chain.push_back(std::move(genesis));
+        static std::string ComputeHeaderHash(const BlockHeader& header) {
+            std::stringstream ss;
+            ss << header.version << ":" << header.previousBlockHash << ":"
+               << header.merkleRoot << ":" << header.timestamp << ":"
+               << header.targetBits << ":" << header.nonce;
+            return DoubleSha256::Compute(ss.str());
         }
 
-        bool add_block(const std::vector<Transaction>& txs) {
-            const Block& last = chain.back();
-            Block newBlock(last.index + 1, last.hash, txs);
-            newBlock.nonce = mine_nonce(newBlock);
-            newBlock.hash = newBlock.compute_hash();
-            if (is_valid_new_block(newBlock, last)) {
-                chain.push_back(std::move(newBlock));
-                return true;
-            }
-            return false;
-        }
-
-        bool is_chain_valid() const {
-            for (size_t i = 1; i < chain.size(); ++i) {
-                const Block& prev = chain[i - 1];
-                const Block& curr = chain[i];
-                if (curr.previous_hash != prev.hash) return false;
-                if (curr.hash != curr.compute_hash()) return false;
-                if (!hash_meets_difficulty(curr.hash)) return false;
+        static bool MeetsTargetDifficulty(const std::string& hash, uint32_t targetBits) {
+            size_t requiredZeros = targetBits;
+            std::string hexPrefix = hash.substr(0, std::min(requiredZeros, hash.size()));
+            for (char c : hexPrefix) {
+                if (c != '0' && c != 'x') return false;
             }
             return true;
         }
 
-        const std::vector<Block>& get_chain() const { return chain; }
-
-    private:
-        std::vector<Block> chain;
-        uint32_t difficulty; // number of leading zero bits required
-
-        static bool hash_meets_difficulty(const std::string& hash) {
-            // Simple hex-prefix check: each leading '0' nibble represents 4 bits
-            size_t requiredZeros = 0;
-            // difficulty expressed in leading zero *nibbles*
-            // For demonstration we treat difficulty as number of leading zero hex chars
-            // (e.g., difficulty 4 => "0000...")
-            // This is a simplification; real PoW uses binary bits.
-            requiredZeros = 4; // fixed for demo; could be parameterized
-            for (size_t i = 2; i < 2 + requiredZeros; ++i) { // skip "0x"
-                if (hash[i] != '0') return false;
+        static bool ValidateBlock(const Block& block, uint32_t expectedBits) {
+            // 1. Verify Header Hash
+            std::string calculatedHash = ComputeHeaderHash(block.header);
+            if (!MeetsTargetDifficulty(calculatedHash, expectedBits)) {
+                return false;
             }
-            return true;
-        }
 
-        static uint64_t mine_nonce(Block& block) {
-            uint64_t nonce = 0;
-            while (true) {
-                block.nonce = nonce;
-                std::string candidate = block.compute_hash();
-                if (hash_meets_difficulty(candidate)) {
-                    return nonce;
+            // 2. Verify Merkle Root
+            std::vector<std::string> txHashes;
+            txHashes.reserve(block.transactions.size());
+            for (const auto& tx : block.transactions) {
+                txHashes.push_back(tx.hash);
+            }
+            std::string calculatedMerkleRoot = MerkleTree::ComputeRoot(txHashes);
+            if (calculatedMerkleRoot != block.header.merkleRoot) {
+                return false;
+            }
+
+            // 3. Verify Transactions Batch
+            for (const auto& tx : block.transactions) {
+                if (tx.hash != tx.ComputeHash()) {
+                    return false;
                 }
-                ++nonce;
             }
+
+            return true;
         }
 
-        static bool is_valid_new_block(const Block& newBlock, const Block& previousBlock) {
-            if (previousBlock.index + 1 != newBlock.index) return false;
-            if (newBlock.previous_hash != previousBlock.hash) return false;
-            if (newBlock.hash != newBlock.compute_hash()) return false;
-            if (!hash_meets_difficulty(newBlock.hash)) return false;
-            // Verify Merkle root matches transactions
-            if (newBlock.merkle_root != MerkleTree::ComputeRoot(newBlock.transaction_hashes())) return false;
-            return true;
+        static Block MineBlock(uint32_t version, const std::string& prevHash, const std::vector<Transaction>& txs, uint32_t targetBits, size_t maxThreads = 4) {
+            Block block;
+            block.header.version = version;
+            block.header.previousBlockHash = prevHash;
+            block.transactions = txs;
+            block.header.timestamp = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+            block.header.targetBits = targetBits;
+
+            std::vector<std::string> txHashes;
+            txHashes.reserve(txs.size());
+            for (const auto& tx : txs) {
+                txHashes.push_back(tx.hash);
+            }
+            block.header.merkleRoot = MerkleTree::ComputeRoot(txHashes);
+
+            std::atomic<bool> found(false);
+            std::atomic<uint64_t> winningNonce(0);
+            std::string winningHash;
+            std::mutex hashMutex;
+
+            std::vector<std::thread> workers;
+            workers.reserve(maxThreads);
+
+            for (size_t threadId = 0; threadId < maxThreads; ++threadId) {
+                workers.emplace_back([&, threadId]() {
+                    uint64_t startNonce = threadId * 1000000000ULL;
+                    BlockHeader localHeader = block.header;
+                    
+                    for (uint64_t nonce = startNonce; !found.load(std::memory_order_relaxed); ++nonce) {
+                        localHeader.nonce = nonce;
+                        std::string hash = ComputeHeaderHash(localHeader);
+                        if (MeetsTargetDifficulty(hash, targetBits)) {
+                            if (!found.exchange(true)) {
+                                winningNonce = nonce;
+                                std::lock_guard<std::mutex> lock(hashMutex);
+                                winningHash = hash;
+                            }
+                            break;
+                        }
+                        if (nonce % 500000 == 0 && found.load(std::memory_order_relaxed)) {
+                            break;
+                        }
+                    }
+                });
+            }
+
+            for (auto& worker : workers) {
+                if (worker.joinable()) worker.join();
+            }
+
+            block.header.nonce = winningNonce.load();
+            block.hash = winningHash;
+            return block;
         }
     };
 
-    // ---------------------------------------------------------------------
-    // 4. DEMONSTRATION / TEST DRIVER (compiled only with -DTEST)
-    // ---------------------------------------------------------------------
+    // =========================================================================
+    // 3. DEFI MATH & HIGH-FREQUENCY ORDERBOOK ENGINE
+    // =========================================================================
 
-#ifdef TEST
-    void demo() {
-        std::cout << "=== MagnumOpus CryptoEngine Demo ===" << std::endl;
-        // Create a few dummy transactions
-        std::vector<Transaction> txs;
-        txs.emplace_back("Alice", "Bob", 12.34, "Payment for services");
-        txs.emplace_back("Charlie", "Dave", 0.5678, "Gift");
-        txs.emplace_back("Eve", "Frank", 1000.0, "Salary");
+    class ConstantProductAMM {
+    private:
+        double reserve0_;
+        double reserve1_;
+        double feeBps_; // e.g. 30 = 0.3%
 
-        // Initialise blockchain with low difficulty for quick demo
-        Blockchain chain(1);
-        chain.add_block(txs);
+    public:
+        ConstantProductAMM(double initialReserve0, double initialReserve1, double feeBps = 30.0)
+            : reserve0_(initialReserve0), reserve1_(initialReserve1), feeBps_(feeBps) {}
 
-        const auto& blocks = chain.get_chain();
-        for (const auto& blk : blocks) {
-            std::cout << "Block " << blk.index << " hash: " << blk.hash << std::endl;
-            std::cout << "  Prev: " << blk.previous_hash << std::endl;
-            std::cout << "  MerkleRoot: " << blk.merkle_root << std::endl;
-            std::cout << "  Tx count: " << blk.transactions.size() << std::endl;
+        struct SwapResult {
+            double amountOut;
+            double newReserve0;
+            double newReserve1;
+            double priceImpact;
+            double feePaid;
+        };
+
+        SwapResult SwapExactIn(double amountIn, bool zeroToOne) {
+            double reserveIn = zeroToOne ? reserve0_ : reserve1_;
+            double reserveOut = zeroToOne ? reserve1_ : reserve0_;
+
+            double feePaid = amountIn * (feeBps_ / 10000.0);
+            double amountInWithFee = amountIn - feePaid;
+            double amountOut = (amountInWithFee * reserveOut) / (reserveIn + amountInWithFee);
+
+            double spotPriceBefore = reserveOut / reserveIn;
+            double spotPriceAfter = (reserveOut - amountOut) / (reserveIn + amountInWithFee);
+            double priceImpact = std::abs((spotPriceAfter - spotPriceBefore) / spotPriceBefore) * 100.0;
+
+            if (zeroToOne) {
+                reserve0_ += amountIn;
+                reserve1_ -= amountOut;
+            } else {
+                reserve1_ += amountIn;
+                reserve0_ -= amountOut;
+            }
+
+            return { amountOut, reserve0_, reserve1_, priceImpact, feePaid };
         }
-        std::cout << "Chain valid? " << (chain.is_chain_valid() ? "YES" : "NO") << std::endl;
+
+        static double CalculateImpermanentLoss(double priceRatio) {
+            if (priceRatio <= 0) return 0.0;
+            double sqrtRatio = std::sqrt(priceRatio);
+            double il = (2.0 * sqrtRatio / (1.0 + priceRatio)) - 1.0;
+            return std::abs(il) * 100.0;
+        }
+
+        std::pair<double, double> GetReserves() const {
+            return { reserve0_, reserve1_ };
+        }
+    };
+
+    class ConcentratedLiquidityMath {
+    public:
+        static double TickToPrice(int32_t tick) {
+            return std::pow(1.0001, static_cast<double>(tick));
+        }
+
+        static int32_t PriceToTick(double price) {
+            if (price <= 0) return 0;
+            return static_cast<int32_t>(std::floor(std::log(price) / std::log(1.0001)));
+        }
+
+        static double CalculateLiquidity(double amount0, double amount1, double priceCurrent, double priceLower, double priceUpper) {
+            double sqrtP = std::sqrt(priceCurrent);
+            double sqrtPa = std::sqrt(priceLower);
+            double sqrtPb = std::sqrt(priceUpper);
+
+            if (sqrtP <= sqrtPa) {
+                return amount0 * (sqrtPa * sqrtPb) / (sqrtPb - sqrtPa);
+            } else if (sqrtP < sqrtPb) {
+                double l0 = amount0 * (sqrtP * sqrtPb) / (sqrtPb - sqrtP);
+                double l1 = amount1 / (sqrtP - sqrtPa);
+                return std::min(l0, l1);
+            } else {
+                return amount1 / (sqrtPb - sqrtPa);
+            }
+        }
+    };
+
+    struct Order {
+        uint64_t id;
+        std::string trader;
+        bool isBuy;
+        double price;
+        double quantity;
+        uint64_t timestamp;
+    };
+
+    struct TradeMatch {
+        uint64_t buyOrderId;
+        uint64_t sellOrderId;
+        double price;
+        double quantity;
+        uint64_t timestamp;
+    };
+
+    class OrderBookEngine {
+    private:
+        // Bids sorted highest first, Asks sorted lowest first
+        std::map<double, std::deque<Order>, std::greater<double>> bids_;
+        std::map<double, std::deque<Order>, std::less<double>> asks_;
+        std::atomic<uint64_t> nextOrderId_{1};
+        std::mutex bookMutex_;
+
+    public:
+        uint64_t SubmitOrder(const std::string& trader, bool isBuy, double price, double quantity, std::vector<TradeMatch>& outMatches) {
+            std::lock_guard<std::mutex> lock(bookMutex_);
+            uint64_t orderId = nextOrderId_++;
+            Order incoming{ orderId, trader, isBuy, price, quantity, static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count()) };
+
+            if (isBuy) {
+                while (incoming.quantity > 0.000001 && !asks_.empty()) {
+                    auto bestAskIt = asks_.begin();
+                    double bestAskPrice = bestAskIt->first;
+                    if (incoming.price < bestAskPrice) break;
+
+                    auto& queue = bestAskIt->second;
+                    while (!queue.empty() && incoming.quantity > 0.000001) {
+                        Order& askOrder = queue.front();
+                        double tradeQty = std::min(incoming.quantity, askOrder.quantity);
+                        incoming.quantity -= tradeQty;
+                        askOrder.quantity -= tradeQty;
+
+                        outMatches.push_back({ incoming.id, askOrder.id, bestAskPrice, tradeQty, incoming.timestamp });
+
+                        if (askOrder.quantity <= 0.000001) {
+                            queue.pop_front();
+                        }
+                    }
+                    if (queue.empty()) {
+                        asks_.erase(bestAskIt);
+                    }
+                }
+                if (incoming.quantity > 0.000001) {
+                    bids_[incoming.price].push_back(incoming);
+                }
+            } else {
+                while (incoming.quantity > 0.000001 && !bids_.empty()) {
+                    auto bestBidIt = bids_.begin();
+                    double bestBidPrice = bestBidIt->first;
+                    if (incoming.price > bestBidPrice) break;
+
+                    auto& queue = bestBidIt->second;
+                    while (!queue.empty() && incoming.quantity > 0.000001) {
+                        Order& bidOrder = queue.front();
+                        double tradeQty = std::min(incoming.quantity, bidOrder.quantity);
+                        incoming.quantity -= tradeQty;
+                        bidOrder.quantity -= tradeQty;
+
+                        outMatches.push_back({ bidOrder.id, incoming.id, bestBidPrice, tradeQty, incoming.timestamp });
+
+                        if (bidOrder.quantity <= 0.000001) {
+                            queue.pop_front();
+                        }
+                    }
+                    if (queue.empty()) {
+                        bids_.erase(bestBidIt);
+                    }
+                }
+                if (incoming.quantity > 0.000001) {
+                    asks_[incoming.price].push_back(incoming);
+                }
+            }
+            return orderId;
+        }
+
+        std::pair<double, double> GetSpread() const {
+            std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(bookMutex_));
+            if (bids_.empty() || asks_.empty()) return { 0.0, 0.0 };
+            return { bids_.begin()->first, asks_.begin()->first };
+        }
+    };
+
+    // =========================================================================
+    // 4. CONCURRENT MEMPOOL ENGINE WITH ANTI-MEV PROTECTION
+    // =========================================================================
+
+    class HighPerformanceMempool {
+    private:
+        struct TxPriorityComparator {
+            bool operator()(const Transaction& a, const Transaction& b) const {
+                if (std::abs(a.fee - b.fee) > 0.000001) {
+                    return a.fee < b.fee; // Higher fee gets higher priority
+                }
+                return a.timestamp > b.timestamp;
+            }
+        };
+
+        mutable std::shared_mutex poolMutex_;
+        std::unordered_map<std::string, Transaction> allTxs_;
+        std::priority_queue<Transaction, std::vector<Transaction>, TxPriorityComparator> priorityQueue_;
+        std::unordered_map<std::string, uint64_t> accountNonces_;
+        BloomFilter duplicateFilter_{50000, 5};
+
+    public:
+        bool AddTransaction(const Transaction& tx) {
+            std::unique_lock<std::shared_mutex> lock(poolMutex_);
+            
+            if (duplicateFilter_.Contains(tx.hash)) {
+                if (allTxs_.find(tx.hash) != allTxs_.end()) {
+                    return false; // Duplicate transaction
+                }
+            }
+
+            uint64_t currentNonce = accountNonces_[tx.sender];
+            if (tx.nonce < currentNonce) {
+                return false; // Stale nonce
+            }
+
+            duplicateFilter_.Add(tx.hash);
+            allTxs_[tx.hash] = tx;
+            priorityQueue_.push(tx);
+            accountNonces_[tx.sender] = std::max(accountNonces_[tx.sender], tx.nonce + 1);
+            return true;
+        }
+
+        std::vector<Transaction> GetTopTransactions(size_t count) {
+            std::shared_lock<std::shared_mutex> lock(poolMutex_);
+            std::vector<Transaction> result;
+            result.reserve(std::min(count, allTxs_.size()));
+
+            auto tempQueue = priorityQueue_;
+            while (!tempQueue.empty() && result.size() < count) {
+                result.push_back(tempQueue.top());
+                tempQueue.pop();
+            }
+            return result;
+        }
+
+        bool DetectSandwichMEV(const Transaction& tx) const {
+            std::shared_lock<std::shared_mutex> lock(poolMutex_);
+            size_t matchingSenderCount = 0;
+            for (const auto& pair : allTxs_) {
+                if (pair.second.sender == tx.sender && std::abs((int64_t)pair.second.timestamp - (int64_t)tx.timestamp) < 2) {
+                    matchingSenderCount++;
+                }
+            }
+            return matchingSenderCount >= 2;
+        }
+
+        size_t Size() const {
+            std::shared_lock<std::shared_mutex> lock(poolMutex_);
+            return allTxs_.size();
+        }
+    };
+
+    // =========================================================================
+    // 5. ENGINE FACADE & C-API BRIDGING MODULE
+    // =========================================================================
+
+    class CryptoEngineFacade {
+    private:
+        HighPerformanceMempool mempool_;
+        OrderBookEngine orderBook_;
+        ConstantProductAMM amm_{ 1000000.0, 350000000.0, 30.0 }; // 1M TokenA / 350M USDT
+        SparseMerkleTree stateTree_;
+
+    public:
+        static CryptoEngineFacade& Instance() {
+            static CryptoEngineFacade instance;
+            return instance;
+        }
+
+        std::string BenchmarkHashing(size_t iterations) {
+            auto start = std::chrono::high_resolution_clock::now();
+            std::string sample = "MagnumOpus_Transaction_Payload_Data_Block_Header_Seed_2025";
+            for (size_t i = 0; i < iterations; ++i) {
+                sample = Sha256::ComputeHash(sample + std::to_string(i));
+            }
+            auto end = std::chrono::high_resolution_clock::now();
+            double durationMs = std::chrono::duration<double, std::milli>(end - start).count();
+            
+            std::stringstream ss;
+            ss << "Executed " << iterations << " hashes in " << std::fixed << std::setprecision(2)
+               << durationMs << " ms (" << (iterations / (durationMs / 1000.0)) << " ops/sec). Final hash: "
+               << sample;
+            return ss.str();
+        }
+
+        HighPerformanceMempool& GetMempool() { return mempool_; }
+        OrderBookEngine& GetOrderBook() { return orderBook_; }
+        ConstantProductAMM& GetAMM() { return amm_; }
+        SparseMerkleTree& GetStateTree() { return stateTree_; }
+    };
+
+}
+
+// Optional C-ABI exported wrapper functions for high-speed foreign function interfacing (FFI)
+extern "C" {
+    const char* MagnumOpus_ComputeKeccak256(const char* input) {
+        static thread_local std::string result;
+        result = MagnumOpus::Keccak256::ComputeHash(input ? input : "");
+        return result.c_str();
     }
 
-    int main() {
-        demo();
-        return 0;
+    const char* MagnumOpus_BenchmarkEngine(size_t count) {
+        static thread_local std::string benchResult;
+        benchResult = MagnumOpus::CryptoEngineFacade::Instance().BenchmarkHashing(count);
+        return benchResult.c_str();
     }
-#endif // TEST
-
-} // namespace MagnumOpus
+}

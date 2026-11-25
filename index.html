@@ -92,7 +92,7 @@
             <div class="card">
                 <div class="card-header">
                     <h2>
-                        <span>📊 Real-Time Multi-Asset &amp; Yield Analytics</span>
+                        <span>\ud83d\udcca Real-Time Multi-Asset &amp; Yield Analytics</span>
                     </h2>
                     <div class="card-actions">
                         <span class="card-badge">LIVE FEED</span>
@@ -123,7 +123,7 @@
             <!-- DEX Swap & Liquidity Routing Engine -->
             <div class="card margin-top">
                 <div class="card-header">
-                    <h2>⚡ Instant DEX &amp; Multi-Chain Liquidity Swap</h2>
+                    <h2>\u26a1 Instant DEX &amp; Multi-Chain Liquidity Swap</h2>
                     <span class="card-badge">ZERO SLIPPAGE ROUTER</span>
                 </div>
                 <div class="swap-interface">
@@ -144,7 +144,7 @@
                     </div>
 
                     <div class="swap-divider">
-                        <button class="swap-icon-btn" id="switch-tokens-btn">⇅</button>
+                        <button class="swap-icon-btn" id="switch-tokens-btn">\u21c5</button>
                     </div>
 
                     <div class="swap-box">
@@ -181,215 +181,68 @@
             <!-- Recent Cross-Chain Transactions & Mempool Table -->
             <div class="card margin-top">
                 <div class="card-header">
-                    <h2>📑 Real-Time Mempool &amp; Transaction Ledger</h2>
-                    <div class="table-filters">
-                        <button class="outline-btn sm active" id="filter-all-tx">All</button>
-                        <button class="outline-btn sm" id="filter-gossip-tx">P2P Gossiped</button>
-                        <button class="outline-btn sm" id="filter-solana-tx">Solana On-Chain</button>
-                    </div>
+                    <h2>Recent Cross-Chain Transactions &amp; Mempool</h2>
                 </div>
-                <div class="table-container">
-                    <table id="tx-table">
+                <div class="table-responsive">
+                    <table class="transactions-table">
                         <thead>
-                            <tr>
-                                <th>Tx Hash</th>
-                                <th>Type</th>
-                                <th>Chain</th>
-                                <th>Amount</th>
-                                <th>Status</th>
-                                <th>Latency</th>
-                            </tr>
+                            <tr><th>TxHash</th><th>From</th><th>To</th><th>Amount</th><th>Status</th></tr>
                         </thead>
                         <tbody id="tx-table-body">
-                            <tr>
-                                <td><span class="hash-text">0x7a9f...4b12</span></td>
-                                <td>DEX Swap</td>
-                                <td>Ethereum</td>
-                                <td>2.50 ETH</td>
-                                <td><span class="status-pill status-completed">Confirmed</span></td>
-                                <td>1.2s</td>
-                            </tr>
-                            <tr>
-                                <td><span class="hash-text">0x3c2b...9e88</span></td>
-                                <td>P2P Gossip Broadcast</td>
-                                <td>Magnum L2</td>
-                                <td>1,500 OPUS</td>
-                                <td><span class="status-pill status-gossiped">Gossiped</span></td>
-                                <td>4ms</td>
-                            </tr>
-                            <tr>
-                                <td><span class="hash-text">5Kz8v...mQ1p</span></td>
-                                <td>Anchor Vault Stake</td>
-                                <td>Solana</td>
-                                <td>25.0 SOL</td>
-                                <td><span class="status-pill status-completed">Confirmed</span></td>
-                                <td>400ms</td>
-                            </tr>
-                            <tr>
-                                <td><span class="hash-text">0x8f11...0a34</span></td>
-                                <td>Cross-Chain Bridge</td>
-                                <td>Arbitrum -&gt; Sol</td>
-                                <td>5,000 USDT</td>
-                                <td><span class="status-pill status-pending">Pending</span></td>
-                                <td>Processing</td>
-                            </tr>
+                            <!-- rows injected by JS -->
                         </tbody>
                     </table>
                 </div>
             </div>
         </div>
 
-        <!-- Right Column: Microservices, Cross-Chain Bridge, Gossip Telemetry & NFTs -->
+        <!-- Right Column: Wallet Overview -->
         <div class="col-4">
-            <!-- Wallet & Multi-Chain Balances Card -->
             <div class="card">
-                <div class="card-header">
-                    <h2>💳 Wallet Balances</h2>
-                    <span class="card-badge" id="wallet-status-badge">CONNECTED</span>
-                </div>
-                <div class="balance-list">
-                    <div class="balance-item">
-                        <div class="asset-info">
-                            <div class="asset-icon eth-icon">Ξ</div>
-                            <div>
-                                <span class="asset-symbol">Ethereum</span>
-                                <span class="asset-name">ETH</span>
-                            </div>
-                        </div>
-                        <div class="asset-value-box">
-                            <span class="asset-balance" id="eth-balance-val">14.852</span>
-                            <span class="asset-usd">$43,813.40</span>
-                        </div>
-                    </div>
-                    <div class="balance-item">
-                        <div class="asset-info">
-                            <div class="asset-icon opus-icon">M</div>
-                            <div>
-                                <span class="asset-symbol">Magnum Opus</span>
-                                <span class="asset-name">OPUS</span>
-                            </div>
-                        </div>
-                        <div class="asset-value-box">
-                            <span class="asset-balance" id="opus-balance-val">10,000.00</span>
-                            <span class="asset-usd">$425,000.00</span>
-                        </div>
-                    </div>
-                    <div class="balance-item">
-                        <div class="asset-info">
-                            <div class="asset-icon sol-icon">◎</div>
-                            <div>
-                                <span class="asset-symbol">Solana</span>
-                                <span class="asset-name">SOL</span>
-                            </div>
-                        </div>
-                        <div class="asset-value-box">
-                            <span class="asset-balance" id="sol-balance-val">12.50</span>
-                            <span class="asset-usd">$1,875.00</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Cross-Chain Microservice Bridge (Go + C# Powered) -->
-            <div class="card margin-top">
-                <div class="card-header">
-                    <h2>🌉 Cross-Chain Bridge</h2>
-                    <span class="card-badge">GO RELAYER ACTIVE</span>
-                </div>
-                <div class="bridge-form">
-                    <div class="form-group">
-                        <label class="form-label">From Source Network</label>
-                        <select class="styled-select full-width" id="bridge-source-net">
-                            <option value="eth">Ethereum Mainnet</option>
-                            <option value="arb">Arbitrum One</option>
-                            <option value="poly">Polygon POS</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">To Destination Network</label>
-                        <select class="styled-select full-width" id="bridge-target-net">
-                            <option value="sol">Solana On-Chain Program</option>
-                            <option value="magnum">Magnum L2 Engine</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Transfer Amount</label>
-                        <input type="number" class="swap-input full-width" id="bridge-amount-input" placeholder="0.00" value="250.00"/>
-                    </div>
-                    <button class="primary-btn execute-btn" id="bridge-submit-btn">Initiate Bridge Transfer</button>
-                </div>
-            </div>
-
-            <!-- Elixir OTP Peer-to-Peer Gossip Telemetry -->
-            <div class="card margin-top">
-                <div class="card-header">
-                    <h2>📡 Elixir OTP Gossip Terminal</h2>
-                    <span class="card-badge">GossipNode.ex</span>
-                </div>
-                <div class="terminal-box">
-                    <div class="terminal-logs" id="terminal-logs">
-                        <p class="log-entry"><span class="log-time">[14:20:01]</span> <span class="log-info">[OTP Supervisor]</span> GossipNode.Application initialized.</p>
-                        <p class="log-entry"><span class="log-time">[14:20:02]</span> <span class="log-success">[GenServer]</span> Mempool state registered in ETS table.</p>
-                        <p class="log-entry"><span class="log-time">[14:20:05]</span> <span class="log-warn">[Gossip]</span> Peer 192.168.1.42 broadcasted 14 new transactions.</p>
-                    </div>
-                    <div class="terminal-input-row">
-                        <input type="text" class="terminal-input" id="terminal-cmd-input" placeholder="Type command (e.g., status, mempool, peers)..."/>
-                        <button class="outline-btn sm" id="terminal-send-btn">Send</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- NFT Marketplace Vault Showcase -->
-            <div class="card margin-top">
-                <div class="card-header">
-                    <h2>🖼️ Opus NFT Prime Vault</h2>
-                    <button class="outline-btn sm" id="view-all-nfts-btn">View All</button>
-                </div>
-                <div class="nft-grid">
-                    <div class="nft-item">
-                        <div class="nft-image-placeholder nft-1"></div>
-                        <div class="nft-info">
-                            <span class="nft-title">Genesis Opus #001</span>
-                            <span class="nft-price">Floor: 4.5 ETH</span>
-                        </div>
-                    </div>
-                    <div class="nft-item">
-                        <div class="nft-image-placeholder nft-2"></div>
-                        <div class="nft-info">
-                            <span class="nft-title">Cyber Core #042</span>
-                            <span class="nft-price">Floor: 12.0 SOL</span>
-                        </div>
-                    </div>
-                </div>
+                <div class="card-header"><h2>Wallet Overview</h2></div>
+                <ul class="wallet-balance-list">
+                    <li>ETH: <span id="balance-eth">14.852</span></li>
+                    <li>BTC: <span id="balance-btc">0.65</span></li>
+                    <li>SOL: <span id="balance-sol">12.5</span></li>
+                    <li>USDT: <span id="balance-usdt">42500.00</span></li>
+                    <li>OPUS: <span id="balance-opus">10000.0</span></li>
+                </ul>
             </div>
         </div>
     </main>
-
-    <!-- Modal: Wallet Connect -->
-    <div class="modal-overlay" id="wallet-modal" style="display: none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>Connect Wallet</h3>
-                <button class="close-btn" id="close-modal-btn">&times;</button>
-            </div>
-            <div class="modal-body">
-                <button class="wallet-option-btn" id="connect-metamask">
-                    <span>MetaMask (Web3)</span>
-                    <span class="badge">ETH / L2</span>
-                </button>
-                <button class="wallet-option-btn" id="connect-phantom">
-                    <span>Phantom (Solana)</span>
-                    <span class="badge">SOL</span>
-                </button>
-                <button class="wallet-option-btn" id="connect-magnum-vault">
-                    <span>Magnum Native Core</span>
-                    <span class="badge">C++ / Go</span>
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Scripts -->
+    <footer>
+        <p>© 2026 Magnum Opus. All rights reserved.</p>
+    </footer>
     <script src="app.js"></script>
+    <script>
+        // Simple UI interactions
+        document.getElementById('connect-wallet-btn').addEventListener('click', async () => {
+            if (window.ethereum) {
+                try {
+                    const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
+                    const address = accounts[0];
+                    document.getElementById('wallet-btn-text').textContent = address.slice(0,6)+'...'+address.slice(-4);
+                    // In a real implementation, fetch balances via backend APIs
+                } catch (err) {
+                    console.error(err);
+                }
+            } else {
+                alert('MetaMask not detected. Please install it.');
+            }
+        });
+
+        // Mock transaction table population
+        const mockTxs = [
+            {hash:'0xabc123', from:'0x111', to:'0x222', amount:'1.5 ETH', status:'Confirmed'},
+            {hash:'0xdef456', from:'0x333', to:'0x444', amount:'0.8 BTC', status:'Pending'},
+            {hash:'0xghi789', from:'0x555', to:'0x666', amount:'2500 USDT', status:'Confirmed'}
+        ];
+        const tbody = document.getElementById('tx-table-body');
+        mockTxs.forEach(tx => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${tx.hash}</td><td>${tx.from}</td><td>${tx.to}</td><td>${tx.amount}</td><td>${tx.status}</td>`;
+            tbody.appendChild(tr);
+        });
+    </script>
 </body>
 </html>
