@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-active%20development-orange.svg)](#project-status-read-this-first)
 [![Not audited](https://img.shields.io/badge/security-not%20audited-red.svg)](SECURITY.md)
-[![Build](https://img.shields.io/badge/Build-Passing-brightgreen)](https://github.com/LinkHAckerman/MasterProject/actions)
+[![Daily Agent](https://img.shields.io/badge/CI-daily%20agent-blueviolet)](.github/workflows/daily_agent.yml)
 
 **[Live Dashboard Demo](https://linkhackerman.github.io/MasterProject/index.html) | [Contribute](CONTRIBUTING.md) | [Security](SECURITY.md)**
 
@@ -24,12 +24,13 @@
 3. [Architecture & Component Map](#architecture--component-map)
 4. [Repository Layout](#repository-layout)
 5. [Quick Start & Validation](#quick-start--validation)
-6. [Automation and AI Agent Pipeline](#automation-and-ai-agent-pipeline)
-7. [Project Documents](#project-documents)
-8. [Known Limitations](#known-limitations)
-9. [Roadmap](#roadmap)
-10. [Contributing](#contributing)
-11. [License](#license)
+6. [Testing](#testing)
+7. [Automation and AI Agent Pipeline](#automation-and-ai-agent-pipeline)
+8. [Project Documents](#project-documents)
+9. [Known Limitations](#known-limitations)
+10. [Roadmap](#roadmap)
+11. [Contributing](#contributing)
+12. [License](#license)
 
 ---
 
@@ -48,7 +49,7 @@
 | **On-Chain Program** | Rust (Solana / Anchor) | `OnChainProgram.rs` | Memory-safe on-chain vault program with account state validation and instruction routing |
 | **Glue & Oracle Layer** | Ruby | `WalletService.rb` | Balance aggregation, rate caching, mock oracles, and cross-tier transaction utilities |
 | **P2P Gossip Network** | Elixir (OTP) | `GossipNode.ex` | Supervised peer-to-peer gossip node, OTP GenServer mempool, peer discovery and registry |
-| **Validation & Automation** | Python 3 | `validate_files.py`, `ai_agent*.py` | Multi-model agent automation pipeline and syntax validation test suite |
+| **Validation & Automation** | Python 3 | `validate_files.py`, `agent_common.py`, `ai_agent*.py` | Multi-model agent automation pipeline and syntax validation test suite |
 
 ---
 
@@ -122,7 +123,7 @@ flowchart TD
 - **`WalletService.rb`**: Ruby utility service providing currency conversions, oracle rate aggregation, and mock transaction signing routines.
 - **`GossipNode.ex`**: Elixir OTP application featuring a supervised P2P gossip server, GenServer mempool, peer registry, and transaction broadcast mechanisms.
 - **`validate_files.py`**: Python script that validates syntax across all repository source files (JS, C++, C#, Solidity, Go, SQL, Rust, Ruby, Elixir).
-- **`ai_agent.py` & provider scripts**: Autonomous AI agents managing automated daily file enhancements and code generation across LLM providers.
+- **`agent_common.py` & `ai_agent*.py`**: Shared utilities and provider-specific autonomous agents managing automated daily file enhancements and code generation across LLM providers.
 
 ---
 
@@ -133,7 +134,6 @@ MasterProject/
 ├── .github/
 │   └── workflows/
 │       └── daily_agent.yml      # GitHub Actions daily agent workflow
-├── .coauthors.tmp               # Temporary agent co-authors file
 ├── CLA.md                       # Contributor License Agreement
 ├── CODE_OF_CONDUCT.md           # Community Code of Conduct
 ├── CONTRIBUTING.md              # Contribution Guidelines
@@ -158,87 +158,143 @@ MasterProject/
 ├── index.html                   # Web3 Dashboard UI
 ├── scaffold/
 │   └── test.txt                 # Test scaffold reference
-├── schema.sql                   # PostgreSQL Database Schema
-├── server.go                    # Go Transaction Relayer & Server
-├── styles.css                   # Dark-Theme CSS Stylesheet
-└── validate_files.py            # Integrity and Syntax Validation Script
+├── schema.sql                   # PostgreSQL Schema Definition
+├── server.go                    # Go Microservice Relayer
+├── server_test.go               # Go unit tests for the relayer
+├── styles.css                   # Dashboard Styling System
+├── validate_files.py            # Multi-language syntax validation suite
+└── wallet_service_test.rb       # Ruby unit tests for WalletService
 ```
 
 ---
 
 ## Quick Start & Validation
 
-### 1. Clone the Repository
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/LinkHAckerman/MasterProject.git
 cd MasterProject
 ```
 
-### 2. Validate Source Files
+### 2. Run the dashboard
 
-Run the syntax validator script to ensure all components pass format and syntax checks:
+The frontend is dependency-free. Open `index.html` directly in a browser, or serve the directory locally:
+
+```bash
+python3 -m http.server 8080
+# then visit http://localhost:8080/index.html
+```
+
+### 3. Validate every source file
+
+`validate_files.py` performs syntax checks across the JavaScript, C++, C#, Solidity, Go, SQL, Rust, Ruby, and Elixir sources:
 
 ```bash
 python3 validate_files.py
 ```
 
-### 3. Launch Frontend Dashboard
+### 4. Run the Go relayer
 
-Open `index.html` directly in any standard Web browser, or serve it using Python's built-in HTTP server:
+`server.go` depends on `gorilla/mux`, `gorilla/websocket`, and `golang.org/x/time/rate`. A `go.mod` is not yet committed, so initialise the module first:
 
 ```bash
-python3 -m http.server 8000
+go mod init github.com/LinkHAckerman/MasterProject
+go get github.com/gorilla/mux github.com/gorilla/websocket golang.org/x/time/rate
+go run server.go
 ```
 
-Then visit `http://localhost:8000` in your web browser.
+### 5. Load the database schema
+
+```bash
+psql -d magnum_opus -f schema.sql
+```
+
+### 6. Compile the remaining components
+
+Each component is self-contained and can be built with its native toolchain:
+
+```bash
+g++ -std=c++20 -O2 -pthread CryptoEngine.cpp -o crypto_engine   # C++ engine
+dotnet build TransactionProcessor.cs                            # C# ledger core
+elixir GossipNode.ex                                            # Elixir gossip node
+ruby WalletService.rb                                           # Ruby wallet service
+```
+
+> Solidity contracts target `^0.8.20` and the Rust program targets the Solana Anchor framework; use your preferred toolchain (Hardhat/Foundry, `anchor build`) to compile them.
+
+---
+
+## Testing
+
+Two unit-test suites ship with the repository:
+
+| Suite | Command | Covers |
+|---|---|---|
+| Go relayer | `go test ./...` | Wallet store initialisation, HTTP handlers, WebSocket broadcast (`server_test.go`) |
+| Ruby wallet service | `ruby wallet_service_test.rb` | Price lookups, rate caching, conversion math (`wallet_service_test.rb`) |
+
+The Ruby suite uses `minitest`, which ships with the Ruby standard library. The Go suite requires the module dependencies listed above.
 
 ---
 
 ## Automation and AI Agent Pipeline
 
-This repository incorporates an automated maintenance and enhancement pipeline driven by Python scripts (`ai_agent.py`, `ai_agent_*.py`, `agent_common.py`) executed via GitHub Actions (`.github/workflows/daily_agent.yml`).
+The repository is maintained with an AI-assisted workflow:
 
-The agent pipeline:
-1. Selects source files based on recency and maintenance needs.
-2. Formats requests for supported AI providers (GitHub Models, Groq, Mistral, OpenRouter, Cloudflare).
-3. Evaluates changes using `validate_files.py` to ensure code integrity before committing updates.
+- **`agent_common.py`** — shared helpers (provider configuration, file I/O, prompt assembly) used by every agent.
+- **`ai_agent.py`** — the primary orchestration pipeline that selects a file, invokes a provider, and writes the result.
+- **`ai_agent_cloudflare.py`, `ai_agent_github_models.py`, `ai_agent_groq.py`, `ai_agent_mistral.py`, `ai_agent_openrouter.py`** — provider-specific adapters for each supported LLM backend.
+- **`.github/workflows/daily_agent.yml`** — the scheduled GitHub Actions workflow that runs the agent pipeline.
+- **`validate_files.py`** — the guardrail that syntax-checks every generated file before it is accepted.
+
+Agents require provider API credentials supplied through environment variables or repository secrets; no keys are committed to the repository.
 
 ---
 
 ## Project Documents
 
-- **[LICENSE](LICENSE)**: MIT License terms.
-- **[CONTRIBUTING.md](CONTRIBUTING.md)**: Guidelines for contributing code and improvements.
-- **[CLA.md](CLA.md)**: Contributor License Agreement.
-- **[SECURITY.md](SECURITY.md)**: Security policy, threat model, and reporting guidelines.
-- **[TERMS.md](TERMS.md)**: Terms of service and usage disclaimers.
-- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)**: Community standards and rules of behavior.
+| Document | Purpose |
+|---|---|
+| [LICENSE](LICENSE) | MIT license terms |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to propose changes and open pull requests |
+| [CLA.md](CLA.md) | Contributor License Agreement |
+| [SECURITY.md](SECURITY.md) | Vulnerability disclosure policy and security posture |
+| [TERMS.md](TERMS.md) | Terms of service and disclaimers |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Community standards and enforcement |
 
 ---
 
 ## Known Limitations
 
-- **Multi-Language Execution Integration**: Individual source files (`CryptoEngine.cpp`, `TransactionProcessor.cs`, `SmartContract.sol`, `server.go`, `schema.sql`, `OnChainProgram.rs`, `WalletService.rb`, `GossipNode.ex`) represent standalone architectural reference implementations rather than a unified single-binary runtime.
-- **Simulated RPC & Chain States**: The frontend dashboard communicates with local mock state handlers rather than live mainnet RPC nodes.
-- **Non-Audited Security**: Code is designed for educational exploration and architectural design patterns; it has not been audited by third-party security firms.
+- **No formal audit.** Contracts, the on-chain program, and cryptographic code are unaudited and must not be used with real funds.
+- **No committed `go.mod`.** The Go service must be initialised manually before it will build.
+- **Standalone components.** There is no end-to-end integration harness wiring the tiers together; each component is exercised independently.
+- **Simulated data.** Dashboard balances, market rates, and transaction receipts are mock values.
+- **No container or deployment manifests.** The repository does not currently ship Docker, Helm, or Kubernetes configuration.
+- **Single-file components.** Each language tier lives in one source file for readability, not for production packaging.
 
 ---
 
 ## Roadmap
 
-- **Planned**: Integration of automated unit test suites for individual language components.
-- **Planned**: Docker Compose configuration for orchestrating local service execution.
-- **Planned**: Enhanced WebAssembly (WASM) build targets for executing C++ and Rust engines directly in the browser.
+*Planned work — none of the items below exist in the repository yet.*
+
+- Commit a `go.mod` / `go.sum` so the relayer builds without manual setup.
+- Add a CI workflow that compiles and tests every language tier on each push.
+- Provide a `docker-compose.yml` to run the relayer, database, and gossip node together.
+- Add integration tests that exercise the frontend → relayer → ledger path.
+- Expand the validation suite to cover Solidity and Rust compilation, not just syntax.
+- Pursue a third-party security review before any non-educational use.
 
 ---
 
 ## Contributing
 
-We welcome community contributions! Please review [CONTRIBUTING.md](CONTRIBUTING.md) and [CLA.md](CLA.md) before submitting pull requests or opening issues.
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md), sign the [CLA.md](CLA.md), and follow the [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Security issues should be reported privately per [SECURITY.md](SECURITY.md) rather than through public issues.
 
 ---
 
 ## License
 
-This project is open-source software licensed under the [MIT License](LICENSE).
+Released under the [MIT License](LICENSE). See [TERMS.md](TERMS.md) for the full disclaimer regarding educational use.
