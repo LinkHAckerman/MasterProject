@@ -227,9 +227,10 @@ contract MagnumOpusNFT is
 
         uint256[] memory tokenIds = new uint256[](recipients.length);
         for (uint256 i = 0; i < recipients.length; i++) {
-            tokenIds[i] = _tokenIdCounter.current();
-            _mint(recipients[i], tokenIds[i]);
-            _setTokenURI(tokenIds[i], uris[i]);
+            uint256 tokenId = _tokenIdCounter.current();
+            _mint(recipients[i], tokenId);
+            _setTokenURI(tokenId, uris[i]);
+            tokenIds[i] = tokenId;
         }
 
         emit BatchMint(msg.sender, recipients, tokenIds, uris);

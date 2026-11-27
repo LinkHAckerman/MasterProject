@@ -5,7 +5,7 @@
     const state = {
         wallet: {
             connected: false,
-            address: null,
+            address: '0x71a48c9f2b1d3e4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f89e',
             balanceEth: 14.852,
             balanceUsdt: 42500.00,
             balanceBtc: 0.65,
@@ -38,16 +38,24 @@
             low24h: 3310.50,
             timeframe: '24H',
             chartData: {
-                labels: [],
-                prices: [],
-                volumes: []
+                labels: ['00:00', '04:00', '08:00', '12:00', '16:00', '20:00'],
+                prices: [3310.50, 3350.00, 3400.25, 3380.00, 3420.50, 3450.75],
+                volumes: [120000, 150000, 110000, 180000, 200000, 250000]
             }
         },
         orderBook: {
-            bids: [],
-            asks: [],
+            bids: [
+                { price: 3450.50, amount: 1.2 },
+                { price: 3450.25, amount: 0.5 },
+                { price: 3449.00, amount: 2.1 }
+            ],
+            asks: [
+                { price: 3451.00, amount: 0.8 },
+                { price: 3451.25, amount: 1.5 },
+                { price: 3452.50, amount: 0.3 }
+            ],
             maxDepth: 12,
-            spread: 0.05
+            spread: 0.5
         },
         swap: {
             fromToken: 'ETH',
@@ -75,7 +83,7 @@
                 priceVal: 2.5,
                 rarity: 'Legendary',
                 rank: 4,
-                image: '\u001b[38;5;208m\u001b[48;5;16m\u001b[1m\u001b[3m\u001b[4m\u001b[5m\u001b[7m\u001b[8m\u001b[9m\u001b[30m\u001b[31m\u001b[32m\u001b[33m\u001b[34m\u001b[35m\u001b[36m\u001b[37m\u001b[40m\u001b[41m\u001b[42m\u001b[43m\u001b[44m\u001b[45m\u001b[46m\u001b[47m\u001b[0m',
+                image: 'https://via.placeholder.com/300/030611/00ffcc?text=Cyber+Opus+001',
                 attributes: [
                     { trait: 'Background', value: 'Neon Nebula' },
                     { trait: 'Core', value: 'Quantum Heart' },
@@ -90,7 +98,7 @@
                 priceVal: 1.2,
                 rarity: 'Rare',
                 rank: 142,
-                image: '\u001b[38;5;208m\u001b[48;5;16m\u001b[1m\u001b[3m\u001b[4m\u001b[5m\u001b[7m\u001b[8m\u001b[9m\u001b[30m\u001b[31m\u001b[32m\u001b[33m\u001b[34m\u001b[35m\u001b[36m\u001b[37m\u001b[40m\u001b[41m\u001b[42m\u001b[43m\u001b[44m\u001b[45m\u001b[46m\u001b[47m\u001b[0m',
+                image: 'https://via.placeholder.com/300/030611/00ffcc?text=Cyber+Opus+042',
                 attributes: [
                     { trait: 'Background', value: 'Deep Cyber' },
                     { trait: 'Core', value: 'Plasma Engine' },
@@ -105,7 +113,7 @@
                 priceVal: 0.85,
                 rarity: 'Epic',
                 rank: 45,
-                image: '\u001b[38;5;208m\u001b[48;5;16m\u001b[1m\u001b[3m\u001b[4m\u001b[5m\u001b[7m\u001b[8m\u001b[9m\u001b[30m\u001b[31m\u001b[32m\u001b[33m\u001b[34m\u001b[35m\u001b[36m\u001b[37m\u001b[40m\u001b[41m\u001b[42m\u001b[43m\u001b[44m\u001b[45m\u001b[46m\u001b[47m\u001b[0m',
+                image: 'https://via.placeholder.com/300/030611/00ffcc?text=Aether+Shield+108',
                 attributes: [
                     { trait: 'Power', value: 'Yield Multiplier 2.5x' },
                     { trait: 'Element', value: 'Starlight' }
@@ -119,7 +127,7 @@
                 priceVal: 3.1,
                 rarity: 'Mythic',
                 rank: 1,
-                image: '\u001b[38;5;208m\u001b[48;5;16m\u001b[1m\u001b[3m\u001b[4m\u001b[5m\u001b[7m\u001b[8m\u001b[9m\u001b[30m\u001b[31m\u001b[32m\u001b[33m\u001b[34m\u001b[35m\u001b[36m\u001b[37m\u001b[40m\u001b[41m\u001b[42m\u001b[43m\u001b[44m\u001b[45m\u001b[46m\u001b[47m\u001b[0m',
+                image: 'https://via.placeholder.com/300/030611/00ffcc?text=Vortex+Sentinel+777',
                 attributes: [
                     { trait: 'Power', value: 'Zero Gas Transmutation' },
                     { trait: 'Element', value: 'Dark Matter' }
@@ -216,246 +224,168 @@
                 gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
                 osc.start(now);
                 osc.stop(now + 0.2);
-            } else if (type === 'error') {
-                osc.type = 'square';
-                osc.frequency.setValueAtTime(200, now);
-                gain.gain.setValueAtTime(0.12, now);
-                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
-                osc.start(now);
-                osc.stop(now + 0.4);
             }
         }
     };
 
-    // Utility Functions -----------------------------------------------------
-    const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 });
-    function formatNumber(num) {
-        if (typeof num !== 'number') return num;
-        return fmt.format(num);
-    }
+    // UI Controller
+    const UI = {
+        init() {
+            this.bindEvents();
+            this.renderDashboard();
+            this.startRealtimeUpdates();
+        },
 
-    function debounce(fn, delay) {
-        let timer;
-        return function (...args) {
-            clearTimeout(timer);
-            timer = setTimeout(() => fn.apply(this, args), delay);
-        };
-    }
-
-    // DOM Rendering ----------------------------------------------------------
-    function renderWallet() {
-        const walletEl = document.getElementById('wallet-summary');
-        if (!walletEl) return;
-        const { address, balanceEth, balanceUsdt, balanceBtc, balanceSol, balanceOpus, networkName } = state.wallet;
-        walletEl.innerHTML = `
-            <div class="wallet-address">${address ? address : 'Not Connected'}</div>
-            <div class="network-name">${networkName}</div>
-            <div class="balances">
-                <span>ETH: ${formatNumber(balanceEth)}</span>
-                <span>USDT: ${formatNumber(balanceUsdt)}</span>
-                <span>BTC: ${formatNumber(balanceBtc)}</span>
-                <span>SOL: ${formatNumber(balanceSol)}</span>
-                <span>OPUS: ${formatNumber(balanceOpus)}</span>
-            </div>
-        `;
-    }
-
-    function renderMarket() {
-        const marketEl = document.getElementById('market-summary');
-        if (!marketEl) return;
-        const { selectedPair, price, change24h, volume24h, high24h, low24h } = state.market;
-        marketEl.innerHTML = `
-            <div class="pair">${selectedPair}</div>
-            <div class="price">$${formatNumber(price)}</div>
-            <div class="change ${change24h >= 0 ? 'up' : 'down'}">${change24h.toFixed(2)}%</div>
-            <div class="details">
-                <span>24h Vol: ${formatNumber(volume24h)}</span>
-                <span>High: $${formatNumber(high24h)}</span>
-                <span>Low: $${formatNumber(low24h)}</span>
-            </div>
-        `;
-    }
-
-    function renderSwap() {
-        const fromInput = document.getElementById('swap-from-amount');
-        const toInput = document.getElementById('swap-to-amount');
-        if (!fromInput || !toInput) return;
-        fromInput.value = state.swap.fromAmount;
-        toInput.value = state.swap.toAmount;
-    }
-
-    function renderTransactions() {
-        const txList = document.getElementById('tx-list');
-        if (!txList) return;
-        txList.innerHTML = state.transactions.map(tx => `
-            <li class="tx-item ${tx.status.toLowerCase()}">
-                <span class="hash">${tx.displayHash}</span>
-                <span class="type">${tx.type}</span>
-                <span class="desc">${tx.description}</span>
-                <span class="amount">${tx.amount}</span>
-                <span class="status">${tx.status}</span>
-                <span class="time">${new Date(tx.timestamp).toLocaleString()}</span>
-            </li>
-        `).join('');
-    }
-
-    // Core Interaction Logic -------------------------------------------------
-    async function fetchMarketData() {
-        // Mock fetch – in a real app replace with actual API call
-        return new Promise(resolve => {
-            setTimeout(() => {
-                const mock = {
-                    price: (3400 + Math.random() * 200).toFixed(2),
-                    change24h: (Math.random() * 10 - 5).toFixed(2),
-                    volume24h: Math.floor(1e9 + Math.random() * 5e8),
-                    high24h: (3500 + Math.random() * 100).toFixed(2),
-                    low24h: (3300 - Math.random() * 100).toFixed(2)
-                };
-                resolve(mock);
-            }, 500);
-        });
-    }
-
-    async function updateMarket() {
-        const data = await fetchMarketData();
-        state.market.price = parseFloat(data.price);
-        state.market.change24h = parseFloat(data.change24h);
-        state.market.volume24h = data.volume24h;
-        state.market.high24h = parseFloat(data.high24h);
-        state.market.low24h = parseFloat(data.low24h);
-        renderMarket();
-    }
-
-    function calculateSwap() {
-        const fromToken = state.swap.fromToken;
-        const toToken = state.swap.toToken;
-        const fromAmt = parseFloat(state.swap.fromAmount);
-        if (isNaN(fromAmt) || fromAmt <= 0) {
-            state.swap.toAmount = '';
-            renderSwap();
-            return;
-        }
-        // Simple price based conversion using market.price for ETH/USDT pair
-        let rate = 1;
-        if (fromToken === 'ETH' && toToken === 'USDT') {
-            rate = state.market.price; // ETH price in USDT
-        } else if (fromToken === 'USDT' && toToken === 'ETH') {
-            rate = 1 / state.market.price;
-        } else {
-            // For other pairs, mock a 1:1 rate for demo purposes
-            rate = 1;
-        }
-        const toAmt = (fromAmt * rate * (1 - state.swap.slippage / 100)).toFixed(6);
-        state.swap.toAmount = toAmt;
-        renderSwap();
-    }
-
-    const debouncedCalc = debounce(calculateSwap, 300);
-
-    // Event Listeners --------------------------------------------------------
-    function bindUI() {
-        const connectBtn = document.getElementById('btn-connect');
-        if (connectBtn) {
-            connectBtn.addEventListener('click', () => {
-                // Mock wallet connection
-                state.wallet.connected = true;
-                state.wallet.address = '0xDEMO' + Math.floor(Math.random() * 10000).toString(16).padStart(4, '0');
-                SoundEngine.play('success');
-                renderWallet();
+        bindEvents() {
+            document.querySelectorAll('.btn-action').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    SoundEngine.play('click');
+                    const action = e.currentTarget.dataset.action;
+                    this.handleAction(action);
+                });
             });
-        }
 
-        const fromInput = document.getElementById('swap-from-amount');
-        const toSelect = document.getElementById('swap-to-token');
-        const fromSelect = document.getElementById('swap-from-token');
-        const swapBtn = document.getElementById('btn-swap');
+            document.getElementById('connect-wallet')?.addEventListener('click', () => this.connectWallet());
+            
+            // Swap Input Handlers
+            const swapFrom = document.getElementById('swap-from-amount');
+            const swapTo = document.getElementById('swap-to-amount');
 
-        if (fromInput) {
-            fromInput.addEventListener('input', e => {
-                state.swap.fromAmount = e.target.value;
-                debouncedCalc();
-                SoundEngine.play('click');
+            swapFrom?.addEventListener('input', (e) => {
+                const val = e.target.value;
+                state.swap.fromAmount = val;
+                this.calculateSwap(val, 'from');
             });
-        }
-        if (fromSelect) {
-            fromSelect.addEventListener('change', e => {
-                state.swap.fromToken = e.target.value;
-                calculateSwap();
-                SoundEngine.play('click');
+
+            swapTo?.addEventListener('input', (e) => {
+                const val = e.target.value;
+                state.swap.toAmount = val;
+                this.calculateSwap(val, 'to');
             });
-        }
-        if (toSelect) {
-            toSelect.addEventListener('change', e => {
-                state.swap.toToken = e.target.value;
-                calculateSwap();
-                SoundEngine.play('click');
-            });
-        }
-        if (swapBtn) {
-            swapBtn.addEventListener('click', () => {
-                // Mock swap execution
-                if (!state.wallet.connected) {
-                    alert('Connect wallet first');
-                    SoundEngine.play('error');
-                    return;
+        },
+
+        handleAction(action) {
+            console.log(`Executing action: ${action}`);
+            if (action === 'swap') {
+                SoundEngine.play('swap');
+                // Logic for swap execution would go here
+            }
+        },
+
+        connectWallet() {
+            state.wallet.connected = true;
+            SoundEngine.play('success');
+            this.renderDashboard();
+            alert('Wallet Connected: ' + state.wallet.address);
+        },
+
+        calculateSwap(val, direction) {
+            if (!val || isNaN(val)) return;
+            const numVal = parseFloat(val);
+            if (direction === 'from') {
+                const rate = state.market.price;
+                state.swap.toAmount = (numVal * rate).toFixed(2);
+            } else {
+                const rate = state.market.price;
+                state.swap.fromAmount = (numVal / rate).toFixed(6);
+            }
+            this.updateSwapUI();
+        },
+
+        updateSwapUI() {
+            const fromInput = document.getElementById('swap-from-amount');
+            const toInput = document.getElementById('swap-to-amount');
+            if (fromInput) fromInput.value = state.swap.fromAmount;
+            if (toInput) toInput.value = state.swap.toAmount;
+        },
+
+        renderDashboard() {
+            // Render Wallet Balance
+            const balanceEl = document.getElementById('wallet-balance');
+            if (balanceEl) {
+                balanceEl.textContent = `$${(state.wallet.balanceEth * state.market.price + state.wallet.balanceUsdt).toLocaleString()}`;
+            }
+
+            // Render Token List
+            const tokenList = document.getElementById('token-list');
+            if (tokenList) {
+                tokenList.innerHTML = state.wallet.tokens.map(token => `
+                    <div class="token-item">
+                        <div class="token-info">
+                            <span class="token-symbol">${token.symbol}</span>
+                            <span class="token-name">${token.name}</span>
+                        </div>
+                        <div class="token-balance">
+                            <span class="token-amount">${token.balance.toFixed(4)}</span>
+                            <span class="token-price">$${token.price.toLocaleString()}</span>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            // Render Transactions
+            const txList = document.getElementById('transaction-list');
+            if (txList) {
+                txList.innerHTML = state.transactions.map(tx => `
+                    <div class="tx-item">
+                        <div class="tx-meta">
+                            <span class="tx-type">${tx.type}</span>
+                            <span class="tx-hash">${tx.displayHash}</span>
+                        </div>
+                        <div class="tx-details">
+                            <span class="tx-desc">${tx.description}</span>
+                            <span class="tx-amount ${tx.amount.startsWith('+') ? 'text-success' : 'text-danger'}">${tx.amount}</span>
+                        </div>
+                        <div class="tx-status">${tx.status}</div>
+                    </div>
+                `).join('');
+            }
+
+            // Render NFTs
+            const nftGrid = document.getElementById('nft-grid');
+            if (nftGrid) {
+                nftGrid.innerHTML = state.nfts.map(nft => `
+                    <div class="nft-card">
+                        <img src="${nft.image}" alt="${nft.name}" class="nft-img">
+                        <div class="nft-info">
+                            <h4>${nft.name}</h4>
+                            <p>${nft.rarity}</p>
+                            <div class="nft-price">${nft.price}</div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        },
+
+        startRealtimeUpdates() {
+            setInterval(() => {
+                // Simulate market volatility
+                const volatility = (Math.random() - 0.5) * 10;
+                state.market.price += volatility;
+                state.market.change24h += (volatility / 100);
+                
+                // Update UI elements without full re-render for performance
+                const priceEl = document.getElementById('market-price');
+                if (priceEl) priceEl.textContent = `$${state.market.price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                
+                const changeEl = document.getElementById('market-change');
+                if (changeEl) {
+                    changeEl.textContent = `${state.market.change24h > 0 ? '+' : ''}${state.market.change24h.toFixed(2)}%`;
+                    changeEl.className = `market-change ${state.market.change24h >= 0 ? 'text-success' : 'text-danger'}`;
                 }
-                if (!state.swap.fromAmount || !state.swap.toAmount) {
-                    alert('Enter amount');
-                    SoundEngine.play('error');
-                    return;
+
+                // Update Swap calculation if amount is present
+                if (state.swap.fromAmount) {
+                    this.calculateSwap(state.swap.fromAmount, 'from');
                 }
-                // Update balances (very naive)
-                const fromTok = state.wallet.tokens.find(t => t.symbol === state.swap.fromToken);
-                const toTok = state.wallet.tokens.find(t => t.symbol === state.swap.toToken);
-                const fromAmtNum = parseFloat(state.swap.fromAmount);
-                const toAmtNum = parseFloat(state.swap.toAmount);
-                if (fromTok && fromTok.balance >= fromAmtNum) {
-                    fromTok.balance -= fromAmtNum;
-                    toTok.balance += toAmtNum;
-                    // Add transaction record
-                    const tx = {
-                        hash: '0x' + Math.random().toString(16).substr(2, 64),
-                        displayHash: '',
-                        type: 'Swap',
-                        description: `Swapped ${fromAmtNum} ${fromTok.symbol} for ${toAmtNum} ${toTok.symbol}`,
-                        amount: `-${fromAmtNum} ${fromTok.symbol}`,
-                        status: 'Pending',
-                        timestamp: Date.now(),
-                        blockNumber: null
-                    };
-                    tx.displayHash = tx.hash.slice(0, 6) + '...' + tx.hash.slice(-4);
-                    state.transactions.unshift(tx);
-                    renderTransactions();
-                    renderWallet();
-                    SoundEngine.play('swap');
-                    // Simulate confirmation after 2 seconds
-                    setTimeout(() => {
-                        tx.status = 'Confirmed';
-                        tx.blockNumber = Math.floor(19000000 + Math.random() * 100000);
-                        renderTransactions();
-                        SoundEngine.play('success');
-                    }, 2000);
-                } else {
-                    alert('Insufficient balance');
-                    SoundEngine.play('error');
-                }
-            });
+            }, state.settings.autoRefreshInterval);
         }
-    }
+    };
 
-    // Auto‑Refresh Loop ------------------------------------------------------
-    function startAutoRefresh() {
-        setInterval(updateMarket, state.settings.autoRefreshInterval);
-    }
-
-    // Initialization ----------------------------------------------------------
+    // Initialize Application
     document.addEventListener('DOMContentLoaded', () => {
-        renderWallet();
-        renderMarket();
-        renderSwap();
-        renderTransactions();
-        bindUI();
-        startAutoRefresh();
+        UI.init();
+        console.log('MAGNUM OPUS Engine Initialized.');
     });
 
 })();
