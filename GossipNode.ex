@@ -1,24 +1,180 @@
+defmodule GossipNode.Protocol do
+  @moduledoc """
+  Typed message protocol and schema validation for the GossipNode system.
+  Provides explicit type specifications, binary/term encoding & decoding,
+  and comprehensive validation for all incoming and outgoing P2P messages.
+  """
+
+  @type tx_hash :: binary()
+  @type timestamp :: non_neg_integer()
+  @type peer_id :: pid() | binary()
+
+  @type tx_payload :: %{
+          required(:from) => binary(),
+          required(:to) => binary(),
+          required(:amount) => non_neg_integer(),
+          required(:nonce) => non_neg_integer(),
+          optional(:signature) => binary(),
+          optional(:data) => binary()
+        }
+
+  @type msg_tx :: %{
+          required(:type) => :tx,
+          required(:hash) => tx_hash(),
+          required(:tx) => tx_payload(),
+          required(:ttl) => pos_integer(),
+          optional(:sender) => peer_id()
+        }
+
+  @type msg_ping :: %{
+          required(:type) => :ping,
+          required(:sender) => peer_id(),
+          required(:timestamp) => timestamp()
+        }
+
+  @type msg_pong :: %{
+          required(:type) => :pong,
+          required(:sender) => peer_id(),
+          required(:timestamp) => timestamp()
+        }
+
+  @type msg_peers :: %{
+          required(:type) => :peers,
+          required(:sender) => peer_id(),
+          required(:peers) => list(peer_id())
+        }
+
+  @type gossip_message :: msg_tx() | msg_ping() | msg_pong() | msg_peers()
+
+  @doc """
+  Validates an incoming gossip message according to strict protocol schemas.
+  """
+  @spec validate_msg(term()) :: {:ok, gossip_message()} | {:error, atom()}
+  def validate_msg(%{type: :tx} = msg) do
+    with :ok <- check_field(msg, :hash, &is_binary/1),
+         :ok <- check_field(msg, :tx, &is_map/1),
+         :ok <- check_field(msg, :ttl, fn v -> is_integer(v) and v > 0 end),
+         :ok <- validate_tx_payload(msg.tx) do
+      {:ok, msg}
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def validate_msg(%{type: :ping} = msg) do
+    with :ok <- check_field(msg, :sender, &valid_peer_id?/1),
+         :ok <- check_field(msg, :timestamp, &is_integer/1) do
+      {:ok, msg}
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def validate_msg(%{type: :pong} = msg) do
+    with :ok <- check_field(msg, :sender, &valid_peer_id?/1),
+         :ok <- check_field(msg, :timestamp, &is_integer/1) do
+      {:ok, msg}
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def validate_msg(%{type: :peers} = msg) do
+    with :ok <- check_field(msg, :sender, &valid_peer_id?/1),
+         :ok <- check_field(msg, :peers, &is_list/1) do
+      if Enum.all?(msg.peers, &valid_peer_id?/1) do
+        {:ok, msg}
+      else
+        {:error, :invalid_peers_list}
+      end
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def validate_msg(_), do: {:error, :unknown_message_type}
+
+  @doc """
+  Validates transaction payload fields.
+  """
+  @spec validate_tx_payload(term()) :: :ok | {:error, atom()}
+  def validate_tx_payload(%{} = tx) do
+    from = Map.get(tx, :from) || Map.get(tx, "from")
+    to = Map.get(tx, :to) || Map.get(tx, "to")
+    amount = Map.get(tx, :amount) || Map.get(tx, "amount")
+
+    cond do
+      is_nil(from) or not is_binary(from) -> {:error, :invalid_tx_from}
+      is_nil(to) or not is_binary(to) -> {:error, :invalid_tx_to}
+      is_nil(amount) or not is_integer(amount) or amount < 0 -> {:error, :invalid_tx_amount}
+      true -> :ok
+    end
+  end
+
+  def validate_tx_payload(_), do: {:error, :invalid_tx_format}
+
+  @doc """
+  Helper function to check presence and predicate matching for map fields.
+  """
+  @spec check_field(map(), atom(), (term() -> boolean())) :: :ok | {:error, atom()}
+  def check_field(map, field, predicate) when is_map(map) and is_atom(field) do
+    case Map.fetch(map, field) do
+      {:ok, val} ->
+        if predicate.(val) do
+          :ok
+        else
+          {:error, :"invalid_field_#{field}"}
+        end
+
+      :error ->
+        {:error, :"missing_field_#{field}"}
+    end
+  end
+
+  @doc """
+  Checks if a given term is a valid peer identity.
+  """
+  @spec valid_peer_id?(term()) :: boolean()
+  def valid_peer_id?(pid) when is_pid(pid), do: true
+  def valid_peer_id?(bin) when is_binary(bin) and byte_size(bin) > 0, do: true
+  def valid_peer_id?(_), do: false
+
+  @doc """
+  Encodes a gossip message into binary payload.
+  """
+  @spec encode(gossip_message()) :: {:ok, binary()} | {:error, term()}
+  def encode(msg) do
+    case validate_msg(msg) do
+      {:ok, valid_msg} -> {:ok, :erlang.term_to_binary(valid_msg)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Decodes binary payload into a validated gossip message.
+  """
+  @spec decode(binary()) :: {:ok, gossip_message()} | {:error, term()}
+  def decode(binary) when is_binary(binary) do
+    try do
+      term = :erlang.binary_to_term(binary, [:safe])
+      validate_msg(term)
+    rescue
+      _ -> {:error, :corrupted_payload}
+    end
+  end
+
+  def decode(_), do: {:error, :invalid_binary_input}
+end
+
 defmodule GossipNode.Application do
   @moduledoc """
   The GossipNode application module.
-  
-  This module defines the main application for the GossipNode system.
-  It starts the necessary supervisors and children processes.
+  Starts supervisors, peer registry, mempool, gossip engine, and auxiliary services.
   """
   use Application
 
-  @doc """
-  Starts the GossipNode application.
-  
-  ## Parameters
-    - type: The type of the application.
-    - args: The arguments passed to the application.
-  
-  ## Examples
-    ```elixir
-    GossipNode.Application.start(:normal, [])
-    ```
-  """
+  @impl true
+  @spec start(Application.start_type(), term()) :: {:ok, pid()} | {:error, term()}
   def start(_type, _args) do
     children = [
       {Registry, keys: :unique, name: GossipNode.PeerRegistry},
@@ -37,263 +193,155 @@ end
 defmodule GossipNode.Mempool do
   @moduledoc """
   The GossipNode Mempool module.
-  
-  This module defines the mempool for the GossipNode system.
-  It handles the submission and retrieval of transactions.
+  Handles transaction validation, deduplication, and memory storage.
   """
   use GenServer
 
-  @type tx_hash :: binary
-  @type tx :: map
+  alias GossipNode.Protocol
+
+  @type tx_hash :: binary()
+  @type tx :: map()
   @type state :: MapSet.t(tx_hash)
 
-  @type submit_tx :: {:submit_tx, tx}
-  @type get_txs :: :get_txs
-  @type receive_tx :: {:receive_tx, tx_hash, tx}
-  @type call :: submit_tx | get_txs
-  @type cast :: receive_tx
-
-  @doc """
-  Starts the Mempool GenServer.
-  
-  ## Parameters
-    - args: The arguments passed to the GenServer.
-  
-  ## Examples
-    ```elixir
-    {:ok, pid} = GossipNode.Mempool.start_link([])
-    ```
-  """
-  @spec start_link(list) :: {:ok, pid} | {:error, term}
+  @spec start_link(list()) :: {:ok, pid()} | {:error, term()}
   def start_link(_args) do
-    GenServer.start_link(__MODULE__, %MapSet{}, name: __MODULE__)
+    GenServer.start_link(__MODULE__, MapSet.new(), name: __MODULE__)
   end
 
   @doc """
-  Submits a transaction to the mempool.
-  
-  ## Parameters
-    - tx: The transaction to submit.
-  
-  ## Examples
-    ```elixir
-    {:ok, hash} = GossipNode.Mempool.submit_tx(%{data: "tx_data"})
-    ```
+  Submits a raw transaction to the mempool after verifying its payload structure.
   """
-  @spec submit_tx(tx) :: {:ok, tx_hash} | {:error, :duplicate}
+  @spec submit_tx(tx()) :: {:ok, tx_hash()} | {:error, term()}
   def submit_tx(tx) do
-    GenServer.call(__MODULE__, {:submit_tx, tx})
+    case Protocol.validate_tx_payload(tx) do
+      :ok -> GenServer.call(__MODULE__, {:submit_tx, tx})
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc """
-  Retrieves all transactions from the mempool.
-  
-  ## Examples
-    ```elixir
-    txs = GossipNode.Mempool.get_txs()
-    ```
+  Retrieves all known transaction hashes from the mempool.
   """
-  @spec get_txs :: list(tx_hash)
+  @spec get_txs() :: list(tx_hash())
   def get_txs do
     GenServer.call(__MODULE__, :get_txs)
   end
 
-  @spec init(state) :: {:ok, state}
+  @doc """
+  Receives an incoming transaction broadcast hash & payload.
+  """
+  @spec receive_tx(tx_hash(), tx()) :: :ok | {:error, term()}
+  def receive_tx(hash, tx) do
+    GenServer.cast(__MODULE__, {:receive_tx, hash, tx})
+  end
+
+  @impl true
+  @spec init(state()) :: {:ok, state()}
   def init(state) do
     {:ok, state}
   end
 
-  @spec handle_call(call, from, state) :: {:reply, reply, state} | {:noreply, state} | {:stop, reason, state}
+  @impl true
   def handle_call({:submit_tx, tx}, _from, state) do
     hash = tx_hash(tx)
     if MapSet.member?(state, hash) do
       {:reply, {:error, :duplicate}, state}
     else
       new_state = MapSet.put(state, hash)
-      # Notify gossip server about the new transaction
       GossipNode.GossipServer.new_tx(hash, tx)
       {:reply, {:ok, hash}, new_state}
     end
   end
 
-  @spec handle_call(call, from, state) :: {:reply, reply, state} | {:noreply, state} | {:stop, reason, state}
   def handle_call(:get_txs, _from, state) do
     {:reply, MapSet.to_list(state), state}
   end
 
-  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
+  @impl true
   def handle_cast({:receive_tx, hash, tx}, state) do
     if MapSet.member?(state, hash) do
       {:noreply, state}
     else
       new_state = MapSet.put(state, hash)
-      # Propagate further to the network
       GossipNode.GossipServer.new_tx(hash, tx)
       {:noreply, new_state}
     end
   end
 
-  @spec tx_hash(tx) :: tx_hash
+  @spec tx_hash(tx()) :: tx_hash()
   defp tx_hash(tx) do
     :crypto.hash(:sha256, :erlang.term_to_binary(tx))
-    |> Base.encode16()
+    |> Base.encode16(case: :lower)
   end
 end
 
 defmodule GossipNode.PeerRegistry do
   @moduledoc """
   The GossipNode PeerRegistry module.
-  
-  This module defines the peer registry for the GossipNode system.
-  It handles the registration, listing, and removal of peers.
+  Manages peer registration, reputation metrics, bans, and dynamic discovery querying.
   """
-  @type pid :: pid
+  @type peer_meta :: %{score: integer(), banned: boolean()}
 
-  @doc """
-  Adds a peer to the registry.
-  
-  ## Parameters
-    - pid: The process ID of the peer to add.
-  
-  ## Examples
-    ```elixir
-    GossipNode.PeerRegistry.add_peer(self())
-    ```
-  """
-  @spec add_peer(pid) :: :ok | {:error, term}
+  @spec add_peer(pid()) :: :ok | {:error, term()}
   def add_peer(pid) when is_pid(pid) do
-    Registry.register(GossipNode.PeerRegistry, pid, %{score: 0, banned: false})
+    case Registry.register(GossipNode.PeerRegistry, pid, %{score: 0, banned: false}) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
-  @doc """
-  Lists all peers in the registry.
-  
-  ## Examples
-    ```elixir
-    peers = GossipNode.PeerRegistry.list_peers()
-    ```
-  """
-  @spec list_peers :: list(pid)
+  @spec list_peers() :: list(pid())
   def list_peers do
     Registry.select(GossipNode.PeerRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
   end
 
-  @doc """
-  Removes a peer from the registry.
-  
-  ## Parameters
-    - pid: The process ID of the peer to remove.
-  
-  ## Examples
-    ```elixir
-    GossipNode.PeerRegistry.remove_peer(self())
-    ```
-  """
-  @spec remove_peer(pid) :: :ok | {:error, term}
+  @spec remove_peer(pid()) :: :ok
   def remove_peer(pid) when is_pid(pid) do
-    Registry.delete(GossipNode.PeerRegistry, pid)
+    Registry.unregister(GossipNode.PeerRegistry, pid)
   end
 
-  @doc """
-  Checks if a peer exists in the registry.
-  
-  ## Parameters
-    - pid: The process ID of the peer to check.
-  
-  ## Examples
-    ```elixir
-    exists = GossipNode.PeerRegistry.peer_exists?(self())
-    ```
-  """
-  @spec peer_exists?(pid) :: boolean
+  @spec peer_exists?(pid()) :: boolean()
   def peer_exists?(pid) when is_pid(pid) do
     Registry.lookup(GossipNode.PeerRegistry, pid) != []
   end
 
-  @doc """
-  Counts the number of peers in the registry.
-  
-  ## Examples
-    ```elixir
-    count = GossipNode.PeerRegistry.count_peers()
-    ```
-  """
-  @spec count_peers :: non_neg_integer
+  @spec count_peers() :: non_neg_integer()
   def count_peers do
     Registry.count(GossipNode.PeerRegistry)
   end
 
-  @doc """
-  Updates the score of a peer.
-  
-  ## Parameters
-    - pid: The process ID of the peer.
-    - delta: The amount to adjust the score by.
-  
-  ## Examples
-    ```elixir
-    GossipNode.PeerRegistry.update_score(self(), 1)
-    ```
-  """
-  @spec update_score(pid, integer) :: :ok | {:error, term}
-  def update_score(pid, delta) when is_pid(pid) do
-    Registry.update(GossipNode.PeerRegistry, pid, fn peer ->
-      %{peer | score: peer.score + delta}
-    end)
+  @spec update_score(pid(), integer()) :: :ok | {:error, term()}
+  def update_score(pid, delta) when is_pid(pid) and is_integer(delta) do
+    case Registry.update_value(GossipNode.PeerRegistry, pid, fn meta ->
+           %{meta | score: meta.score + delta}
+         end) do
+      {_new, _old} -> :ok
+      :error -> {:error, :peer_not_found}
+    end
   end
 
-  @doc """
-  Bans a peer.
-  
-  ## Parameters
-    - pid: The process ID of the peer to ban.
-  
-  ## Examples
-    ```elixir
-    GossipNode.PeerRegistry.ban_peer(self())
-    ```
-  """
-  @spec ban_peer(pid) :: :ok | {:error, term}
+  @spec ban_peer(pid()) :: :ok | {:error, term()}
   def ban_peer(pid) when is_pid(pid) do
-    Registry.update(GossipNode.PeerRegistry, pid, fn peer ->
-      %{peer | banned: true}
-    end)
+    case Registry.update_value(GossipNode.PeerRegistry, pid, fn meta ->
+           %{meta | banned: true}
+         end) do
+      {_new, _old} -> :ok
+      :error -> {:error, :peer_not_found}
+    end
   end
 
-  @doc """
-  Checks if a peer is banned.
-  
-  ## Parameters
-    - pid: The process ID of the peer to check.
-  
-  ## Examples
-    ```elixir
-    banned = GossipNode.PeerRegistry.peer_banned?(self())
-    ```
-  """
-  @spec peer_banned?(pid) :: boolean
+  @spec peer_banned?(pid()) :: boolean()
   def peer_banned?(pid) when is_pid(pid) do
     case Registry.lookup(GossipNode.PeerRegistry, pid) do
-      [peer] -> peer.banned
+      [{_pid, meta}] -> meta.banned
       _ -> false
     end
   end
 
-  @doc """
-  Gets the score of a peer.
-  
-  ## Parameters
-    - pid: The process ID of the peer.
-  
-  ## Examples
-    ```elixir
-    score = GossipNode.PeerRegistry.get_score(self())
-    ```
-  """
-  @spec get_score(pid) :: integer | nil
+  @spec get_score(pid()) :: integer() | nil
   def get_score(pid) when is_pid(pid) do
     case Registry.lookup(GossipNode.PeerRegistry, pid) do
-      [peer] -> peer.score
+      [{_pid, meta}] -> meta.score
       _ -> nil
     end
   end
@@ -302,392 +350,256 @@ end
 defmodule GossipNode.GossipServer do
   @moduledoc """
   The GossipNode GossipServer module.
-  
-  This module defines the gossip server for the GossipNode system.
-  It handles the broadcasting of transactions to peers and manages the state of the gossip server.
+  Handles transaction broadcasting, incoming message validation, fanout selection,
+  and epidemic propagation across registered peers.
   """
   use GenServer
 
-  @type tx_hash :: binary
-  @type tx :: map
-  @type state :: %{pending?: list({tx_hash, tx}), messages_sent: non_neg_integer, messages_received: non_neg_integer, messages_dropped: non_neg_integer, fanout: non_neg_integer, ttl: non_neg_integer, backoff: non_neg_integer}
+  alias GossipNode.Protocol
+  alias GossipNode.PeerRegistry
 
-  @type new_tx :: {:new_tx, tx_hash, tx}
-  @type register_peer :: {:register_peer, pid}
-  @type peer_disconnected :: {:peer_disconnected, pid}
-  @type peer_connected :: {:peer_connected, pid}
-  @type tx_info :: {:tx, tx_hash, tx}
-  @type cast :: new_tx | register_peer | peer_disconnected | peer_connected | tx_info
+  @type tx_hash :: binary()
+  @type tx :: map()
+  @type state :: %{
+          pending: list({tx_hash(), tx()}),
+          messages_sent: non_neg_integer(),
+          messages_received: non_neg_integer(),
+          messages_dropped: non_neg_integer(),
+          fanout: non_neg_integer(),
+          ttl: non_neg_integer()
+        }
 
-  @gossip_interval 5_000 # milliseconds
-  @ban_threshold -10
-  @score_increment 1
-  @score_decrement -1
-
-  @doc """
-  Starts the GossipServer GenServer.
-  
-  ## Parameters
-    - args: The arguments passed to the GenServer.
-  
-  ## Examples
-    ```elixir
-    {:ok, pid} = GossipNode.GossipServer.start_link([])
-    ```
-  """
-  @spec start_link(list) :: {:ok, pid} | {:error, term}
+  @spec start_link(list()) :: {:ok, pid()} | {:error, term()}
   def start_link(_args) do
-    GenServer.start_link(__MODULE__, %{messages_sent: 0, messages_received: 0, messages_dropped: 0, fanout: 3, ttl: 10, backoff: 1000}, name: __MODULE__)
+    initial_state = %{
+      pending: [],
+      messages_sent: 0,
+      messages_received: 0,
+      messages_dropped: 0,
+      fanout: 3,
+      ttl: 10
+    }
+
+    GenServer.start_link(__MODULE__, initial_state, name: __MODULE__)
   end
 
-  @doc """
-  Notifies the gossip server about a new transaction.
-  
-  ## Parameters
-    - hash: The hash of the transaction.
-    - tx: The transaction.
-  
-  ## Examples
-    ```elixir
-    GossipNode.GossipServer.new_tx("tx_hash", %{data: "tx_data"})
-    ```
-  """
-  @spec new_tx(tx_hash, tx) :: :ok
+  @spec new_tx(tx_hash(), tx()) :: :ok
   def new_tx(hash, tx) do
-    GenServer.cast(__MODULE__, {:new_tx, hash, tx})
+    msg = %{type: :tx, hash: hash, tx: tx, ttl: 10, sender: self()}
+
+    case Protocol.validate_msg(msg) do
+      {:ok, valid_msg} -> GenServer.cast(__MODULE__, {:new_tx_msg, valid_msg})
+      {:error, _reason} -> :ok
+    end
   end
 
-  @doc """
-  Registers a peer with the gossip server.
-  
-  ## Parameters
-    - pid: The process ID of the peer.
-  
-  ## Examples
-    ```elixir
-    GossipNode.GossipServer.register_peer(self())
-    ```
-  """
-  @spec register_peer(pid) :: :ok
-  def register_peer(pid) do
-    GenServer.cast(__MODULE__, {:register_peer, pid})
+  @spec incoming_msg(term()) :: :ok | {:error, term()}
+  def incoming_msg(raw_msg) do
+    case Protocol.validate_msg(raw_msg) do
+      {:ok, valid_msg} -> GenServer.cast(__MODULE__, {:process_msg, valid_msg, self()})
+      {:error, reason} -> {:error, reason}
+    end
   end
 
-  @doc """
-  Notifies the gossip server that a peer has disconnected.
-  
-  ## Parameters
-    - pid: The process ID of the peer.
-  
-  ## Examples
-    ```elixir
-    GossipNode.GossipServer.peer_disconnected(self())
-    ```
-  """
-  @spec peer_disconnected(pid) :: :ok
-  def peer_disconnected(pid) do
-    GenServer.cast(__MODULE__, {:peer_disconnected, pid})
-  end
-
-  @doc """
-  Notifies the gossip server that a peer has connected.
-  
-  ## Parameters
-    - pid: The process ID of the peer.
-  
-  ## Examples
-    ```elixir
-    GossipNode.GossipServer.peer_connected(self())
-    ```
-  """
-  @spec peer_connected(pid) :: :ok
-  def peer_connected(pid) do
-    GenServer.cast(__MODULE__, {:peer_connected, pid})
-  end
-
-  @doc """
-  Notifies the gossip server about a transaction received from a peer.
-  
-  ## Parameters
-    - hash: The hash of the transaction.
-    - tx: The transaction.
-  
-  ## Examples
-    ```elixir
-    GossipNode.GossipServer.tx_info("tx_hash", %{data: "tx_data"})
-    ```
-  """
-  @spec tx_info(tx_hash, tx) :: :ok
-  def tx_info(hash, tx) do
-    GenServer.cast(__MODULE__, {:tx, hash, tx})
-  end
-
-  @spec init(state) :: {:ok, state}
+  @impl true
+  @spec init(state()) :: {:ok, state()}
   def init(state) do
+    schedule_gossip()
     {:ok, state}
   end
 
-  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_cast({:new_tx, hash, tx}, state) do
-    new_state = Map.put(state, :pending, [{hash, tx} | state[:pending] || []])
-    {:noreply, new_state}
+  @impl true
+  def handle_cast({:new_tx_msg, %{hash: hash, tx: tx}}, state) do
+    new_pending = [{hash, tx} | state.pending]
+    {:noreply, %{state | pending: new_pending}}
   end
 
-  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_cast({:register_peer, pid}, state) do
-    GossipNode.PeerRegistry.add_peer(pid)
-    {:noreply, state}
-  end
+  def handle_cast({:process_msg, %{type: :tx, hash: hash, tx: tx, ttl: ttl}, sender}, state) do
+    if PeerRegistry.peer_banned?(sender) do
+      {:noreply, %{state | messages_dropped: state.messages_dropped + 1}}
+    else
+      PeerRegistry.update_score(sender, 1)
+      GossipNode.Mempool.receive_tx(hash, tx)
 
-  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_cast({:peer_disconnected, pid}, state) do
-    GossipNode.PeerRegistry.remove_peer(pid)
-    {:noreply, state}
-  end
-
-  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_cast({:peer_connected, pid}, state) do
-    GossipNode.PeerRegistry.add_peer(pid)
-    {:noreply, state}
-  end
-
-  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_cast({:tx, hash, tx}, state) do
-    GossipNode.Mempool.receive_tx(hash, tx)
-    {:noreply, state}
-  end
-
-  @spec handle_info(info, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_info(:gossip, state) do
-    peers = GossipNode.PeerRegistry.list_peers()
-    pending = state[:pending] || []
-    fanout = state[:fanout]
-
-    # Select a random subset of peers to gossip to
-    selected_peers = Enum.take(Enum.shuffle(peers), fanout)
-
-    # Select a random subset of pending transactions to gossip
-    selected_txs = Enum.take(Enum.shuffle(pending), fanout)
-
-    # Send the selected transactions to the selected peers
-    for {hash, tx} <- selected_txs do
-      for peer <- selected_peers do
-        send(peer, {:tx, hash, tx})
+      if ttl > 1 do
+        relayed_msg = %{type: :tx, hash: hash, tx: tx, ttl: ttl - 1, sender: self()}
+        broadcast_to_fanout(relayed_msg, state.fanout, [sender])
       end
+
+      {:noreply, %{state | messages_received: state.messages_received + 1}}
+    end
+  end
+
+  def handle_cast({:process_msg, %{type: :ping, sender: sender, timestamp: ts}, _pid}, state) do
+    pong = %{type: :pong, sender: self(), timestamp: ts}
+    if is_pid(sender), do: send(sender, {:gossip_msg, pong})
+    {:noreply, %{state | messages_received: state.messages_received + 1}}
+  end
+
+  def handle_cast({:process_msg, %{type: :pong, sender: sender}, _pid}, state) do
+    if is_pid(sender), do: PeerRegistry.update_score(sender, 1)
+    {:noreply, %{state | messages_received: state.messages_received + 1}}
+  end
+
+  def handle_cast({:process_msg, _unhandled, _sender}, state) do
+    {:noreply, %{state | messages_dropped: state.messages_dropped + 1}}
+  end
+
+  @impl true
+  def handle_info(:gossip_tick, state) do
+    if state.pending != [] do
+      Enum.each(state.pending, fn {hash, tx} ->
+        msg = %{type: :tx, hash: hash, tx: tx, ttl: state.ttl, sender: self()}
+        broadcast_to_fanout(msg, state.fanout, [])
+      end)
     end
 
-    # Update the state with the remaining pending transactions
-    remaining_txs = pending -- selected_txs
-    new_state = Map.put(state, :pending, remaining_txs)
-
-    # Schedule the next gossip
-    Process.send_after(self(), :gossip, @gossip_interval)
-
-    {:noreply, new_state}
+    schedule_gossip()
+    {:noreply, %{state | pending: [], messages_sent: state.messages_sent + length(state.pending)}}
   end
 
-  @spec handle_info(info, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_info(:timeout, state) do
-    # Handle timeout
-    {:noreply, state}
+  defp broadcast_to_fanout(msg, fanout, exclude) do
+    peers = PeerRegistry.list_peers() -- exclude
+    targets = Enum.take_random(peers, fanout)
+
+    Enum.each(targets, fn peer ->
+      if is_pid(peer) and Process.alive?(peer) do
+        send(peer, {:gossip_msg, msg})
+      end
+    end)
   end
 
-  @spec handle_info(info, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_info(_info, state) do
-    {:noreply, state}
+  defp schedule_gossip do
+    Process.send_after(self(), :gossip_tick, 3000)
+  end
+end
+
+defmodule GossipNode.PeerDiscovery do
+  @moduledoc """
+  The GossipNode PeerDiscovery module.
+  Handles peer discovery, seed nodes, and exchange of active peer addresses.
+  """
+  use GenServer
+
+  alias GossipNode.Protocol
+  alias GossipNode.PeerRegistry
+
+  @spec start_link(list()) :: {:ok, pid()} | {:error, term()}
+  def start_link(_args) do
+    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
-  @spec code_change(version, state, extra) :: {:ok, state}
-  def code_change(_version, state, _extra) do
+  @impl true
+  def init(state) do
+    schedule_discovery()
     {:ok, state}
+  end
+
+  @impl true
+  def handle_info(:discover_peers, state) do
+    peers = PeerRegistry.list_peers()
+    msg = %{type: :peers, sender: self(), peers: peers}
+
+    case Protocol.validate_msg(msg) do
+      {:ok, valid_msg} ->
+        Enum.each(peers, fn peer ->
+          if is_pid(peer) and Process.alive?(peer) do
+            send(peer, {:gossip_msg, valid_msg})
+          end
+        end)
+
+      _ ->
+        :ok
+    end
+
+    schedule_discovery()
+    {:noreply, state}
+  end
+
+  defp schedule_discovery do
+    Process.send_after(self(), :discover_peers, 10_000)
+  end
+end
+
+defmodule GossipNode.PeerConnectionManager do
+  @moduledoc """
+  The GossipNode PeerConnectionManager module.
+  Manages active peer connection lifecycles, heartbeats, and pruning inactive peers.
+  """
+  use GenServer
+
+  alias GossipNode.PeerRegistry
+  alias GossipNode.Protocol
+
+  @spec start_link(list()) :: {:ok, pid()} | {:error, term()}
+  def start_link(_args) do
+    GenServer.start_link(__MODULE__, %{last_ping: %{}}, name: __MODULE__)
+  end
+
+  @impl true
+  def init(state) do
+    schedule_heartbeat()
+    {:ok, state}
+  end
+
+  @impl true
+  def handle_info(:heartbeat, state) do
+    now = System.system_time(:second)
+    ping_msg = %{type: :ping, sender: self(), timestamp: now}
+
+    case Protocol.validate_msg(ping_msg) do
+      {:ok, valid_ping} ->
+        Enum.each(PeerRegistry.list_peers(), fn peer ->
+          if is_pid(peer) and Process.alive?(peer) do
+            send(peer, {:gossip_msg, valid_ping})
+          else
+            PeerRegistry.remove_peer(peer)
+          end
+        end)
+
+      _ ->
+        :ok
+    end
+
+    schedule_heartbeat()
+    {:noreply, state}
+  end
+
+  defp schedule_heartbeat do
+    Process.send_after(self(), :heartbeat, 5000)
   end
 end
 
 defmodule GossipNode.PeerSampling do
   @moduledoc """
   The GossipNode PeerSampling module.
-  
-  This module defines the peer sampling for the GossipNode system.
-  It handles the periodic shuffle and failure detection of peers.
+  Implements random peer sampling for epidemic routing stability.
   """
   use GenServer
 
-  @type pid :: pid
-  @type state :: %{peers: list(pid), active_peers: list(pid), suspicion_timeout: non_neg_integer, heartbeat_interval: non_neg_integer}
+  alias GossipNode.PeerRegistry
 
-  @type register_peer :: {:register_peer, pid}
-  @type peer_disconnected :: {:peer_disconnected, pid}
-  @type peer_connected :: {:peer_connected, pid}
-  @type heartbeat :: {:heartbeat, pid}
-  @type cast :: register_peer | peer_disconnected | peer_connected | heartbeat
-
-  @suspicion_timeout 30_000 # milliseconds
-  @heartbeat_interval 10_000 # milliseconds
-  @shuffle_interval 60_000 # milliseconds
-
-  @doc """
-  Starts the PeerSampling GenServer.
-  
-  ## Parameters
-    - args: The arguments passed to the GenServer.
-  
-  ## Examples
-    ```elixir
-    {:ok, pid} = GossipNode.PeerSampling.start_link([])
-    ```
-  """
-  @spec start_link(list) :: {:ok, pid} | {:error, term}
+  @spec start_link(list()) :: {:ok, pid()} | {:error, term()}
   def start_link(_args) do
-    GenServer.start_link(__MODULE__, %{peers: [], active_peers: [], suspicion_timeout: @suspicion_timeout, heartbeat_interval: @heartbeat_interval}, name: __MODULE__)
+    GenServer.start_link(__MODULE__, %{sample_size: 5}, name: __MODULE__)
   end
 
   @doc """
-  Registers a peer with the peer sampling.
-  
-  ## Parameters
-    - pid: The process ID of the peer.
-  
-  ## Examples
-    ```elixir
-    GossipNode.PeerSampling.register_peer(self())
-    ```
+  Requests a random sample of registered active peers.
   """
-  @spec register_peer(pid) :: :ok
-  def register_peer(pid) do
-    GenServer.cast(__MODULE__, {:register_peer, pid})
+  @spec get_sample() :: list(pid())
+  def get_sample do
+    GenServer.call(__MODULE__, :get_sample)
   end
 
-  @doc """
-  Notifies the peer sampling that a peer has disconnected.
-  
-  ## Parameters
-    - pid: The process ID of the peer.
-  
-  ## Examples
-    ```elixir
-    GossipNode.PeerSampling.peer_disconnected(self())
-    ```
-  """
-  @spec peer_disconnected(pid) :: :ok
-  def peer_disconnected(pid) do
-    GenServer.cast(__MODULE__, {:peer_disconnected, pid})
-  end
-
-  @doc """
-  Notifies the peer sampling that a peer has connected.
-  
-  ## Parameters
-    - pid: The process ID of the peer.
-  
-  ## Examples
-    ```elixir
-    GossipNode.PeerSampling.peer_connected(self())
-    ```
-  """
-  @spec peer_connected(pid) :: :ok
-  def peer_connected(pid) do
-    GenServer.cast(__MODULE__, {:peer_connected, pid})
-  end
-
-  @doc """
-  Notifies the peer sampling about a heartbeat from a peer.
-  
-  ## Parameters
-    - pid: The process ID of the peer.
-  
-  ## Examples
-    ```elixir
-    GossipNode.PeerSampling.heartbeat(self())
-    ```
-  """
-  @spec heartbeat(pid) :: :ok
-  def heartbeat(pid) do
-    GenServer.cast(__MODULE__, {:heartbeat, pid})
-  end
-
-  @spec init(state) :: {:ok, state}
+  @impl true
   def init(state) do
-    # Schedule the first heartbeat and shuffle
-    Process.send_after(self(), :heartbeat, state[:heartbeat_interval])
-    Process.send_after(self(), :shuffle, @shuffle_interval)
     {:ok, state}
   end
 
-  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_cast({:register_peer, pid}, state) do
-    new_state = Map.update!(state, :peers, [pid], &[pid | &1])
-    {:noreply, new_state}
-  end
-
-  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_cast({:peer_disconnected, pid}, state) do
-    new_state = Map.update!(state, :peers, &Enum.delete(&1, pid))
-    new_state = Map.update!(new_state, :active_peers, &Enum.delete(&1, pid))
-    {:noreply, new_state}
-  end
-
-  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_cast({:peer_connected, pid}, state) do
-    new_state = Map.update!(state, :peers, [pid], &[pid | &1])
-    new_state = Map.update!(new_state, :active_peers, [pid], &[pid | &1])
-    {:noreply, new_state}
-  end
-
-  @spec handle_cast(cast, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_cast({:heartbeat, pid}, state) do
-    if Enum.member?(state[:active_peers], pid) do
-      # Reset the suspicion timeout for the peer
-      Process.send_after(self(), {:suspicion, pid}, state[:suspicion_timeout])
-      {:noreply, state}
-    else
-      {:noreply, state}
-    end
-  end
-
-  @spec handle_info(info, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_info(:heartbeat, state) do
-    # Send heartbeats to all active peers
-    for pid <- state[:active_peers] do
-      send(pid, :heartbeat)
-    end
-
-    # Schedule the next heartbeat
-    Process.send_after(self(), :heartbeat, state[:heartbeat_interval])
-
-    {:noreply, state}
-  end
-
-  @spec handle_info(info, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_info({:suspicion, pid}, state) do
-    if Enum.member?(state[:active_peers], pid) do
-      # Peer has not responded to heartbeat, mark as disconnected
-      new_state = Map.update!(state, :active_peers, &Enum.delete(&1, pid))
-      GossipNode.GossipServer.peer_disconnected(pid)
-      {:noreply, new_state}
-    else
-      {:noreply, state}
-    end
-  end
-
-  @spec handle_info(info, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_info(:shuffle, state) do
-    # Shuffle the active peers
-    new_active_peers = Enum.shuffle(state[:active_peers])
-    new_state = Map.put(state, :active_peers, new_active_peers)
-
-    # Schedule the next shuffle
-    Process.send_after(self(), :shuffle, @shuffle_interval)
-
-    {:noreply, new_state}
-  end
-
-  @spec handle_info(info, state) :: {:noreply, state} | {:stop, reason, state}
-  def handle_info(_info, state) do
-    {:noreply, state}
-  end
-
-  @spec code_change(version, state, extra) :: {:ok, state}
-  def code_change(_version, state, _extra) do
-    {:ok, state}
+  @impl true
+  def handle_call(:get_sample, _from, state) do
+    sample = PeerRegistry.list_peers() |> Enum.take_random(state.sample_size)
+    {:reply, sample, state}
   end
 end
